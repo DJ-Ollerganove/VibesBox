@@ -7338,7 +7338,7 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
                   return StreamBuilder<QuerySnapshot>(
                     stream: FirebaseFirestore.instance
                         .collection('parties')
-                        .orderBy('start_date', descending: true)
+                        .orderBy('start_date', descending: false)
                         .snapshots(),
                     builder: (context, snapshot) {
                       if (snapshot.connectionState == ConnectionState.waiting) {
@@ -7369,6 +7369,40 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
                         // Nur bevorstehende und laufende Partys
                         return status == 'Bevorstehend' || status == 'Läuft';
                       }).toList();
+                      
+                      // Sortiere: Bevorstehende Partys zuerst (nach Startdatum aufsteigend), dann laufende
+                      activeParties.sort((a, b) {
+                        final dataA = a.data() as Map<String, dynamic>;
+                        final dataB = b.data() as Map<String, dynamic>;
+                        final startTimestampA = dataA['start_date'] as Timestamp?;
+                        final startTimestampB = dataB['start_date'] as Timestamp?;
+                        final endTimestampA = dataA['end_date'] as Timestamp?;
+                        final endTimestampB = dataB['end_date'] as Timestamp?;
+                        
+                        if (startTimestampA == null || startTimestampB == null ||
+                            endTimestampA == null || endTimestampB == null) {
+                          return 0;
+                        }
+                        
+                        final startDateA = startTimestampA.toDate();
+                        final startDateB = startTimestampB.toDate();
+                        final endDateA = endTimestampA.toDate();
+                        final endDateB = endTimestampB.toDate();
+                        
+                        final statusA = _getPartyStatus(startDateA, endDateA);
+                        final statusB = _getPartyStatus(startDateB, endDateB);
+                        
+                        // Bevorstehende Partys kommen vor laufenden
+                        if (statusA == 'Bevorstehend' && statusB == 'Läuft') {
+                          return -1;
+                        }
+                        if (statusA == 'Läuft' && statusB == 'Bevorstehend') {
+                          return 1;
+                        }
+                        
+                        // Innerhalb derselben Kategorie: nach Startdatum sortieren (aufsteigend)
+                        return startDateA.compareTo(startDateB);
+                      });
                       
                       // Zähle beendete Partys
                       final endedPartiesCount = parties.where((party) {
@@ -7429,6 +7463,9 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
                                   final status = _getPartyStatus(startDate, endDate);
                                   final partyCode = data['party_code'] as String?;
                                   
+                                  final partyId = party.id;
+                                  final hasNotStarted = DateTime.now().compareTo(startDate) < 0;
+                                  
                                   return Card(
                         margin: const EdgeInsets.only(bottom: 12),
                         child: ListTile(
@@ -7477,6 +7514,45 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
                               const SizedBox(height: 8),
                               Row(
                                 children: [
+                                  // Bearbeiten-Icon (immer sichtbar) - klein und quadratisch
+                                  SizedBox(
+                                    width: 24,
+                                    height: 24,
+                                    child: IconButton(
+                                      padding: EdgeInsets.zero,
+                                      iconSize: 16,
+                                      icon: const Icon(Icons.edit),
+                                      onPressed: () {
+                                        _showEditPartyDialog(
+                                          context,
+                                          partyId,
+                                          partyName,
+                                          startDate,
+                                          endDate,
+                                          data['party_type'] as String?,
+                                        );
+                                      },
+                                      tooltip: 'Bearbeiten',
+                                    ),
+                                  ),
+                                  // Löschen-Icon (nur wenn Party noch nicht angefangen hat) - klein und quadratisch
+                                  if (hasNotStarted) ...[
+                                    const SizedBox(width: 4),
+                                    SizedBox(
+                                      width: 24,
+                                      height: 24,
+                                      child: IconButton(
+                                        padding: EdgeInsets.zero,
+                                        iconSize: 16,
+                                        icon: const Icon(Icons.delete, color: Colors.red),
+                                        onPressed: () {
+                                          _confirmDeleteParty(context, partyId, partyName);
+                                        },
+                                        tooltip: 'Löschen',
+                                      ),
+                                    ),
+                                  ],
+                                  const SizedBox(width: 8),
                                   Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                                     decoration: BoxDecoration(
@@ -7496,47 +7572,42 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
                                       ),
                                     ),
                                   ),
-                                  // Countdown für bevorstehende Partys
-                                  if (status == 'Bevorstehend') ...[
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                                        decoration: BoxDecoration(
-                                          color: Colors.orange.shade50,
-                                          borderRadius: BorderRadius.circular(12),
-                                          border: Border.all(
-                                            color: Colors.orange.shade300,
-                                            width: 1,
-                                          ),
-                                        ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Icon(
-                                              Icons.access_time,
-                                              size: 14,
-                                              color: Colors.orange.shade700,
-                                            ),
-                                            const SizedBox(width: 4),
-                                            Flexible(
-                                              child: Text(
-                                                'Startet in: ${_formatCountdown(startDate)}',
-                                                style: TextStyle(
-                                                  color: Colors.orange.shade700,
-                                                  fontWeight: FontWeight.w600,
-                                                  fontSize: 11,
-                                                ),
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                                  ],
                                 ],
                               ),
+                              // Countdown für bevorstehende Partys in separater Zeile
+                              if (status == 'Bevorstehend') ...[
+                                const SizedBox(height: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: Colors.orange.shade50,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: Colors.orange.shade300,
+                                      width: 1,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.access_time,
+                                        size: 14,
+                                        color: Colors.orange.shade700,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        'in: ${_formatCountdown(startDate)}',
+                                        style: TextStyle(
+                                          color: Colors.orange.shade700,
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 11,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
                             ],
                           ),
                         ),
@@ -7598,6 +7669,451 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
         ),
       ),
     );
+  }
+
+  // Zeigt Bearbeitungs-Dialog für Party
+  void _showEditPartyDialog(
+    BuildContext context,
+    String partyId,
+    String currentPartyName,
+    DateTime currentStartDate,
+    DateTime currentEndDate,
+    String? currentPartyType,
+  ) {
+    final partyNameController = TextEditingController(text: currentPartyName);
+    DateTime? startDate = currentStartDate;
+    TimeOfDay? startTime = TimeOfDay.fromDateTime(currentStartDate);
+    DateTime? endDate = currentEndDate;
+    TimeOfDay? endTime = TimeOfDay.fromDateTime(currentEndDate);
+    String? partyType = currentPartyType ?? 'private';
+    final hasNotStarted = DateTime.now().compareTo(currentStartDate) < 0;
+
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Party bearbeiten'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Party-Name (nur bearbeitbar wenn noch nicht begonnen)
+                    if (hasNotStarted) ...[
+                      TextFormField(
+                        controller: partyNameController,
+                        decoration: const InputDecoration(
+                          labelText: 'Name der Party',
+                          border: OutlineInputBorder(),
+                        ),
+                        enabled: hasNotStarted,
+                      ),
+                      const SizedBox(height: 16),
+                    ] else ...[
+                      Text(
+                        'Name: $currentPartyName',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+                    // Party-Typ (nur bearbeitbar wenn noch nicht begonnen)
+                    if (hasNotStarted) ...[
+                      const Text('Art der Veranstaltung:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: RadioListTile<String>(
+                              value: 'private',
+                              groupValue: partyType,
+                              contentPadding: EdgeInsets.zero,
+                              dense: true,
+                              onChanged: (value) {
+                                setDialogState(() {
+                                  partyType = value;
+                                });
+                              },
+                              title: const Text('Privat', style: TextStyle(fontSize: 12)),
+                            ),
+                          ),
+                          Expanded(
+                            child: RadioListTile<String>(
+                              value: 'public',
+                              groupValue: partyType,
+                              contentPadding: EdgeInsets.zero,
+                              dense: true,
+                              onChanged: (value) {
+                                setDialogState(() {
+                                  partyType = value;
+                                });
+                              },
+                              title: const Text('Öffentlich', style: TextStyle(fontSize: 12)),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                    ] else ...[
+                      Text(
+                        'Art: ${partyType == 'public' ? 'Öffentlich' : 'Privat'}',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+                    // Start-Datum und Start-Uhrzeit (nur bearbeitbar wenn Party noch nicht begonnen)
+                    if (hasNotStarted) ...[
+                      const Text('Start:', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text('Datum:', style: TextStyle(fontSize: 12)),
+                                const SizedBox(height: 4),
+                                InkWell(
+                                  onTap: () async {
+                                    final picked = await showDatePicker(
+                                      context: context,
+                                      initialDate: startDate ?? currentStartDate,
+                                      firstDate: DateTime.now().subtract(const Duration(days: 365)),
+                                      lastDate: DateTime.now().add(const Duration(days: 365)),
+                                    );
+                                    if (picked != null) {
+                                      setDialogState(() {
+                                        startDate = picked;
+                                      });
+                                    }
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: Colors.grey),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            startDate != null
+                                                ? '${startDate!.day.toString().padLeft(2, '0')}.${startDate!.month.toString().padLeft(2, '0')}.${startDate!.year}'
+                                                : 'Nicht ausgewählt',
+                                            style: const TextStyle(fontSize: 14),
+                                          ),
+                                        ),
+                                        const Icon(Icons.arrow_forward_ios, size: 14),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text('Zeit:', style: TextStyle(fontSize: 12)),
+                                const SizedBox(height: 4),
+                                InkWell(
+                                  onTap: () async {
+                                    final picked = await showTimePicker(
+                                      context: context,
+                                      initialTime: startTime ?? TimeOfDay.fromDateTime(currentStartDate),
+                                    );
+                                    if (picked != null) {
+                                      setDialogState(() {
+                                        startTime = picked;
+                                      });
+                                    }
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: Colors.grey),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            startTime != null
+                                                ? '${startTime!.hour.toString().padLeft(2, '0')}:${startTime!.minute.toString().padLeft(2, '0')} Uhr'
+                                                : 'Nicht ausgewählt',
+                                            style: const TextStyle(fontSize: 14),
+                                          ),
+                                        ),
+                                        const Icon(Icons.arrow_forward_ios, size: 14),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                    ] else ...[
+                      Text(
+                        'Start: ${_formatDateTime(currentStartDate)}',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+                    // End-Datum und End-Uhrzeit (immer bearbeitbar)
+                    const Text('Ende:', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('Datum:', style: TextStyle(fontSize: 12)),
+                              const SizedBox(height: 4),
+                              InkWell(
+                                onTap: () async {
+                                  final picked = await showDatePicker(
+                                    context: context,
+                                    initialDate: endDate ?? currentEndDate,
+                                    firstDate: hasNotStarted ? (startDate ?? currentStartDate) : currentStartDate,
+                                    lastDate: DateTime.now().add(const Duration(days: 365)),
+                                  );
+                                  if (picked != null) {
+                                    setDialogState(() {
+                                      endDate = picked;
+                                    });
+                                  }
+                                },
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                  decoration: BoxDecoration(
+                                    border: Border.all(color: Colors.grey),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          endDate != null
+                                              ? '${endDate!.day.toString().padLeft(2, '0')}.${endDate!.month.toString().padLeft(2, '0')}.${endDate!.year}'
+                                              : 'Nicht ausgewählt',
+                                          style: const TextStyle(fontSize: 14),
+                                        ),
+                                      ),
+                                      const Icon(Icons.arrow_forward_ios, size: 14),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('Zeit:', style: TextStyle(fontSize: 12)),
+                              const SizedBox(height: 4),
+                              InkWell(
+                                onTap: () async {
+                                  final picked = await showTimePicker(
+                                    context: context,
+                                    initialTime: endTime ?? TimeOfDay.fromDateTime(currentEndDate),
+                                  );
+                                  if (picked != null) {
+                                    setDialogState(() {
+                                      endTime = picked;
+                                    });
+                                  }
+                                },
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                  decoration: BoxDecoration(
+                                    border: Border.all(color: Colors.grey),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          endTime != null
+                                              ? '${endTime!.hour.toString().padLeft(2, '0')}:${endTime!.minute.toString().padLeft(2, '0')} Uhr'
+                                              : 'Nicht ausgewählt',
+                                          style: const TextStyle(fontSize: 14),
+                                        ),
+                                      ),
+                                      const Icon(Icons.arrow_forward_ios, size: 14),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Abbrechen'),
+                ),
+                ElevatedButton(
+                  onPressed: () async {
+                    // Validierung für Start-Datum/Zeit (wenn bearbeitbar)
+                    DateTime newStartDateTime = currentStartDate;
+                    if (hasNotStarted) {
+                      if (startDate == null || startTime == null) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Bitte wähle Start-Datum und Start-Uhrzeit aus.'),
+                            backgroundColor: Colors.red,
+                          ),
+                        );
+                        return;
+                      }
+                      newStartDateTime = DateTime(
+                        startDate!.year,
+                        startDate!.month,
+                        startDate!.day,
+                        startTime!.hour,
+                        startTime!.minute,
+                      );
+                    }
+                    
+                    // Validierung für End-Datum/Zeit
+                    if (endDate == null || endTime == null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Bitte wähle End-Datum und End-Uhrzeit aus.'),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                      return;
+                    }
+
+                    final newEndDateTime = DateTime(
+                      endDate!.year,
+                      endDate!.month,
+                      endDate!.day,
+                      endTime!.hour,
+                      endTime!.minute,
+                    );
+
+                    if (newEndDateTime.isBefore(newStartDateTime)) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Das Enddatum muss nach dem Startdatum liegen.'),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                      return;
+                    }
+
+                    try {
+                      final updateData = <String, dynamic>{
+                        'end_date': Timestamp.fromDate(newEndDateTime),
+                      };
+
+                      if (hasNotStarted) {
+                        updateData['party_name'] = sanitizeInput(partyNameController.text.trim());
+                        updateData['party_type'] = partyType;
+                        updateData['start_date'] = Timestamp.fromDate(newStartDateTime);
+                      }
+
+                      await FirebaseFirestore.instance
+                          .collection('parties')
+                          .doc(partyId)
+                          .update(updateData);
+
+                      if (context.mounted) {
+                        Navigator.pop(context);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Party wurde erfolgreich aktualisiert.'),
+                            backgroundColor: Colors.green,
+                          ),
+                        );
+                      }
+                    } catch (e) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('Fehler beim Aktualisieren: $e'),
+                            backgroundColor: Colors.red,
+                          ),
+                        );
+                      }
+                    }
+                  },
+                  child: const Text('Speichern'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // Bestätigt und löscht eine Party
+  Future<void> _confirmDeleteParty(BuildContext context, String partyId, String partyName) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Party löschen'),
+          content: Text('Möchtest du die Party "$partyName" wirklich löschen?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Abbrechen'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+              child: const Text('Löschen'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed == true) {
+      try {
+        await FirebaseFirestore.instance
+            .collection('parties')
+            .doc(partyId)
+            .delete();
+
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Party wurde erfolgreich gelöscht.'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } catch (e) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Fehler beim Löschen: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
   }
 }
 
@@ -7694,6 +8210,16 @@ class _BeendetePartysPageState extends State<BeendetePartysPage> {
       default:
         return Colors.grey;
     }
+  }
+
+  // Formatiert DateTime kompakt für beendete Partys (09.12.25 19:03 Uhr)
+  String _formatDateTimeCompact(DateTime date) {
+    final day = date.day.toString().padLeft(2, '0');
+    final month = date.month.toString().padLeft(2, '0');
+    final year = date.year.toString().substring(2); // Nur letzte 2 Ziffern
+    final hour = date.hour.toString().padLeft(2, '0');
+    final minute = date.minute.toString().padLeft(2, '0');
+    return '$day.$month.$year $hour:$minute Uhr';
   }
   
   // Erstellt eine Spalte für die Party-Informationen
@@ -8387,21 +8913,6 @@ class _BeendetePartysPageState extends State<BeendetePartysPage> {
                   margin: const EdgeInsets.only(bottom: 12),
                   child: ListTile(
                     contentPadding: const EdgeInsets.all(16),
-                    leading: partyCode != null
-                        ? IconButton(
-                            icon: const Icon(Icons.qr_code),
-                            onPressed: () {
-                              _showQRCodeDialog(
-                                context,
-                                partyName,
-                                startDate,
-                                endDate,
-                                partyCode,
-                              );
-                            },
-                            tooltip: 'QR-Code anzeigen',
-                          )
-                        : null,
                     title: Text(
                       partyName,
                       style: const TextStyle(
@@ -8417,36 +8928,54 @@ class _BeendetePartysPageState extends State<BeendetePartysPage> {
                           children: [
                             Icon(Icons.calendar_today, size: 16, color: Colors.grey[600]),
                             const SizedBox(width: 8),
-                            Text('Start: ${_formatDateTime(startDate)}'),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            Icon(Icons.calendar_today, size: 16, color: Colors.grey[600]),
-                            const SizedBox(width: 8),
-                            Text('Ende: ${_formatDateTime(endDate)}'),
+                            Text('${_formatDateTimeCompact(startDate)} - ${_formatDateTimeCompact(endDate)}'),
                           ],
                         ),
                         const SizedBox(height: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: _getPartyStatusColor(status).withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: _getPartyStatusColor(status),
-                              width: 1,
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: _getPartyStatusColor(status).withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: _getPartyStatusColor(status),
+                                  width: 1,
+                                ),
+                              ),
+                              child: Text(
+                                status,
+                                style: TextStyle(
+                                  color: _getPartyStatusColor(status),
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12,
+                                ),
+                              ),
                             ),
-                          ),
-                          child: Text(
-                            status,
-                            style: TextStyle(
-                              color: _getPartyStatusColor(status),
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12,
+                            const Spacer(),
+                            ElevatedButton.icon(
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => PartyStatistikPage(
+                                      partyId: party.id,
+                                      partyName: partyName,
+                                      startDate: startDate,
+                                      endDate: endDate,
+                                      partyCode: partyCode ?? '',
+                                    ),
+                                  ),
+                                );
+                              },
+                              icon: const Icon(Icons.bar_chart, size: 18),
+                              label: const Text('Statistik'),
+                              style: ElevatedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              ),
                             ),
-                          ),
+                          ],
                         ),
                       ],
                     ),
@@ -8458,6 +8987,1205 @@ class _BeendetePartysPageState extends State<BeendetePartysPage> {
             );
           },
         ),
+      ),
+    );
+  }
+}
+
+// Seite für Party-Statistik
+class PartyStatistikPage extends StatefulWidget {
+  final String partyId;
+  final String partyName;
+  final DateTime startDate;
+  final DateTime endDate;
+  final String partyCode;
+
+  const PartyStatistikPage({
+    super.key,
+    required this.partyId,
+    required this.partyName,
+    required this.startDate,
+    required this.endDate,
+    required this.partyCode,
+  });
+
+  @override
+  State<PartyStatistikPage> createState() => _PartyStatistikPageState();
+}
+
+class _PartyStatistikPageState extends State<PartyStatistikPage> {
+  int _totalWishes = 0;
+  int _playedWishes = 0;
+  int _rejectedWishes = 0;
+  int _notPlayedWishes = 0;
+  Map<int, int> _wishesPerHour = {}; // Stunde -> Anzahl Wünsche
+  double _averagePlayTimeMinutes = 0.0; // Durchschnittliche Zeit bis zum Spielen in Minuten
+  List<Map<String, dynamic>> _playedWishesList = []; // Liste der gespielten Wünsche (sortiert nach playedAt)
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _closePendingWishesAndLoadStatistics();
+  }
+
+  // Schließt pending-Wünsche für diese Party und lädt dann die Statistik
+  Future<void> _closePendingWishesAndLoadStatistics() async {
+    try {
+      // Prüfe zuerst, ob es noch pending-Wünsche für diese Party gibt
+      final pendingWishesSnapshot = await FirebaseFirestore.instance
+          .collection('wishes')
+          .where('party_id', isEqualTo: widget.partyId)
+          .where('status', isEqualTo: 'pending')
+          .limit(1)
+          .get();
+      
+      // Nur Cloud Function aufrufen, wenn pending-Wünsche vorhanden sind
+      if (pendingWishesSnapshot.docs.isNotEmpty) {
+        print('Pending-Wünsche gefunden, rufe Cloud Function auf...');
+        final functionUrl = 'https://us-central1-dj-ollerganove.cloudfunctions.net/closePendingWishesForEndedParty?partyId=${widget.partyId}';
+        final response = await http.get(Uri.parse(functionUrl));
+        
+        if (response.statusCode == 200) {
+          final result = json.decode(response.body);
+          print('Cloud Function Ergebnis: $result');
+        } else {
+          print('Cloud Function Fehler: ${response.statusCode} - ${response.body}');
+        }
+      } else {
+        print('Keine pending-Wünsche gefunden, überspringe Cloud Function');
+      }
+    } catch (e) {
+      print('Fehler beim Prüfen/Aufruf: $e');
+      // Weiter mit Statistik laden, auch wenn Fehler auftritt
+    }
+    
+    // Lade Statistik nach dem Schließen der pending-Wünsche (oder direkt wenn keine vorhanden)
+    _loadStatistics();
+  }
+
+  Future<void> _loadStatistics() async {
+    try {
+      setState(() {
+        _isLoading = true;
+      });
+
+      // Lade alle Wünsche für diese Party (ohne gelöschte)
+      final wishesSnapshot = await FirebaseFirestore.instance
+          .collection('wishes')
+          .where('party_id', isEqualTo: widget.partyId)
+          .get();
+
+      int total = 0;
+      int played = 0;
+      int rejected = 0;
+      int notPlayed = 0;
+      Map<int, int> wishesPerHour = {}; // Stunde -> Anzahl Wünsche
+      List<int> playTimeDurations = []; // Liste der Zeiten in Minuten zwischen createdAt und playedAt
+      List<Map<String, dynamic>> playedWishesList = []; // Liste der gespielten Wünsche
+
+      for (var doc in wishesSnapshot.docs) {
+        final data = doc.data();
+        final status = data['status'] as String?;
+        
+        // Überspringe gelöschte Wünsche
+        if (status == 'deleted') {
+          continue;
+        }
+
+        total++;
+        
+        if (status == 'played') {
+          played++;
+          
+          // Speichere gespielten Wunsch für PDF
+          final title = (data['title'] ?? data['song'] ?? '') as String;
+          final artist = (data['artist'] ?? '') as String;
+          final playedAt = data['playedAt'] as Timestamp?;
+          
+          if (playedAt != null) {
+            playedWishesList.add({
+              'title': title,
+              'artist': artist,
+              'playedAt': playedAt,
+            });
+          }
+          
+          // Berechne Zeit zwischen Absendung und Spielen
+          final createdAt = data['createdAt'] as Timestamp?;
+          
+          if (createdAt != null && playedAt != null) {
+            final createdDate = createdAt.toDate();
+            final playedDate = playedAt.toDate();
+            final difference = playedDate.difference(createdDate);
+            final minutes = difference.inMinutes.toDouble();
+            if (minutes >= 0) { // Nur positive Werte berücksichtigen
+              playTimeDurations.add(minutes.toInt());
+            }
+          }
+        } else if (status == 'rejected') {
+          rejected++;
+        } else if (status == 'not_played') {
+          notPlayed++;
+        }
+        // pending wird ignoriert, da es bei beendeten Partys nicht vorkommt
+        
+        // Gruppiere nach Stunden
+        final createdAt = data['createdAt'] as Timestamp?;
+        if (createdAt != null) {
+          final date = createdAt.toDate();
+          final hour = date.hour;
+          wishesPerHour[hour] = (wishesPerHour[hour] ?? 0) + 1;
+        }
+      }
+      
+      // Sortiere gespielte Wünsche nach playedAt (chronologisch)
+      playedWishesList.sort((a, b) {
+        final playedAtA = a['playedAt'] as Timestamp;
+        final playedAtB = b['playedAt'] as Timestamp;
+        return playedAtA.compareTo(playedAtB);
+      });
+      
+      // Berechne Durchschnitt
+      double averagePlayTime = 0.0;
+      if (playTimeDurations.isNotEmpty) {
+        final totalMinutes = playTimeDurations.reduce((a, b) => a + b);
+        averagePlayTime = totalMinutes / playTimeDurations.length;
+      }
+
+      setState(() {
+        _totalWishes = total;
+        _playedWishes = played;
+        _rejectedWishes = rejected;
+        _notPlayedWishes = notPlayed;
+        _wishesPerHour = wishesPerHour;
+        _averagePlayTimeMinutes = averagePlayTime;
+        _playedWishesList = playedWishesList;
+        _isLoading = false;
+      });
+    } catch (e) {
+      print('Fehler beim Laden der Statistiken: $e');
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  String _formatDateTime(DateTime date) {
+    final day = date.day.toString().padLeft(2, '0');
+    final month = date.month.toString().padLeft(2, '0');
+    final year = date.year;
+    final hour = date.hour.toString().padLeft(2, '0');
+    final minute = date.minute.toString().padLeft(2, '0');
+    return '$day.$month.$year um $hour:$minute Uhr';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Party-Statistik'),
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Party-Daten
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.partyName,
+                            style: const TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text('Party-Code: ${widget.partyCode}'),
+                          const SizedBox(height: 4),
+                          Text('Start: ${_formatDateTime(widget.startDate)}'),
+                          const SizedBox(height: 4),
+                          Text('Ende: ${_formatDateTime(widget.endDate)}'),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  
+                  // Statistiken
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Statistiken',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          _buildStatRow('Gesamt Wünsche', _totalWishes.toString(), Colors.blue),
+                          const SizedBox(height: 8),
+                          _buildStatRow('Gespielte Songs', _playedWishes.toString(), Colors.green),
+                          const SizedBox(height: 8),
+                          _buildStatRow('Abgelehnte Songs', _rejectedWishes.toString(), Colors.red),
+                          const SizedBox(height: 8),
+                          _buildStatRow('Nicht gespielte Songs', _notPlayedWishes.toString(), Colors.orange),
+                          if (_playedWishes > 0 && _averagePlayTimeMinutes > 0) ...[
+                            const SizedBox(height: 8),
+                            _buildStatRow(
+                              'Ø Zeit bis zum Spielen',
+                              '${_averagePlayTimeMinutes.toStringAsFixed(1)} Min',
+                              Colors.purple,
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  
+                  // Balkendiagramm: Wünsche pro Stunde
+                  if (_wishesPerHour.isNotEmpty)
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Wünsche pro Stunde',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            _buildBarChartWithPercentages(),
+                          ],
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 24),
+                  
+                  // Kreisdiagramm
+                  if (_totalWishes > 0)
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          children: [
+                            const Text(
+                              'Verteilung',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            SizedBox(
+                              height: 250,
+                              child: PieChart(
+                                PieChartData(
+                                  sections: _buildPieChartSections(),
+                                  sectionsSpace: 2,
+                                  centerSpaceRadius: 60,
+                                  startDegreeOffset: _calculateStartOffset(),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            _buildLegend(),
+                          ],
+                        ),
+                      ),
+                    )
+                  else
+                    const Card(
+                      child: Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Center(
+                          child: Text('Keine Wünsche vorhanden'),
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 24),
+                  
+                  // PDF-Buttons
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: _isLoading ? null : () => _generateSmallStatisticsPDF(),
+                          icon: const Icon(Icons.picture_as_pdf),
+                          label: const Text('Kleine Statistik'),
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: _isLoading ? null : () => _generateDetailedStatisticsPDF(),
+                          icon: const Icon(Icons.picture_as_pdf),
+                          label: const Text('Ausführliche Statistik'),
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  const SizedBox(height: 24),
+                  const SizedBox(height: 24),
+                ],
+              ),
+            ),
+    );
+  }
+
+  Widget _buildStatRow(String label, String value, Color color) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(fontSize: 16),
+        ),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+      ],
+    );
+  }
+
+  // Berechnet den Start-Offset, damit "nicht gespielte Songs" immer unten ist
+  double _calculateStartOffset() {
+    if (_totalWishes == 0) {
+      return -90;
+    }
+    
+    // Berechne die Winkel für gespielte und abgelehnte Songs
+    final playedAngle = (_playedWishes / _totalWishes) * 360;
+    final rejectedAngle = (_rejectedWishes / _totalWishes) * 360;
+    
+    // Der Offset muss so sein, dass nach gespielten + abgelehnten Songs
+    // die "nicht gespielten Songs" unten (bei 90 Grad) starten
+    // Standard-Start ist oben (-90 Grad), also müssen wir rotieren
+    // bis "nicht gespielte Songs" unten ist
+    final offset = -90 + playedAngle + rejectedAngle;
+    
+    return offset;
+  }
+
+  List<PieChartSectionData> _buildPieChartSections() {
+    final sections = <PieChartSectionData>[];
+    
+    if (_totalWishes == 0) {
+      return sections;
+    }
+
+    final playedPercentage = (_playedWishes / _totalWishes) * 100;
+    final rejectedPercentage = (_rejectedWishes / _totalWishes) * 100;
+    final notPlayedPercentage = (_notPlayedWishes / _totalWishes) * 100;
+
+    // Reihenfolge: Gespielte, Abgelehnte, Nicht gespielte (wird durch Offset unten positioniert)
+    if (playedPercentage > 0) {
+      sections.add(
+        PieChartSectionData(
+          value: _playedWishes.toDouble(),
+          title: '${playedPercentage.toStringAsFixed(1)}%',
+          color: Colors.green,
+          radius: 80,
+          titleStyle: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
+      );
+    }
+
+    if (rejectedPercentage > 0) {
+      sections.add(
+        PieChartSectionData(
+          value: _rejectedWishes.toDouble(),
+          title: '${rejectedPercentage.toStringAsFixed(1)}%',
+          color: Colors.red,
+          radius: 80,
+          titleStyle: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
+      );
+    }
+
+    // Nicht gespielte Songs zuletzt - wird durch Offset unten positioniert
+    if (notPlayedPercentage > 0) {
+      sections.add(
+        PieChartSectionData(
+          value: _notPlayedWishes.toDouble(),
+          title: '${notPlayedPercentage.toStringAsFixed(1)}%',
+          color: Colors.orange,
+          radius: 80,
+          titleStyle: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
+      );
+    }
+
+    return sections;
+  }
+
+  Widget _buildLegend() {
+    return Column(
+      children: [
+        _buildLegendItem('Gespielte Songs', Colors.green, _playedWishes),
+        const SizedBox(height: 8),
+        _buildLegendItem('Abgelehnte Songs', Colors.red, _rejectedWishes),
+        const SizedBox(height: 8),
+        _buildLegendItem('Nicht gespielte Songs', Colors.orange, _notPlayedWishes),
+      ],
+    );
+  }
+
+  Widget _buildLegendItem(String label, Color color, int count) {
+    return Row(
+      children: [
+        Container(
+          width: 16,
+          height: 16,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(label),
+        const Spacer(),
+        Text(
+          count.toString(),
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+      ],
+    );
+  }
+
+  // Einheitliche Farbe für alle Balken
+  Color _getBarColor() {
+    return Colors.blue;
+  }
+
+  List<BarChartGroupData> _buildBarChartGroups() {
+    final groups = <BarChartGroupData>[];
+    final color = _getBarColor();
+
+    // Erstelle Gruppen für alle 24 Stunden (0-23)
+    // Für horizontale Balken: x = Stunde (Y-Achse), toY = Anzahl (X-Achse)
+    for (int hour = 0; hour < 24; hour++) {
+      final count = _wishesPerHour[hour] ?? 0;
+
+      groups.add(
+        BarChartGroupData(
+          x: hour,
+          barRods: [
+            BarChartRodData(
+              toY: count.toDouble(),
+              color: color,
+              width: 16,
+              borderRadius: const BorderRadius.horizontal(right: Radius.circular(4)),
+            ),
+          ],
+          barsSpace: 2,
+        ),
+      );
+    }
+
+    return groups;
+  }
+
+  // Formatiert DateTime für PDF
+  String _formatDateTimeForPDF(DateTime date) {
+    final day = date.day.toString().padLeft(2, '0');
+    final month = date.month.toString().padLeft(2, '0');
+    final year = date.year;
+    final hour = date.hour.toString().padLeft(2, '0');
+    final minute = date.minute.toString().padLeft(2, '0');
+    return '$day.$month.$year $hour:$minute Uhr';
+  }
+
+  // Generiert kleine Statistik-PDF
+  Future<void> _generateSmallStatisticsPDF() async {
+    try {
+      // Lade DJ-WB.png Logo für die Fußzeile
+      pw.ImageProvider? djWbLogoImage;
+      try {
+        final djWbLogoBytes = await rootBundle.load('assets/DJ-WB.png');
+        final djWbLogoUint8List = djWbLogoBytes.buffer.asUint8List();
+        djWbLogoImage = pw.MemoryImage(djWbLogoUint8List);
+      } catch (e) {
+        print('❌ Fehler beim Laden des DJ-WB.png Logos: $e');
+      }
+
+      final pdf = pw.Document();
+      
+      pdf.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.all(40),
+          build: (pw.Context context) {
+            return pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                // Titel
+                pw.Text(
+                  widget.partyName,
+                  style: pw.TextStyle(
+                    fontSize: 24,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
+                pw.SizedBox(height: 8),
+                pw.Text(
+                  'Party-Code: ${widget.partyCode}',
+                  style: const pw.TextStyle(fontSize: 12),
+                ),
+                pw.SizedBox(height: 4),
+                pw.Text(
+                  'Start: ${_formatDateTimeForPDF(widget.startDate)}',
+                  style: const pw.TextStyle(fontSize: 12),
+                ),
+                pw.SizedBox(height: 4),
+                pw.Text(
+                  'Ende: ${_formatDateTimeForPDF(widget.endDate)}',
+                  style: const pw.TextStyle(fontSize: 12),
+                ),
+                pw.SizedBox(height: 24),
+                
+                // Statistiken und Verteilung nebeneinander
+                pw.Row(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    // Linke Spalte: Statistiken
+                    pw.Expanded(
+                      child: pw.Container(
+                        padding: const pw.EdgeInsets.all(12),
+                        decoration: pw.BoxDecoration(
+                          border: pw.Border.all(color: PdfColors.grey400, width: 1),
+                          borderRadius: pw.BorderRadius.circular(4),
+                        ),
+                        child: pw.Column(
+                          crossAxisAlignment: pw.CrossAxisAlignment.start,
+                          children: [
+                            pw.Text(
+                              'Statistiken',
+                              style: pw.TextStyle(
+                                fontSize: 14,
+                                fontWeight: pw.FontWeight.bold,
+                              ),
+                            ),
+                            pw.SizedBox(height: 8),
+                            _buildPDFStatRow('Gesamt', _totalWishes.toString()),
+                            pw.SizedBox(height: 6),
+                            _buildPDFStatRow('Gespielt', _playedWishes.toString()),
+                            pw.SizedBox(height: 6),
+                            _buildPDFStatRow('Abgelehnt', _rejectedWishes.toString()),
+                            pw.SizedBox(height: 6),
+                            _buildPDFStatRow('Nicht gespielt', _notPlayedWishes.toString()),
+                            if (_playedWishes > 0 && _averagePlayTimeMinutes > 0) ...[
+                              pw.SizedBox(height: 6),
+                              _buildPDFStatRow(
+                                'Ø Zeit',
+                                '${_averagePlayTimeMinutes.toStringAsFixed(1)} Min',
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                    pw.SizedBox(width: 12),
+                    // Rechte Spalte: Verteilung
+                    if (_totalWishes > 0)
+                      pw.Expanded(
+                        child: pw.Container(
+                          padding: const pw.EdgeInsets.all(12),
+                          decoration: pw.BoxDecoration(
+                            border: pw.Border.all(color: PdfColors.grey400, width: 1),
+                            borderRadius: pw.BorderRadius.circular(4),
+                          ),
+                          child: pw.Column(
+                            crossAxisAlignment: pw.CrossAxisAlignment.start,
+                            children: [
+                              pw.Text(
+                                'Verteilung',
+                                style: pw.TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: pw.FontWeight.bold,
+                                ),
+                              ),
+                              pw.SizedBox(height: 8),
+                              _buildPDFStatRow('Gespielt', '${(_playedWishes / _totalWishes * 100).toStringAsFixed(1)}%'),
+                              pw.SizedBox(height: 6),
+                              _buildPDFStatRow('Abgelehnt', '${(_rejectedWishes / _totalWishes * 100).toStringAsFixed(1)}%'),
+                              pw.SizedBox(height: 6),
+                              _buildPDFStatRow('Nicht gespielt', '${(_notPlayedWishes / _totalWishes * 100).toStringAsFixed(1)}%'),
+                              pw.SizedBox(height: 12),
+                              // Kreisdiagramm
+                              pw.Center(
+                                child: pw.SizedBox(
+                                  width: 120,
+                                  height: 120,
+                                  child: pw.CustomPaint(
+                                    painter: (canvas, size) {
+                                      _drawPieChart(canvas, size);
+                                    },
+                                  ),
+                                ),
+                              ),
+                              pw.SizedBox(height: 8),
+                              // Legende
+                              pw.Row(
+                                mainAxisAlignment: pw.MainAxisAlignment.center,
+                                children: [
+                                  if (_playedWishes > 0) ...[
+                                    pw.Container(
+                                      width: 8,
+                                      height: 8,
+                                      decoration: pw.BoxDecoration(
+                                        color: PdfColors.green,
+                                        shape: pw.BoxShape.circle,
+                                      ),
+                                    ),
+                                    pw.SizedBox(width: 4),
+                                    pw.Text('Gespielt', style: const pw.TextStyle(fontSize: 8)),
+                                  ],
+                                  if (_playedWishes > 0 && _rejectedWishes > 0) pw.SizedBox(width: 8),
+                                  if (_rejectedWishes > 0) ...[
+                                    pw.Container(
+                                      width: 8,
+                                      height: 8,
+                                      decoration: pw.BoxDecoration(
+                                        color: PdfColors.red,
+                                        shape: pw.BoxShape.circle,
+                                      ),
+                                    ),
+                                    pw.SizedBox(width: 4),
+                                    pw.Text('Abgelehnt', style: const pw.TextStyle(fontSize: 8)),
+                                  ],
+                                  if ((_playedWishes > 0 || _rejectedWishes > 0) && _notPlayedWishes > 0) pw.SizedBox(width: 8),
+                                  if (_notPlayedWishes > 0) ...[
+                                    pw.Container(
+                                      width: 8,
+                                      height: 8,
+                                      decoration: pw.BoxDecoration(
+                                        color: PdfColors.orange,
+                                        shape: pw.BoxShape.circle,
+                                      ),
+                                    ),
+                                    pw.SizedBox(width: 4),
+                                    pw.Text('Nicht gespielt', style: const pw.TextStyle(fontSize: 8)),
+                                  ],
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                
+                // Fußzeile mit Logo
+                pw.SizedBox(height: 24),
+                pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.center,
+                  crossAxisAlignment: pw.CrossAxisAlignment.center,
+                  children: [
+                    if (djWbLogoImage != null) ...[
+                      pw.Image(djWbLogoImage, width: 40, fit: pw.BoxFit.contain),
+                      pw.SizedBox(width: 8),
+                    ],
+                    pw.Text(
+                      'a creation by DJ Ollerganove',
+                      style: pw.TextStyle(
+                        fontSize: 9,
+                        color: PdfColors.grey700,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            );
+          },
+        ),
+      );
+
+      await Printing.layoutPdf(
+        onLayout: (PdfPageFormat format) async => pdf.save(),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Fehler beim Generieren der PDF: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  // Generiert ausführliche Statistik-PDF
+  Future<void> _generateDetailedStatisticsPDF() async {
+    try {
+      // Lade DJ-WB.png Logo für die Fußzeile
+      pw.ImageProvider? djWbLogoImage;
+      try {
+        final djWbLogoBytes = await rootBundle.load('assets/DJ-WB.png');
+        final djWbLogoUint8List = djWbLogoBytes.buffer.asUint8List();
+        djWbLogoImage = pw.MemoryImage(djWbLogoUint8List);
+      } catch (e) {
+        print('❌ Fehler beim Laden des DJ-WB.png Logos: $e');
+      }
+
+      final pdf = pw.Document();
+      
+      pdf.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.all(40),
+          build: (pw.Context context) {
+            return pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                // Titel
+                pw.Text(
+                  widget.partyName,
+                  style: pw.TextStyle(
+                    fontSize: 24,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
+                pw.SizedBox(height: 8),
+                pw.Text(
+                  'Party-Code: ${widget.partyCode}',
+                  style: const pw.TextStyle(fontSize: 12),
+                ),
+                pw.SizedBox(height: 4),
+                pw.Text(
+                  'Start: ${_formatDateTimeForPDF(widget.startDate)}',
+                  style: const pw.TextStyle(fontSize: 12),
+                ),
+                pw.SizedBox(height: 4),
+                pw.Text(
+                  'Ende: ${_formatDateTimeForPDF(widget.endDate)}',
+                  style: const pw.TextStyle(fontSize: 12),
+                ),
+                pw.SizedBox(height: 24),
+                
+                // Statistiken (wie in kleiner Statistik)
+                pw.Text(
+                  'Statistiken',
+                  style: pw.TextStyle(
+                    fontSize: 18,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
+                pw.SizedBox(height: 12),
+                _buildPDFStatRow('Gesamt Wünsche', _totalWishes.toString()),
+                pw.SizedBox(height: 8),
+                _buildPDFStatRow('Gespielte Songs', _playedWishes.toString()),
+                pw.SizedBox(height: 8),
+                _buildPDFStatRow('Abgelehnte Songs', _rejectedWishes.toString()),
+                pw.SizedBox(height: 8),
+                _buildPDFStatRow('Nicht gespielte Songs', _notPlayedWishes.toString()),
+                if (_playedWishes > 0 && _averagePlayTimeMinutes > 0) ...[
+                  pw.SizedBox(height: 8),
+                  _buildPDFStatRow(
+                    'Ø Zeit bis zum Spielen',
+                    '${_averagePlayTimeMinutes.toStringAsFixed(1)} Min',
+                  ),
+                ],
+                pw.SizedBox(height: 24),
+                
+                // Wünsche pro Stunde
+                if (_wishesPerHour.isNotEmpty) ...[
+                  pw.Text(
+                    'Wünsche pro Stunde',
+                    style: pw.TextStyle(
+                      fontSize: 18,
+                      fontWeight: pw.FontWeight.bold,
+                    ),
+                  ),
+                  pw.SizedBox(height: 12),
+                  ...List.generate(24, (hour) {
+                    final count = _wishesPerHour[hour] ?? 0;
+                    if (count == 0) return pw.SizedBox.shrink();
+                    final hourStr = hour.toString().padLeft(2, '0');
+                    final percentage = _totalWishes > 0 ? (count / _totalWishes * 100) : 0.0;
+                    return pw.Padding(
+                      padding: const pw.EdgeInsets.only(bottom: 4),
+                      child: pw.Row(
+                        children: [
+                          pw.Text('$hourStr Uhr:', style: const pw.TextStyle(fontSize: 10)),
+                          pw.SizedBox(width: 8),
+                          pw.Text('$count', style: const pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+                          pw.SizedBox(width: 8),
+                          pw.Text('(${percentage.toStringAsFixed(1)}%)', style: const pw.TextStyle(fontSize: 10)),
+                        ],
+                      ),
+                    );
+                  }),
+                  pw.SizedBox(height: 24),
+                ],
+                
+                // Verteilung
+                if (_totalWishes > 0) ...[
+                  pw.Text(
+                    'Verteilung',
+                    style: pw.TextStyle(
+                      fontSize: 18,
+                      fontWeight: pw.FontWeight.bold,
+                    ),
+                  ),
+                  pw.SizedBox(height: 12),
+                  _buildPDFStatRow('Gespielte Songs', '$_playedWishes (${(_playedWishes / _totalWishes * 100).toStringAsFixed(1)}%)'),
+                  pw.SizedBox(height: 8),
+                  _buildPDFStatRow('Abgelehnte Songs', '$_rejectedWishes (${(_rejectedWishes / _totalWishes * 100).toStringAsFixed(1)}%)'),
+                  pw.SizedBox(height: 8),
+                  _buildPDFStatRow('Nicht gespielte Songs', '$_notPlayedWishes (${(_notPlayedWishes / _totalWishes * 100).toStringAsFixed(1)}%)'),
+                  pw.SizedBox(height: 24),
+                ],
+                
+                // Gespielte Wünsche Liste
+                if (_playedWishesList.isNotEmpty) ...[
+                  pw.Text(
+                    'Gespielte Songs',
+                    style: pw.TextStyle(
+                      fontSize: 18,
+                      fontWeight: pw.FontWeight.bold,
+                    ),
+                  ),
+                  pw.SizedBox(height: 12),
+                  // 2-spaltige Liste
+                  ...List.generate((_playedWishesList.length / 2).ceil(), (rowIndex) {
+                    final leftIndex = rowIndex * 2;
+                    final rightIndex = leftIndex + 1;
+                    
+                    return pw.Padding(
+                      padding: const pw.EdgeInsets.only(bottom: 6),
+                      child: pw.Row(
+                        crossAxisAlignment: pw.CrossAxisAlignment.start,
+                        children: [
+                          // Linke Spalte
+                          pw.Expanded(
+                            child: pw.Text(
+                              leftIndex < _playedWishesList.length
+                                  ? '${leftIndex + 1}. ${_formatWishForPDF(_playedWishesList[leftIndex])}'
+                                  : '',
+                              style: const pw.TextStyle(fontSize: 9),
+                            ),
+                          ),
+                          pw.SizedBox(width: 16),
+                          // Rechte Spalte
+                          pw.Expanded(
+                            child: pw.Text(
+                              rightIndex < _playedWishesList.length
+                                  ? '${rightIndex + 1}. ${_formatWishForPDF(_playedWishesList[rightIndex])}'
+                                  : '',
+                              style: const pw.TextStyle(fontSize: 9),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                  pw.SizedBox(height: 24),
+                  // Fußzeile mit Logo
+                  pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.center,
+                    crossAxisAlignment: pw.CrossAxisAlignment.center,
+                    children: [
+                      if (djWbLogoImage != null) ...[
+                        pw.Image(djWbLogoImage, width: 40, fit: pw.BoxFit.contain),
+                        pw.SizedBox(width: 8),
+                      ],
+                      pw.Text(
+                        'a creation by DJ Ollerganove',
+                        style: pw.TextStyle(
+                          fontSize: 9,
+                          color: PdfColors.grey700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            );
+          },
+        ),
+      );
+
+      await Printing.layoutPdf(
+        onLayout: (PdfPageFormat format) async => pdf.save(),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Fehler beim Generieren der PDF: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  // Hilfsfunktion für PDF-Statistik-Zeilen
+  pw.Widget _buildPDFStatRow(String label, String value) {
+    return pw.Row(
+      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+      children: [
+        pw.Text(label, style: const pw.TextStyle(fontSize: 12)),
+        pw.Text(value, style: const pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
+      ],
+    );
+  }
+
+  // Formatiert Wunsch für PDF (Titel - Interpret)
+  String _formatWishForPDF(Map<String, dynamic> wish) {
+    final title = wish['title'] as String? ?? '';
+    final artist = wish['artist'] as String? ?? '';
+    
+    if (title.isNotEmpty && artist.isNotEmpty) {
+      return '$title - $artist';
+    } else if (title.isNotEmpty) {
+      return title;
+    } else if (artist.isNotEmpty) {
+      return artist;
+    }
+    return '';
+  }
+
+  // Zeichnet ein Kreisdiagramm für PDF
+  void _drawPieChart(pw.Canvas canvas, pw.Size size) {
+    if (_totalWishes == 0) return;
+
+    final center = pw.Offset(size.width / 2, size.height / 2);
+    final radius = (size.width < size.height ? size.width : size.height) / 2 - 10;
+    
+    // Berechne Winkel für jeden Segment
+    final playedAngle = (_playedWishes / _totalWishes) * 360;
+    final rejectedAngle = (_rejectedWishes / _totalWishes) * 360;
+    final notPlayedAngle = (_notPlayedWishes / _totalWishes) * 360;
+    
+    double startAngle = -90; // Start bei oben (12 Uhr)
+    
+    // Gespielte Songs (Grün)
+    if (_playedWishes > 0) {
+      final paint = pw.Paint()..color = PdfColors.green;
+      canvas.drawArc(
+        pw.Rect.fromCircle(center: center, radius: radius),
+        startAngle * (3.14159 / 180), // Konvertiere zu Radian
+        playedAngle * (3.14159 / 180),
+        true,
+        paint,
+      );
+      startAngle += playedAngle;
+    }
+    
+    // Abgelehnte Songs (Rot)
+    if (_rejectedWishes > 0) {
+      final paint = pw.Paint()..color = PdfColors.red;
+      canvas.drawArc(
+        pw.Rect.fromCircle(center: center, radius: radius),
+        startAngle * (3.14159 / 180),
+        rejectedAngle * (3.14159 / 180),
+        true,
+        paint,
+      );
+      startAngle += rejectedAngle;
+    }
+    
+    // Nicht gespielte Songs (Orange)
+    if (_notPlayedWishes > 0) {
+      final paint = pw.Paint()..color = PdfColors.orange;
+      canvas.drawArc(
+        pw.Rect.fromCircle(center: center, radius: radius),
+        startAngle * (3.14159 / 180),
+        notPlayedAngle * (3.14159 / 180),
+        true,
+        paint,
+      );
+    }
+  }
+
+  // Erstellt ein horizontales Balkendiagramm
+  Widget _buildBarChartWithPercentages() {
+    if (_totalWishes == 0) {
+      return const SizedBox.shrink();
+    }
+
+    final maxCount = _wishesPerHour.values.isEmpty 
+        ? 0 
+        : _wishesPerHour.values.reduce((a, b) => a > b ? a : b);
+    final maxY = ((maxCount / 5).ceil() * 5); // Runde auf nächste 5er-Stelle
+    final availableWidth = MediaQuery.of(context).size.width - 120; // -120 für Labels und Padding
+    final barHeight = 16.0;
+    final barSpacing = 4.0;
+    final totalBarHeight = (barHeight + barSpacing) * 24;
+    
+    return SizedBox(
+      height: totalBarHeight + 60, // +60 für X-Achse Labels
+      child: Column(
+        children: [
+          // Y-Achse Label (Stunden) und Balken
+          Expanded(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Y-Achse: Stunden 01-23
+                SizedBox(
+                  width: 40,
+                  child: Column(
+                    children: List.generate(24, (hour) {
+                      final hourStr = hour.toString().padLeft(2, '0');
+                      return SizedBox(
+                        height: barHeight + barSpacing,
+                        child: Align(
+                          alignment: Alignment.centerRight,
+                          child: Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: Text(
+                              hourStr,
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                        ),
+                      );
+                    }),
+                  ),
+                ),
+                // Balken und X-Achse
+                Expanded(
+                  child: Stack(
+                    children: [
+                      // Grid-Linien (vertikal für X-Achse)
+                      ...List.generate((maxY ~/ 5) + 1, (index) {
+                        final value = index * 5;
+                        final xPosition = (value / maxY) * availableWidth;
+                        return Positioned(
+                          left: xPosition,
+                          top: 0,
+                          bottom: 40,
+                          child: Container(
+                            width: 1,
+                            color: Colors.grey[300],
+                          ),
+                        );
+                      }),
+                      // Balken
+                      ...List.generate(24, (hour) {
+                        final count = _wishesPerHour[hour] ?? 0;
+                        final barLength = maxY > 0 ? (count / maxY) * availableWidth : 0.0;
+                        final barY = hour * (barHeight + barSpacing);
+                        final percentage = count > 0 ? ((count / _totalWishes) * 100) : 0.0;
+                        
+                        return Positioned(
+                          left: 0,
+                          top: barY,
+                          child: Row(
+                            children: [
+                              // Balken mit Prozentangabe drin
+                              if (count > 0)
+                                Stack(
+                                  children: [
+                                    Container(
+                                      width: barLength,
+                                      height: barHeight,
+                                      decoration: BoxDecoration(
+                                        color: _getBarColor(),
+                                        borderRadius: const BorderRadius.horizontal(
+                                          right: Radius.circular(4),
+                                        ),
+                                      ),
+                                    ),
+                                    // Prozentangabe in weiß im Balken
+                                    if (barLength > 30) // Nur anzeigen wenn Balken breit genug
+                                      Positioned(
+                                        left: 4,
+                                        top: 0,
+                                        bottom: 0,
+                                        child: Center(
+                                          child: Text(
+                                            '${percentage.toStringAsFixed(1)}%',
+                                            style: const TextStyle(
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.white,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              // Anzahl der Wünsche rechts neben dem Balken
+                              if (count > 0) ...[
+                                const SizedBox(width: 4),
+                                Text(
+                                  count.toString(),
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.black87,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        );
+                      }),
+                      // X-Achse Labels (unten)
+                      ...List.generate((maxY ~/ 5) + 1, (index) {
+                        final value = index * 5;
+                        final xPosition = (value / maxY) * availableWidth;
+                        return Positioned(
+                          left: xPosition - 10,
+                          bottom: 0,
+                          child: Text(
+                            value.toString(),
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        );
+                      }),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -8478,6 +10206,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
   TimeOfDay? _startTime;
   DateTime? _endDate;
   TimeOfDay? _endTime;
+  String _partyType = 'private'; // Standard: privat
   bool _isLoading = false;
 
   @override
@@ -8595,6 +10324,11 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       final random = Random();
       final partyCode = (1000 + random.nextInt(9000)).toString(); // 1000-9999
       
+      // Hole aktuellen User (DJ)
+      final user = FirebaseAuth.instance.currentUser;
+      final createdBy = user?.uid ?? '';
+      final createdByEmail = user?.email ?? '';
+      
       final docRef = await FirebaseFirestore.instance
           .collection('parties')
           .add({
@@ -8603,6 +10337,9 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
         'end_date': Timestamp.fromDate(endDateTime),
         'created_at': Timestamp.now(),
         'party_code': partyCode, // 4-stelliger Code
+        'party_type': _partyType, // 'private' oder 'public'
+        'created_by': createdBy, // User-ID des DJs
+        'created_by_email': createdByEmail, // Email des DJs
       });
       
       print('Party gespeichert mit ID: ${docRef.id}');
@@ -8677,6 +10414,45 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                   ),
                 ),
                 const SizedBox(height: 24),
+                // Art der Veranstaltung (muss ausgewählt werden)
+                const Text(
+                  'Art der Veranstaltung:',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: RadioListTile<String>(
+                        title: const Text('Privat'),
+                        value: 'private',
+                        groupValue: _partyType,
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        onChanged: (value) {
+                          setState(() {
+                            _partyType = value!;
+                          });
+                        },
+                      ),
+                    ),
+                    Expanded(
+                      child: RadioListTile<String>(
+                        title: const Text('Öffentlich'),
+                        value: 'public',
+                        groupValue: _partyType,
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        onChanged: (value) {
+                          setState(() {
+                            _partyType = value!;
+                          });
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
                 // Party-Name
                 TextFormField(
                   controller: _partyNameController,
@@ -8693,48 +10469,161 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                   },
                 ),
                 const SizedBox(height: 16),
-                // Start-Datum
-                Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.calendar_today),
-                    title: const Text('Start-Datum'),
-                    subtitle: Text(_formatDate(_startDate)),
-                    trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                    onTap: _selectStartDate,
-                  ),
+                // Beginn
+                const Text(
+                  'Beginn:',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 8),
-                // Start-Uhrzeit
-                Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.access_time),
-                    title: const Text('Start-Uhrzeit'),
-                    subtitle: Text(_formatTime(_startTime)),
-                    trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                    onTap: _selectStartTime,
-                  ),
+                const Text(
+                  'Start:',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Datum:', style: TextStyle(fontSize: 12)),
+                          const SizedBox(height: 4),
+                          InkWell(
+                            onTap: _selectStartDate,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Colors.grey),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.calendar_today, size: 18),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      _formatDate(_startDate),
+                                      style: const TextStyle(fontSize: 14),
+                                    ),
+                                  ),
+                                  const Icon(Icons.arrow_forward_ios, size: 14),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Zeit:', style: TextStyle(fontSize: 12)),
+                          const SizedBox(height: 4),
+                          InkWell(
+                            onTap: _selectStartTime,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Colors.grey),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.access_time, size: 18),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      _formatTime(_startTime),
+                                      style: const TextStyle(fontSize: 14),
+                                    ),
+                                  ),
+                                  const Icon(Icons.arrow_forward_ios, size: 14),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 16),
-                // End-Datum
-                Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.calendar_today),
-                    title: const Text('End-Datum'),
-                    subtitle: Text(_formatDate(_endDate)),
-                    trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                    onTap: _selectEndDate,
-                  ),
+                // Ende
+                const Text(
+                  'Ende:',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 8),
-                // End-Uhrzeit
-                Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.access_time),
-                    title: const Text('End-Uhrzeit'),
-                    subtitle: Text(_formatTime(_endTime)),
-                    trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                    onTap: _selectEndTime,
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Datum:', style: TextStyle(fontSize: 12)),
+                          const SizedBox(height: 4),
+                          InkWell(
+                            onTap: _selectEndDate,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Colors.grey),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.calendar_today, size: 18),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      _formatDate(_endDate),
+                                      style: const TextStyle(fontSize: 14),
+                                    ),
+                                  ),
+                                  const Icon(Icons.arrow_forward_ios, size: 14),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Zeit:', style: TextStyle(fontSize: 12)),
+                          const SizedBox(height: 4),
+                          InkWell(
+                            onTap: _selectEndTime,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Colors.grey),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.access_time, size: 18),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      _formatTime(_endTime),
+                                      style: const TextStyle(fontSize: 14),
+                                    ),
+                                  ),
+                                  const Icon(Icons.arrow_forward_ios, size: 14),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 24),
                 // Speichern-Button
