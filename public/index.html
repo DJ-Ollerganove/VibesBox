@@ -1,0 +1,1240 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="DJ WunschBox - Musikwünsche abschicken">
+    <meta name="theme-color" content="#1976d2">
+    <title>DJ WunschBox</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" href="/icon-192.png">
+    <link rel="apple-touch-icon" href="/icon-192.png">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-top">
+                <button class="menu-toggle" id="menu-toggle" aria-label="Menü öffnen">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </button>
+                <div class="logo-container">
+                    <img src="/dj-logo.png" alt="DJ WunschBox Logo" class="logo">
+                    <h1>DJ WunschBox</h1>
+                </div>
+            </div>
+            <p class="subtitle">Sende deinen Musikwunsch an den DJ</p>
+            <div class="beta-badge">
+                <span class="beta-icon">⚠️</span>
+                <span class="beta-text">Diese App befindet sich in der Test-Entwicklungsphase</span>
+            </div>
+        </header>
+
+        <!-- Navigation Menü -->
+        <nav class="nav-menu" id="nav-menu">
+            <div class="nav-menu-header">
+                <h2>Menü</h2>
+                <button class="menu-close" id="menu-close" aria-label="Menü schließen">&times;</button>
+            </div>
+            <ul class="nav-menu-list">
+                <li><a href="#" data-page="wishbox" class="nav-link active">Wunschbox</a></li>
+                <li><a href="#" data-page="social" class="nav-link">Social Media</a></li>
+                <li><a href="#" data-page="impressum" class="nav-link">Impressum</a></li>
+                <li><a href="#" data-page="dsgvo" class="nav-link">DSGVO</a></li>
+            </ul>
+        </nav>
+        <div class="nav-overlay" id="nav-overlay"></div>
+
+        <div id="status-message" class="status-message hidden" style="display: none !important;"></div>
+
+        <main id="main-content">
+            <!-- Wunschbox Seite -->
+            <div id="page-wishbox" class="page active">
+            <div class="wishbox-status" id="wishbox-status">
+                <div class="status-indicator">
+                    <span class="status-dot" id="status-dot"></span>
+                    <span id="status-text">Prüfe Status...</span>
+                </div>
+            </div>
+
+            <form id="wish-form" class="wish-form">
+                <div class="form-group">
+                    <label for="name">Dein Name *</label>
+                    <input type="text" id="name" name="name" required maxlength="100" placeholder="Gib deinen Namen ein">
+                </div>
+
+                <div class="form-group">
+                    <label for="title">Titel des Songs *</label>
+                    <input type="text" id="title" name="title" required maxlength="200" placeholder="z.B. Bohemian Rhapsody">
+                </div>
+
+                <div class="form-group">
+                    <label for="artist">Künstler/Interpret *</label>
+                    <input type="text" id="artist" name="artist" required maxlength="200" placeholder="z.B. Queen">
+                </div>
+
+                <div class="form-group">
+                    <label for="greeting">Gruß (optional)</label>
+                    <textarea id="greeting" name="greeting" rows="3" maxlength="500" placeholder="Optional: Eine Nachricht an den DJ oder die Party"></textarea>
+                </div>
+
+                <button type="submit" id="submit-btn" class="submit-btn">
+                    <span id="submit-text">Wunsch absenden</span>
+                    <span id="submit-spinner" class="spinner hidden"></span>
+                </button>
+            </form>
+
+            <div id="party-code-display" class="party-code-display hidden"></div>
+
+            <div id="success-message" class="success-message hidden">
+                <div class="success-icon">✓</div>
+                <h2>Wunsch erfolgreich abgesendet!</h2>
+                <p>Dein Musikwunsch wurde an den DJ übermittelt.</p>
+            </div>
+            </div>
+
+            <!-- Impressum Seite -->
+            <div id="page-impressum" class="page">
+                <div class="content-page">
+                    <h2>Impressum</h2>
+                    <div class="content-card">
+                        <h3>Angaben gemäß § 5 TMG</h3>
+                        <p><strong>DJ Ollerganove</strong></p>
+                        <p>
+                            Anschrift:<br>
+                            [Ihre Straße und Hausnummer]<br>
+                            [PLZ Ort]
+                        </p>
+                        <h3>Kontakt</h3>
+                        <p>
+                            Telefon: [Ihre Telefonnummer]<br>
+                            E-Mail: info@dj-ollerganove.de
+                        </p>
+                        <h3>Verantwortlich für den Inhalt nach § 55 Abs. 2 RStV</h3>
+                        <p>
+                            DJ Ollerganove<br>
+                            [Ihre Straße und Hausnummer]<br>
+                            [PLZ Ort]
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- DSGVO Seite -->
+            <div id="page-dsgvo" class="page">
+                <div class="content-page">
+                    <h2>Datenschutzerklärung (DSGVO)</h2>
+                    <div class="content-card">
+                        <p>Die Datenschutzerklärung wird noch erstellt und hier eingefügt.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Social Media Seite -->
+            <div id="page-social" class="page">
+                <div class="content-page">
+                    <h2>Social Media</h2>
+                    <div class="content-card">
+                        <p>Folge uns auf unseren Social Media Kanälen:</p>
+                        <div class="social-links">
+                            <a href="https://www.facebook.com/djollerganove" class="social-link facebook" target="_blank" rel="noopener noreferrer">
+                                <i class="fab fa-facebook-f"></i>
+                                <span class="social-name">Facebook</span>
+                            </a>
+                            <a href="https://www.instagram.com/djollerganove" class="social-link instagram" target="_blank" rel="noopener noreferrer">
+                                <i class="fab fa-instagram"></i>
+                                <span class="social-name">Instagram</span>
+                            </a>
+                            <a href="https://open.spotify.com/playlist/2oVYkMONLq5MVsuJn0fxGO?si=5r9mK_cfTvaJLroSTYanww" class="social-link spotify" target="_blank" rel="noopener noreferrer">
+                                <i class="fab fa-spotify"></i>
+                                <span class="social-name">Spotify</span>
+                            </a>
+                            <a href="https://www.youtube.com/@djollerganove" class="social-link youtube" target="_blank" rel="noopener noreferrer">
+                                <i class="fab fa-youtube"></i>
+                                <span class="social-name">YouTube</span>
+                            </a>
+                            <a href="https://www.dj-ollerganove.de" class="social-link website" target="_blank" rel="noopener noreferrer">
+                                <i class="fas fa-globe"></i>
+                                <span class="social-name">Website</span>
+                            </a>
+                            <a href="https://wa.me/491234567890" class="social-link whatsapp" target="_blank" rel="noopener noreferrer">
+                                <i class="fab fa-whatsapp"></i>
+                                <span class="social-name">WhatsApp</span>
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>&copy; 2026 DJ WunschBox</p>
+            <p id="app-check-message" class="app-check-message hidden">das ist ein test</p>
+        </footer>
+    </div>
+
+    <!-- Firebase SDK -->
+    <!-- Verwende ältere Version für bessere Kompatibilität mit Android 8.1 -->
+    <script>
+        // Android-Version-Erkennung
+        function getAndroidVersion() {
+            const ua = navigator.userAgent || navigator.vendor || window.opera;
+            const match = ua.match(/Android\s([0-9\.]*)/);
+            if (match && match[1]) {
+                return parseFloat(match[1]);
+            }
+            return null;
+        }
+        
+        const androidVersion = getAndroidVersion();
+        console.log('Android-Version erkannt:', androidVersion);
+        
+        // Verwende CDN-Version für bessere Kompatibilität mit älteren Android-Versionen
+        // Lade Firebase SDKs synchron (nicht als ES6-Module) für maximale Kompatibilität
+        (function() {
+            // Lade Firebase SDKs
+            const firebaseAppScript = document.createElement('script');
+            firebaseAppScript.src = 'https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js';
+            firebaseAppScript.onload = function() {
+                const firebaseFirestoreScript = document.createElement('script');
+                firebaseFirestoreScript.src = 'https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js';
+                firebaseFirestoreScript.onload = function() {
+                    initializeFirebase();
+                };
+                firebaseFirestoreScript.onerror = function() {
+                    console.error('Fehler beim Laden von Firebase Firestore');
+                    showFormFallback();
+                };
+                document.head.appendChild(firebaseFirestoreScript);
+            };
+            firebaseAppScript.onerror = function() {
+                console.error('Fehler beim Laden von Firebase App');
+                showFormFallback();
+            };
+            document.head.appendChild(firebaseAppScript);
+        })();
+        
+        function showFormFallback() {
+            setTimeout(function() {
+                const form = document.getElementById('wish-form');
+                const statusEl = document.getElementById('wishbox-status');
+                if (form) {
+                    form.classList.remove('hidden');
+                    form.style.display = 'block';
+                }
+                if (statusEl) {
+                    statusEl.style.display = 'none';
+                }
+            }, 1000);
+        }
+        
+        function initializeFirebase() {
+            if (typeof firebase === 'undefined') {
+                console.error('Firebase nicht verfügbar');
+                showFormFallback();
+                return;
+            }
+            
+            // Verwende compat-Version für maximale Kompatibilität
+            const firebaseConfig = {
+                apiKey: "AIzaSyAYMw-tYXq75RzLOvLnb113SVmGgBWRM5M",
+                authDomain: "dj-ollerganove.firebaseapp.com",
+                projectId: "dj-ollerganove",
+                storageBucket: "dj-ollerganove.firebasestorage.app",
+                messagingSenderId: "567845942758",
+                appId: "1:567845942758:web:YOUR_WEB_APP_ID"
+            };
+            
+            let app;
+            let db;
+            
+            try {
+                app = firebase.initializeApp(firebaseConfig);
+                db = firebase.firestore(app);
+                console.log('Firebase erfolgreich initialisiert (compat mode)');
+                window.db = db; // Globale Variable für Zugriff
+                window.firebaseApp = app;
+                initApp(db);
+            } catch (error) {
+                console.error('Fehler beim Initialisieren von Firebase:', error);
+                showFormFallback();
+            }
+        }
+        
+        // Prüft ob die App installiert ist und öffnet Deep Link
+        // WICHTIG: Diese Funktion muss GLOBAL sein, damit sie beim DOMContentLoaded aufgerufen werden kann
+        function checkAndOpenApp() {
+            console.log('=== checkAndOpenApp aufgerufen ===');
+            const urlParams = new URLSearchParams(window.location.search);
+            const code = urlParams.get('code');
+            
+            console.log('URL Code:', code);
+            
+            if (!code) {
+                // Kein Code vorhanden - verstecke App-Check-Meldung
+                const appCheckMessage = document.getElementById('app-check-message');
+                if (appCheckMessage) {
+                    appCheckMessage.classList.add('hidden');
+                }
+                return;
+            }
+
+            // Speichere Party-Code im localStorage (für die App)
+            localStorage.setItem('party_code', code);
+            console.log('Party-Code gespeichert:', code);
+            
+            // Prüfe ob die App installiert ist
+            const isAndroid = /Android/i.test(navigator.userAgent);
+            const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+            
+            console.log('Platform erkannt - Android:', isAndroid, 'iOS:', isIOS);
+            
+            let deepLinkUrl = null;
+            let intentUrl = null;
+            
+            if (isAndroid) {
+                // Android: Mehrere Methoden versuchen
+                // Methode 1: Einfacher Custom Scheme (funktioniert auf den meisten Android-Versionen)
+                deepLinkUrl = `djwunschbox://wunschbox?code=${encodeURIComponent(code)}`;
+                
+                // Methode 2: Intent-URL für automatisches Öffnen (Android 6.0+)
+                const fallbackUrl = encodeURIComponent(window.location.href);
+                intentUrl = `intent://wunschbox?code=${encodeURIComponent(code)}#Intent;scheme=djwunschbox;package=com.android.application;S.browser_fallback_url=${fallbackUrl};end`;
+                
+                console.log('Deep Link URL:', deepLinkUrl);
+                console.log('Intent URL:', intentUrl);
+            } else if (isIOS) {
+                // iOS: Custom URL Scheme
+                deepLinkUrl = `djwunschbox://wunschbox?code=${encodeURIComponent(code)}`;
+                console.log('Deep Link URL (iOS):', deepLinkUrl);
+            }
+            
+            if (!deepLinkUrl && !intentUrl) {
+                console.log('Kein Deep Link möglich');
+                showAppCheckMessage();
+                return;
+            }
+            
+            // Versuche Deep Link zu öffnen
+            let appOpened = false;
+            let pageHidden = false;
+            
+            // Höre auf visibility change events
+            function handleVisibilityChange() {
+                if (document.hidden) {
+                    pageHidden = true;
+                    appOpened = true;
+                    console.log('Seite versteckt - App wurde geöffnet');
+                    hideAppCheckMessage();
+                }
+            }
+            
+            document.addEventListener('visibilitychange', handleVisibilityChange);
+            document.addEventListener('blur', handleVisibilityChange);
+            window.addEventListener('blur', handleVisibilityChange);
+            
+            // Für Android: Versuche mehrere Methoden parallel
+            if (isAndroid) {
+                console.log('Starte Android Deep Link Versuche...');
+                
+                // Methode 1: Direkter Custom Scheme (schnellste Methode)
+                try {
+                    console.log('Methode 1: Versuche window.location mit Custom Scheme');
+                    window.location.href = deepLinkUrl;
+                } catch (e) {
+                    console.error('Methode 1 fehlgeschlagen:', e);
+                }
+                
+                // Methode 2: Intent-URL (nach kurzer Verzögerung)
+                setTimeout(function() {
+                    try {
+                        console.log('Methode 2: Versuche Intent-URL');
+                        window.location.href = intentUrl;
+                    } catch (e) {
+                        console.error('Methode 2 fehlgeschlagen:', e);
+                    }
+                }, 200);
+                
+                // Methode 3: iframe (als zusätzlicher Versuch)
+                setTimeout(function() {
+                    try {
+                        console.log('Methode 3: Versuche iframe');
+                        const iframe = document.createElement('iframe');
+                        iframe.style.display = 'none';
+                        iframe.style.width = '0';
+                        iframe.style.height = '0';
+                        iframe.src = deepLinkUrl;
+                        document.body.appendChild(iframe);
+                        
+                        setTimeout(function() {
+                            if (iframe && iframe.parentNode) {
+                                document.body.removeChild(iframe);
+                            }
+                        }, 1000);
+                    } catch (e) {
+                        console.error('Methode 3 fehlgeschlagen:', e);
+                    }
+                }, 400);
+                
+            } else if (deepLinkUrl) {
+                // iOS oder Fallback
+                console.log('Versuche Deep Link (iOS/Fallback):', deepLinkUrl);
+                try {
+                    window.location.href = deepLinkUrl;
+                } catch (e) {
+                    console.error('Deep Link fehlgeschlagen:', e);
+                }
+            }
+            
+            // Prüfe nach 3 Sekunden, ob die App geöffnet wurde
+            setTimeout(function() {
+                console.log('Prüfe App-Status - pageHidden:', pageHidden, 'document.hidden:', document.hidden);
+                
+                // Entferne Event Listener
+                document.removeEventListener('visibilitychange', handleVisibilityChange);
+                document.removeEventListener('blur', handleVisibilityChange);
+                window.removeEventListener('blur', handleVisibilityChange);
+                
+                // Wenn die Seite noch sichtbar ist und nicht versteckt wurde,
+                // wurde die App wahrscheinlich nicht geöffnet
+                if (!pageHidden && !document.hidden && document.hasFocus()) {
+                    console.log('App wurde NICHT geöffnet - zeige PWA');
+                    appOpened = false;
+                    showAppCheckMessage();
+                } else {
+                    console.log('App wurde möglicherweise geöffnet');
+                    appOpened = true;
+                    hideAppCheckMessage();
+                }
+            }, 3000);
+        }
+        
+        // Zeigt die App-Check-Meldung an
+        function showAppCheckMessage() {
+            const appCheckMessage = document.getElementById('app-check-message');
+            if (appCheckMessage) {
+                appCheckMessage.classList.remove('hidden');
+            }
+        }
+        
+        // Versteckt die App-Check-Meldung
+        function hideAppCheckMessage() {
+            const appCheckMessage = document.getElementById('app-check-message');
+            if (appCheckMessage) {
+                appCheckMessage.classList.add('hidden');
+            }
+        }
+
+        function initApp(db) {
+            // Alle weiteren Initialisierungen hier
+            if (!db) {
+                console.error('db ist nicht verfügbar');
+                showFormFallback();
+                return;
+            }
+            
+            // Setze db als globale Variable für Zugriff (falls noch nicht gesetzt)
+            if (!window.db) {
+                window.db = db;
+            }
+
+            // Service Worker registrieren
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function() {
+                navigator.serviceWorker.register('/service-worker.js')
+                    .then(function(reg) {
+                        console.log('Service Worker registriert');
+                        // Prüfe auf Updates
+                        reg.addEventListener('updatefound', function() {
+                            const newWorker = reg.installing;
+                            newWorker.addEventListener('statechange', function() {
+                                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                                    // Neuer Service Worker verfügbar - Seite neu laden
+                                    console.log('Neue Version verfügbar - Seite wird neu geladen');
+                                    window.location.reload();
+                                }
+                            });
+                        });
+                    })
+                    .catch(function(err) {
+                        console.log('Service Worker Fehler:', err);
+                    });
+                
+                // Prüfe regelmäßig auf Updates
+                setInterval(function() {
+                    navigator.serviceWorker.getRegistration().then(function(reg) {
+                        if (reg) {
+                            reg.update();
+                        }
+                    });
+                }, 60000); // Alle 60 Sekunden prüfen
+            });
+        }
+
+        // Hilfsfunktionen
+        function sanitizeInput(input) {
+            if (!input) return '';
+            return input
+                .replace(/<[^>]*>/g, '')
+                .replace(/javascript:/gi, '')
+                .replace(/on\w+=/gi, '')
+                .trim();
+        }
+
+        function showMessage(message, type = 'info') {
+            // NUR für Fehler-Meldungen verwenden, NIEMALS für Erfolgs-Meldungen
+            if (type === 'success') {
+                console.log('showMessage mit success aufgerufen - wird ignoriert');
+                return; // Erfolgs-Meldungen werden nicht über showMessage angezeigt
+            }
+            const statusEl = document.getElementById('status-message');
+            if (!statusEl) return;
+            statusEl.textContent = message;
+            statusEl.className = `status-message ${type}`;
+            // Nur bei Fehlern anzeigen
+            if (type === 'error') {
+                statusEl.classList.remove('hidden');
+                statusEl.style.display = 'block';
+                setTimeout(function() {
+                    statusEl.classList.add('hidden');
+                    statusEl.style.display = 'none';
+                }, 5000);
+            } else {
+                // Alle anderen Typen werden nicht angezeigt
+                statusEl.classList.add('hidden');
+                statusEl.style.display = 'none';
+            }
+        }
+
+        // Wunschbox-Status prüfen mit Timeout
+        async function checkWishboxStatus() {
+            const statusEl = document.getElementById('wishbox-status');
+            const statusText = document.getElementById('status-text');
+            const statusDot = document.getElementById('status-dot');
+            const form = document.getElementById('wish-form');
+            const successMessage = document.getElementById('success-message');
+            const statusMessageEl = document.getElementById('status-message');
+
+            // Zeige "Lade..." während der Prüfung
+            if (statusText) {
+                statusText.textContent = 'Prüfe Status...';
+            }
+            if (statusDot) {
+                statusDot.className = 'status-dot loading';
+            }
+
+            // Timeout nach 3 Sekunden - zeige Formular als Fallback (für Android 8.1)
+            const timeoutId = setTimeout(function() {
+                console.warn('Statusprüfung hat zu lange gedauert - zeige Formular als Fallback');
+                // Zeige Formular GARANTIERT an
+                if (form) {
+                    form.classList.remove('hidden');
+                    form.style.display = 'block';
+                }
+                if (statusEl) {
+                    statusEl.style.display = 'none';
+                }
+                if (statusText) {
+                    statusText.textContent = 'Statusprüfung läuft... Formular verfügbar';
+                }
+                if (statusDot) {
+                    statusDot.className = 'status-dot inactive';
+                }
+            }, 3000);
+
+            try {
+                // Verwende window.db falls verfügbar
+                const db = window.db;
+                if (!db) {
+                    console.error('db nicht verfügbar in checkWishboxStatus');
+                    return;
+                }
+                
+                // Prüfe manuellen Schalter - lese direkt das 'current' Dokument
+                // Mit Timeout für einzelne Abfragen (reduziert auf 5 Sekunden für Android 8.1)
+                const settingsPromise = db.collection('party_settings').doc('current').get();
+                const settingsTimeout = new Promise(function(_, reject) {
+                    setTimeout(function() {
+                        reject(new Error('Settings-Abfrage Timeout'));
+                    }, 5000);
+                });
+                const settingsDocSnap = await Promise.race([settingsPromise, settingsTimeout]);
+                
+                let manuallyEnabled = false;
+                if (settingsDocSnap.exists) {
+                    manuallyEnabled = settingsDocSnap.data().wishbox_manually_enabled || false;
+                }
+
+                // Prüfe aktive Partys
+                // Lade alle Partys und filtere clientseitig (um Index-Probleme zu vermeiden)
+                const now = new Date();
+                const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                
+                const partiesPromise = db.collection('parties').get();
+                const partiesTimeout = new Promise(function(_, reject) {
+                    setTimeout(function() {
+                        reject(new Error('Parties-Abfrage Timeout'));
+                    }, 5000);
+                });
+                const partiesSnapshot = await Promise.race([partiesPromise, partiesTimeout]);
+
+                let hasActiveParty = false;
+                partiesSnapshot.forEach(function(doc) {
+                    const data = doc.data();
+                    const startDate = data.start_date ? data.start_date.toDate() : null;
+                    const endDate = data.end_date ? data.end_date.toDate() : null;
+                    
+                    // Filtere nur Partys, die nicht älter als 7 Tage sind
+                    if (endDate && endDate >= sevenDaysAgo) {
+                        if (startDate && endDate) {
+                            if (now >= startDate && now < endDate) {
+                                hasActiveParty = true;
+                            }
+                        }
+                    }
+                });
+
+                // Timeout aufheben, da Abfrage erfolgreich war
+                clearTimeout(timeoutId);
+
+                const isActive = manuallyEnabled || hasActiveParty;
+
+                if (isActive) {
+                    // Wunschbox ist geöffnet - Status-Box verstecken und Formular anzeigen
+                    if (statusEl) {
+                        statusEl.style.display = 'none';
+                    }
+                    // Erfolgs-Kasten und Status-Meldung IMMER verstecken, wenn Wunschbox geöffnet ist
+                    if (successMessage) {
+                        successMessage.classList.add('hidden');
+                    }
+                    if (statusMessageEl) {
+                        statusMessageEl.classList.add('hidden');
+                    }
+                    // Formular anzeigen
+                    if (form) {
+                        form.classList.remove('hidden');
+                        form.style.display = 'block';
+                    }
+                } else {
+                    // Wunschbox ist geschlossen - Status-Box anzeigen
+                    if (statusEl) {
+                        statusEl.style.display = 'block';
+                    }
+                    if (statusText) {
+                        statusText.textContent = 'Wunschbox ist geschlossen';
+                    }
+                    if (statusDot) {
+                        statusDot.className = 'status-dot inactive';
+                    }
+                    // Formular verstecken, ABER nur wenn Statusprüfung erfolgreich war
+                    // Bei Fehlern bleibt Formular sichtbar
+                    if (form) {
+                        form.classList.add('hidden');
+                    }
+                }
+            } catch (error) {
+                // Timeout aufheben
+                clearTimeout(timeoutId);
+                
+                console.error('Fehler beim Prüfen des Status:', error);
+                console.error('Fehler-Details:', error.message, error.code);
+                console.error('Fehler-Stack:', error.stack);
+                
+                // Zeige detaillierte Fehlermeldung
+                const errorMsg = error.message || error.code || 'Unbekannter Fehler';
+                if (statusText) {
+                    statusText.textContent = 'Fehler beim Laden des Status: ' + errorMsg;
+                }
+                if (statusDot) {
+                    statusDot.className = 'status-dot error';
+                }
+                
+                // Fallback: Zeige Formular an, auch wenn Status-Prüfung fehlschlägt
+                // Dies ermöglicht es Benutzern, trotzdem Wünsche abzugeben
+                if (form) {
+                    form.classList.remove('hidden');
+                    form.style.display = 'block';
+                }
+                if (statusEl) {
+                    statusEl.style.display = 'none';
+                }
+                
+                // Versuche Status erneut zu prüfen nach 5 Sekunden
+                setTimeout(function() {
+                    console.log('Versuche Status erneut zu prüfen...');
+                    checkWishboxStatus();
+                }, 5000);
+            }
+        }
+
+        // Duplikat-Erkennung
+        async function findSimilarWish(title, artist) {
+            // Prüfe ob Firebase verfügbar ist
+            const db = window.db;
+            if (!db) {
+                console.warn('Firebase nicht verfügbar - überspringe Duplikat-Prüfung');
+                return null;
+            }
+            
+            try {
+                const now = new Date();
+                const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                
+                // Hole aktive Party mit Timeout (compat-API)
+                const partiesPromise = db.collection('parties')
+                    .where('end_date', '>=', firebase.firestore.Timestamp.fromDate(sevenDaysAgo))
+                    .get();
+                const partiesTimeout = new Promise(function(_, reject) {
+                    setTimeout(function() {
+                        reject(new Error('Parties-Abfrage Timeout'));
+                    }, 5000);
+                });
+                const partiesSnapshot = await Promise.race([partiesPromise, partiesTimeout]);
+
+                let partyStart = null;
+                let partyEnd = null;
+                partiesSnapshot.forEach(function(doc) {
+                    const data = doc.data();
+                    const startDate = data.start_date ? data.start_date.toDate() : null;
+                    const endDate = data.end_date ? data.end_date.toDate() : null;
+                    const now = new Date();
+                    
+                    if (startDate && endDate && now >= startDate && now < endDate) {
+                        partyStart = startDate;
+                        partyEnd = endDate;
+                    }
+                });
+
+                // Wenn Party aktiv, nur Wünsche innerhalb der Party prüfen (compat-API)
+                let wishesPromise;
+                if (partyStart && partyEnd) {
+                    wishesPromise = db.collection('wishes')
+                        .where('createdAt', '>=', firebase.firestore.Timestamp.fromDate(partyStart))
+                        .where('createdAt', '<=', firebase.firestore.Timestamp.fromDate(partyEnd))
+                        .get();
+                } else {
+                    // Prüfe alle Wünsche der letzten 7 Tage
+                    wishesPromise = db.collection('wishes')
+                        .where('createdAt', '>=', firebase.firestore.Timestamp.fromDate(sevenDaysAgo))
+                        .get();
+                }
+
+                const normalize = function(str) {
+                    return str.toLowerCase().replace(/[^a-z0-9]/g, '');
+                };
+                const normalizedTitle = normalize(title);
+                const normalizedArtist = normalize(artist);
+
+                let bestMatch = null;
+                let bestSimilarity = 0;
+
+                // Prüfe Wünsche mit Timeout
+                let wishesSnapshot;
+                try {
+                const wishesTimeout = new Promise(function(_, reject) {
+                    setTimeout(function() {
+                        reject(new Error('Wishes-Abfrage Timeout'));
+                    }, 5000);
+                });
+                    wishesSnapshot = await Promise.race([wishesPromise, wishesTimeout]);
+                } catch (timeoutError) {
+                    console.warn('Wishes-Abfrage Timeout - überspringe Duplikat-Prüfung');
+                    return null;
+                }
+
+                wishesSnapshot.forEach(function(doc) {
+                    const data = doc.data();
+                    if (!data) return;
+                    
+                    const existingTitle = normalize(data.title || '');
+                    const existingArtist = normalize(data.artist || '');
+
+                    // Einfache String-Ähnlichkeit
+                    const titleSimilarity = calculateSimilarity(normalizedTitle, existingTitle);
+                    const artistSimilarity = calculateSimilarity(normalizedArtist, existingArtist);
+
+                    let combinedSimilarity = 0;
+                    if (normalizedTitle && normalizedArtist) {
+                        combinedSimilarity = (titleSimilarity * 0.7 + artistSimilarity * 0.3);
+                    } else if (normalizedTitle) {
+                        combinedSimilarity = titleSimilarity;
+                    } else if (normalizedArtist) {
+                        combinedSimilarity = artistSimilarity;
+                    }
+
+                    if ((titleSimilarity >= 0.60 || combinedSimilarity >= 0.55) && combinedSimilarity > bestSimilarity) {
+                        bestSimilarity = combinedSimilarity;
+                        bestMatch = { id: doc.id, data: data, similarity: combinedSimilarity };
+                    }
+                });
+
+                return bestMatch;
+            } catch (error) {
+                console.error('Fehler bei Duplikat-Erkennung:', error);
+                // Bei Fehler: Erlaube das Absenden trotzdem (keine Duplikat-Prüfung)
+                return null;
+            }
+        }
+
+        function calculateSimilarity(str1, str2) {
+            if (!str1 || !str2) return 0;
+            if (str1 === str2) return 1;
+            
+            const longer = str1.length > str2.length ? str1 : str2;
+            const shorter = str1.length > str2.length ? str2 : str1;
+            
+            if (longer.length === 0) return 1;
+            
+            const distance = levenshteinDistance(longer, shorter);
+            return (longer.length - distance) / longer.length;
+        }
+
+        function levenshteinDistance(str1, str2) {
+            const matrix = [];
+            for (let i = 0; i <= str2.length; i++) {
+                matrix[i] = [i];
+            }
+            for (let j = 0; j <= str1.length; j++) {
+                matrix[0][j] = j;
+            }
+            for (let i = 1; i <= str2.length; i++) {
+                for (let j = 1; j <= str1.length; j++) {
+                    if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
+                        matrix[i][j] = matrix[i - 1][j - 1];
+                    } else {
+                        matrix[i][j] = Math.min(
+                            matrix[i - 1][j - 1] + 1,
+                            matrix[i][j - 1] + 1,
+                            matrix[i - 1][j] + 1
+                        );
+                    }
+                }
+            }
+            return matrix[str2.length][str1.length];
+        }
+
+        // Formular absenden - Event Listener registrieren wenn DOM bereit ist
+        function setupFormSubmit() {
+            const wishForm = document.getElementById('wish-form');
+            if (!wishForm) {
+                console.error('Formular nicht gefunden!');
+                setTimeout(setupFormSubmit, 100);
+                return;
+            }
+
+            wishForm.addEventListener('submit', async function(e) {
+                e.preventDefault();
+                console.log('Formular wird abgesendet...');
+
+                const submitBtn = document.getElementById('submit-btn');
+                const submitText = document.getElementById('submit-text');
+                const submitSpinner = document.getElementById('submit-spinner');
+                const form = document.getElementById('wish-form');
+                const successMessage = document.getElementById('success-message');
+
+                const nameEl = document.getElementById('name');
+                const titleEl = document.getElementById('title');
+                const artistEl = document.getElementById('artist');
+                const greetingEl = document.getElementById('greeting');
+
+                if (!nameEl || !titleEl || !artistEl) {
+                    console.error('Formularfelder nicht gefunden!');
+                    showMessage('Fehler: Formularfelder nicht gefunden. Bitte Seite neu laden.', 'error');
+                    return;
+                }
+
+                const name = sanitizeInput(nameEl.value);
+                const title = sanitizeInput(titleEl.value);
+                const artist = sanitizeInput(artistEl.value);
+                const greeting = greetingEl ? sanitizeInput(greetingEl.value) : '';
+
+                if (!name || !title || !artist) {
+                    showMessage('Bitte fülle alle Pflichtfelder aus.', 'error');
+                    return;
+                }
+
+                // Button deaktivieren
+                if (submitBtn) submitBtn.disabled = true;
+                if (submitText) submitText.classList.add('hidden');
+                if (submitSpinner) submitSpinner.classList.remove('hidden');
+
+                // Prüfe ob Firebase verfügbar ist
+                const db = window.db;
+                if (!db) {
+                    console.error('Firebase db ist nicht verfügbar!');
+                    showMessage('Fehler: Firebase-Verbindung nicht verfügbar. Bitte Seite neu laden.', 'error');
+                    if (submitBtn) submitBtn.disabled = false;
+                    if (submitText) submitText.classList.remove('hidden');
+                    if (submitSpinner) submitSpinner.classList.add('hidden');
+                    return;
+                }
+
+                try {
+                    console.log('Prüfe auf Duplikate...');
+                    // Prüfe auf Duplikate
+                    const similarWish = await findSimilarWish(title, artist);
+                    
+                    // Hole Party-Code und Party-ID
+                    let partyCode = 'manual';
+                    let partyId = 'manual';
+                    
+                    try {
+                        // Versuche Party-Code aus URL zu lesen
+                        const urlParams = new URLSearchParams(window.location.search);
+                        const codeFromUrl = urlParams.get('code');
+                        
+                        // Oder aus localStorage (falls von Deep Link gespeichert)
+                        const codeFromStorage = localStorage.getItem('party_code');
+                        
+                        const codeToUse = codeFromUrl || codeFromStorage;
+                        
+                        if (codeToUse) {
+                            console.log('Party-Code gefunden:', codeToUse);
+                            partyCode = codeToUse;
+                            
+                            // Versuche die Party-ID zu finden
+                            try {
+                                const now = new Date();
+                                const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                                
+                                // Verwende compat-API für Firestore
+                                const db = window.db;
+                                if (!db) {
+                                    console.warn('db nicht verfügbar beim Finden der Party-ID');
+                                    return;
+                                }
+                                const partiesPromise = db.collection('parties')
+                                    .where('party_code', '==', codeToUse)
+                                    .where('end_date', '>=', firebase.firestore.Timestamp.fromDate(sevenDaysAgo))
+                                    .get();
+                                const partiesTimeout = new Promise(function(_, reject) {
+                                    setTimeout(function() {
+                                        reject(new Error('Parties-Abfrage Timeout'));
+                                    }, 3000);
+                                });
+                                
+                                const partiesSnapshot = await Promise.race([partiesPromise, partiesTimeout]);
+                                
+                                if (!partiesSnapshot.empty) {
+                                    // Finde aktive Party oder nächste bevorstehende
+                                    let activeParty = null;
+                                    let nextParty = null;
+                                    const now = new Date();
+                                    
+                                    partiesSnapshot.forEach(function(doc) {
+                                        const data = doc.data();
+                                        const startDate = data.start_date ? data.start_date.toDate() : null;
+                                        const endDate = data.end_date ? data.end_date.toDate() : null;
+                                        
+                                        if (startDate && endDate) {
+                                            // Prüfe ob Party aktiv ist
+                                            if (now >= startDate && now < endDate) {
+                                                activeParty = { id: doc.id, data: data };
+                                            } 
+                                            // Oder ob Party bevorstehend ist
+                                            else if (now < startDate && (!nextParty || (nextParty.data.start_date && startDate < nextParty.data.start_date.toDate()))) {
+                                                nextParty = { id: doc.id, data: data };
+                                            }
+                                        }
+                                    });
+                                    
+                                    // Verwende aktive Party oder nächste bevorstehende
+                                    const partyToUse = activeParty || nextParty;
+                                    if (partyToUse) {
+                                        partyId = partyToUse.id;
+                                        console.log('Party-ID gefunden:', partyId);
+                                    } else {
+                                        console.log('Keine aktive oder bevorstehende Party gefunden, verwende "manual"');
+                                    }
+                                } else {
+                                    console.log('Keine Party mit diesem Code gefunden, verwende "manual"');
+                                }
+                            } catch (partyError) {
+                                console.warn('Fehler beim Finden der Party-ID:', partyError);
+                                // Verwende 'manual' als Fallback
+                            }
+                        } else {
+                            console.log('Kein Party-Code gefunden, verwende "manual"');
+                        }
+                    } catch (codeError) {
+                        console.warn('Fehler beim Ermitteln des Party-Codes:', codeError);
+                        // Verwende 'manual' als Fallback
+                    }
+                    
+                    const wishData = {
+                        name: name,
+                        title: title,
+                        artist: artist,
+                        greeting: greeting || '',
+                        status: 'pending',
+                        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                        party_id: partyId,
+                        party_code: partyCode
+                    };
+
+                    if (similarWish) {
+                        // Duplikat gefunden - erstelle neuen Wunsch mit Duplikat-Info
+                        const existingWish = similarWish.data;
+                        const newCount = (existingWish.duplicate_count || 0) + 1;
+                        wishData.duplicate_count = newCount;
+                        wishData.original_wish_id = similarWish.id;
+                        console.log('Duplikat gefunden, erstelle Wunsch mit duplicate_count:', newCount);
+                    } else {
+                        console.log('Neuer Wunsch wird erstellt');
+                    }
+
+                    console.log('Speichere Wunsch in Firestore...', JSON.stringify(wishData));
+                    
+                    // Versuche Wunsch zu speichern mit explizitem Error-Handling
+                    const db = window.db;
+                    if (!db) {
+                        throw new Error('Firebase db ist nicht verfügbar');
+                    }
+                    let docRef;
+                    try {
+                        docRef = await db.collection('wishes').add(wishData);
+                        console.log('Wunsch erfolgreich gespeichert! Dokument-ID:', docRef.id);
+                    } catch (saveError) {
+                        console.error('FEHLER beim Speichern in Firestore:', saveError);
+                        console.error('Error Name:', saveError.name);
+                        console.error('Error Message:', saveError.message);
+                        console.error('Error Code:', saveError.code);
+                        console.error('Error Stack:', saveError.stack);
+                        throw saveError; // Weiterwerfen für catch-Block
+                    }
+
+                    // Erfolgsanzeige - NUR Erfolgs-Kasten, KEINE grüne Info-Zeile
+                    if (form) form.classList.add('hidden');
+                    if (successMessage) successMessage.classList.remove('hidden');
+                    
+                    // Status-Meldung (grüne Zeile) explizit verstecken
+                    const statusMessageEl = document.getElementById('status-message');
+                    if (statusMessageEl) {
+                        statusMessageEl.classList.add('hidden');
+                    }
+
+                    // Formular zurücksetzen
+                    if (wishForm) wishForm.reset();
+                    
+                    // Nach 2 Sekunden prüfen, ob Wunschbox wieder geöffnet wurde (für automatische Wiedereröffnung)
+                    setTimeout(function() {
+                        checkWishboxStatus();
+                    }, 2000);
+
+                } catch (error) {
+                    console.error('=== FEHLER BEIM ABSENDEN ===');
+                    console.error('Error Type:', typeof error);
+                    console.error('Error Name:', error.name);
+                    console.error('Error Message:', error.message);
+                    console.error('Error Code:', error.code);
+                    console.error('Error Stack:', error.stack);
+                    console.error('Vollständiger Error:', error);
+                    
+                    // Zeige detaillierte Fehlermeldung
+                    let errorMsg = 'Fehler beim Absenden des Wunsches.';
+                    if (error.message) {
+                        errorMsg += ' ' + error.message;
+                    } else if (error.code) {
+                        errorMsg += ' Code: ' + error.code;
+                    }
+                    errorMsg += ' Bitte versuche es erneut.';
+                    
+                    showMessage(errorMsg, 'error');
+                    
+                    // Zeige Formular wieder an bei Fehler
+                    if (form) {
+                        form.classList.remove('hidden');
+                        form.style.display = 'block';
+                    }
+                    if (successMessage) {
+                        successMessage.classList.add('hidden');
+                    }
+                } finally {
+                    if (submitBtn) submitBtn.disabled = false;
+                    if (submitText) submitText.classList.remove('hidden');
+                    if (submitSpinner) submitSpinner.classList.add('hidden');
+                }
+            });
+            console.log('Formular-Event-Listener erfolgreich registriert');
+        }
+
+        // Event Listener registrieren
+        setupFormSubmit();
+
+
+        // Party-Code aus URL lesen und anzeigen
+        function displayPartyCode() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const code = urlParams.get('code');
+            const codeDisplay = document.getElementById('party-code-display');
+            
+            if (code && codeDisplay) {
+                codeDisplay.innerHTML = `
+                    <div class="party-code-container">
+                        <span class="party-code-label">Party-Code:</span>
+                        <span class="party-code-value">${code}</span>
+                    </div>
+                `;
+                codeDisplay.classList.remove('hidden');
+            } else if (codeDisplay) {
+                codeDisplay.classList.add('hidden');
+            }
+        }
+
+            // Zeige Formular standardmäßig an (Fallback für Android 8.1)
+            // Wenn Firebase funktioniert, wird es durch checkWishboxStatus() gesteuert
+            const form = document.getElementById('wish-form');
+            const statusEl = document.getElementById('wishbox-status');
+            if (form) {
+                form.classList.remove('hidden');
+            }
+            if (statusEl) {
+                statusEl.style.display = 'none';
+            }
+            
+            // Status regelmäßig prüfen (nur wenn Firebase initialisiert wurde)
+            if (window.db) {
+                // Versuche Status zu prüfen, aber zeige Formular nach 3 Sekunden garantiert an
+                setTimeout(function() {
+                    const formEl = document.getElementById('wish-form');
+                    const statusEl = document.getElementById('wishbox-status');
+                    if (formEl && formEl.classList.contains('hidden')) {
+                        console.log('Zeige Formular nach 3 Sekunden an (Fallback)');
+                        formEl.classList.remove('hidden');
+                    }
+                    if (statusEl) {
+                        statusEl.style.display = 'none';
+                    }
+                }, 3000);
+                
+                checkWishboxStatus();
+            } else {
+                // Wenn Firebase nicht initialisiert wurde, zeige Formular direkt an
+                console.log('Firebase nicht verfügbar - zeige Formular direkt an');
+                if (form) {
+                    form.classList.remove('hidden');
+                }
+                if (statusEl) {
+                    statusEl.style.display = 'none';
+                }
+            }
+            
+            displayPartyCode(); // Code beim Laden anzeigen
+            
+            // Prüfe SOFORT beim Laden, ob App geöffnet werden soll (auch vor Firebase-Init)
+            // Dies ist wichtig für die automatische Weiterleitung
+            checkAndOpenApp();
+            
+            if (window.db) {
+                setInterval(function() {
+                    checkWishboxStatus();
+                    // Zusätzlich: Erfolgs-Kasten und Status-Meldung verstecken, wenn Formular sichtbar ist
+                    const form = document.getElementById('wish-form');
+                    const successMessage = document.getElementById('success-message');
+                    const statusMessageEl = document.getElementById('status-message');
+                    if (form && !form.classList.contains('hidden')) {
+                        // Formular ist sichtbar = Wunschbox ist geöffnet
+                        if (successMessage) {
+                            successMessage.classList.add('hidden');
+                        }
+                        if (statusMessageEl) {
+                            statusMessageEl.classList.add('hidden');
+                        }
+                    }
+                }, 10000); // Alle 10 Sekunden prüfen
+            }
+        }
+
+        // Navigation
+        const menuToggle = document.getElementById('menu-toggle');
+        const menuClose = document.getElementById('menu-close');
+        const navMenu = document.getElementById('nav-menu');
+        const navOverlay = document.getElementById('nav-overlay');
+        const navLinks = document.querySelectorAll('.nav-link');
+
+        function openMenu() {
+            navMenu.classList.add('active');
+            navOverlay.classList.add('active');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeMenu() {
+            navMenu.classList.remove('active');
+            navOverlay.classList.remove('active');
+            document.body.style.overflow = '';
+        }
+
+        menuToggle.addEventListener('click', openMenu);
+        menuClose.addEventListener('click', closeMenu);
+        navOverlay.addEventListener('click', closeMenu);
+
+        // Seitenwechsel
+        navLinks.forEach(function(link) {
+            link.addEventListener('click', function(e) {
+                e.preventDefault();
+                const pageId = link.getAttribute('data-page');
+                showPage(pageId);
+                closeMenu();
+            });
+        });
+
+        function showPage(pageId) {
+            // Alle Seiten verstecken
+            document.querySelectorAll('.page').forEach(function(page) {
+                page.classList.remove('active');
+            });
+
+            // Alle Links deaktivieren
+            navLinks.forEach(function(link) {
+                link.classList.remove('active');
+            });
+
+            // Gewählte Seite anzeigen
+            const targetPage = document.getElementById(`page-${pageId}`);
+            if (targetPage) {
+                targetPage.classList.add('active');
+            }
+
+            // Gewählten Link aktivieren
+            const activeLink = document.querySelector(`[data-page="${pageId}"]`);
+            if (activeLink) {
+                activeLink.classList.add('active');
+            }
+
+            // Wenn zur Wunschbox zurückgekehrt wird, Erfolgs-Kasten und Status-Meldung verstecken
+            if (pageId === 'wishbox') {
+                const successMessage = document.getElementById('success-message');
+                const statusMessageEl = document.getElementById('status-message');
+                if (successMessage) {
+                    successMessage.classList.add('hidden');
+                }
+                if (statusMessageEl) {
+                    statusMessageEl.classList.add('hidden');
+                }
+                // Status neu prüfen, um Formular korrekt anzuzeigen
+                checkWishboxStatus();
+                // Code-Anzeige aktualisieren
+                displayPartyCode();
+            }
+        }
+        
+        // WICHTIG: Rufe checkAndOpenApp() sofort beim DOMContentLoaded auf
+        // (unabhängig von Firebase-Initialisierung)
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', function() {
+                console.log('DOMContentLoaded - rufe checkAndOpenApp() auf');
+                checkAndOpenApp();
+            });
+        } else {
+            // DOM ist bereits geladen
+            console.log('DOM bereits geladen - rufe checkAndOpenApp() sofort auf');
+            checkAndOpenApp();
+        }
+    </script>
+</body>
+</html>
+

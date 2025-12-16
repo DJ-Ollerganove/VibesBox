@@ -1,0 +1,36 @@
+ANLEITUNG: Eigener Warteton für Benachrichtigungen
+
+Um einen eigenen Warteton hinzuzufügen:
+
+1. Sound-Datei vorbereiten:
+   - Format: .mp3, .wav oder .ogg (empfohlen: .mp3)
+   - Dateiname: notification.mp3 (oder notification.wav / notification.ogg)
+   - Länge: Kurz (1-3 Sekunden empfohlen)
+   - Qualität: Nicht zu hoch (max. 128 kbps für .mp3)
+
+2. Sound-Datei platzieren:
+   - Kopiere die Datei in: android/app/src/main/res/raw/
+   - Dateiname muss genau sein: notification.mp3 (ohne Erweiterung im Code)
+
+3. Code ist bereits vorbereitet:
+   - Der Code verwendet bereits RawResourceAndroidNotificationSound('notification')
+   - Die Sound-Datei wird automatisch verwendet, sobald sie im raw-Ordner liegt
+
+4. App neu bauen:
+   - Nach dem Hinzufügen der Sound-Datei die App neu bauen
+   - Der benutzerdefinierte Ton wird dann bei neuen Wünschen abgespielt
+
+WICHTIG:
+- Der Dateiname im raw-Ordner muss genau "notification.mp3" (oder .wav/.ogg) sein
+- Keine Großbuchstaben oder Leerzeichen im Dateinamen
+- Die Datei muss im Ordner android/app/src/main/res/raw/ liegen
+
+
+
+
+
+
+
+
+
+

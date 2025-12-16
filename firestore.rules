@@ -1,0 +1,59 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Users Collection - User können nur ihre eigenen Daten lesen/schreiben
+    match /users/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null && request.auth.uid == userId;
+      allow update: if request.auth != null && request.auth.uid == userId;
+      allow delete: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Wünsche Collection - alle können lesen und schreiben (auch Gäste)
+    match /wishes/{wishId} {
+      allow read: if true;
+      allow create: if true; // Erlaube auch Gästen, Wünsche zu erstellen
+      // Erlaube Updates für authentifizierte User
+      // ODER für Gäste, wenn nur Duplikat-Felder (duplicate_count, requested_by, greetings) geändert werden
+      allow update: if request.auth != null || 
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['duplicate_count', 'requested_by', 'greetings']));
+      allow delete: if request.auth != null;
+    }
+    
+    // Contact Messages - alle können schreiben, nur Admin kann lesen
+    match /contact_messages/{messageId} {
+      allow create: if true;
+      allow read, update, delete: if request.auth != null && request.auth.token.email == 'info@dj-ollerganove.de';
+    }
+    
+    // Party Settings - alle können current lesen (für Wunschbox-Prüfung), nur Admin kann schreiben
+    match /party_settings/current {
+      allow read: if true; // Alle können den manuellen Schalter-Status lesen
+      allow write: if request.auth != null && request.auth.token.email == 'info@dj-ollerganove.de';
+    }
+    // Andere party_settings Dokumente - nur Admin
+    match /party_settings/{document} {
+      allow read, write: if request.auth != null && request.auth.token.email == 'info@dj-ollerganove.de';
+    }
+    
+    // Parties - alle können lesen (für Wunschbox-Prüfung), nur Admin kann schreiben
+    match /parties/{partyId} {
+      allow read: if true;
+      allow create, update, delete: if request.auth != null && request.auth.token.email == 'info@dj-ollerganove.de';
+    }
+    
+    // Admin Stats - nur Admin kann lesen und schreiben
+    match /admin_stats/{document=**} {
+      allow read, write: if request.auth != null && request.auth.token.email == 'info@dj-ollerganove.de';
+    }
+    
+    // Admin Settings - für Background-Tasks (wish_notifications)
+    // Background-Tasks haben keinen Auth, daher erlauben wir lesen für alle
+    // Schreiben nur für Admin
+    match /admin_settings/{document} {
+      allow read: if true; // Background-Tasks brauchen Zugriff
+      allow write: if request.auth != null && request.auth.token.email == 'info@dj-ollerganove.de';
+    }
+  }
+}
+

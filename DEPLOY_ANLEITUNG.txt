@@ -1,0 +1,57 @@
+PWA DEPLOYMENT ANLEITUNG
+========================
+
+Die PWA wurde erfolgreich erstellt und befindet sich im Verzeichnis: public/
+
+ZUM DEPLOYEN:
+
+1. Öffne ein NEUES Terminal/PowerShell-Fenster
+   (manchmal muss das Terminal neu gestartet werden, damit Firebase erkannt wird)
+
+2. Navigiere zum Projekt-Verzeichnis:
+   cd C:\Users\Ollerganove\Desktop\dj-og-app
+
+3. Prüfe, ob Firebase verfügbar ist:
+   firebase --version
+
+4. Falls Firebase nicht gefunden wird, installiere es:
+   npm install -g firebase-tools
+
+5. Melde dich bei Firebase an (falls noch nicht geschehen):
+   firebase login
+
+6. Deploye die PWA:
+   firebase deploy --only hosting
+
+ALTERNATIVE: Über Firebase Console
+==================================
+
+1. Gehe zu: https://console.firebase.google.com/
+2. Wähle dein Projekt: "dj-ollerganove"
+3. Klicke auf "Hosting" im linken Menü
+4. Klicke auf "Get started" oder "Add another site"
+5. Folge den Anweisungen zum Deployment
+6. Lade die Dateien aus dem "public/" Verzeichnis hoch
+
+NACH DEM DEPLOYMENT:
+====================
+
+Die Website wird unter folgenden URLs erreichbar sein:
+- https://dj-ollerganove.web.app
+- https://dj-ollerganove.firebaseapp.com
+
+WICHTIG:
+========
+Falls die Web-App-ID noch nicht konfiguriert ist, finde sie in der Firebase Console:
+- Projekt-Einstellungen → Deine Apps → Web-App
+- Kopiere die App-ID und ersetze "YOUR_WEB_APP_ID" in public/index.html
+
+
+
+
+
+
+
+
+
+

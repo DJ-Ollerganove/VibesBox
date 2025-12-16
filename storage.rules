@@ -1,0 +1,13 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Profilbilder - User können nur ihre eigenen Bilder hochladen/löschen
+    match /profile_images/{fileName} {
+      allow read: if true; // Alle können Profilbilder lesen
+      allow write: if request.auth != null && 
+                     (resource == null || fileName.matches(request.auth.uid + '.*'));
+      allow delete: if request.auth != null && fileName.matches(request.auth.uid + '.*');
+    }
+  }
+}
+

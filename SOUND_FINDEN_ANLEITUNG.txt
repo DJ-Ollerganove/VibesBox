@@ -1,0 +1,54 @@
+ANLEITUNG: Markanten 2-Ton-Sound für Benachrichtigungen finden
+
+KOSTENLOSE QUELLEN FÜR BENACHRICHTIGUNGS-SOUNDS:
+
+1. Freesound.org (https://freesound.org)
+   - Suche nach: "notification", "alert", "ding dong", "two tone"
+   - Filter: Kostenlos, CC0 oder CC BY (kommerziell nutzbar)
+   - Empfohlene Suche: "notification two tone" oder "alert chime"
+
+2. Zapsplat.com (https://www.zapsplat.com)
+   - Große Auswahl an Benachrichtigungs-Sounds
+   - Kostenlos nach Registrierung
+   - Suche nach: "notification", "alert", "chime"
+
+3. Mixkit.co (https://mixkit.co/free-sound-effects/alert/)
+   - Kostenlose Sound-Effekte
+   - Kategorie: "Alert" oder "Notification"
+   - Direkt herunterladbar, keine Registrierung
+
+4. Pixabay.com (https://pixabay.com/sound-effects/)
+   - Kostenlose Sounds
+   - Suche nach: "notification", "alert", "ding"
+   - CC0-Lizenz (kostenlos nutzbar)
+
+5. YouTube Audio Library
+   - Suche nach: "notification sounds"
+   - Viele kostenlose Optionen
+
+EMPFOHLENE SOUND-TYPEN:
+- "Ding Dong" (2-Ton-Glocke)
+- "Notification Chime" (2-Ton-Melodie)
+- "Alert Tone" (2-Ton-Warnung)
+- "Message Alert" (2-Ton-Nachricht)
+
+NACH DEM HERUNTERLADEN:
+
+1. Datei umbenennen zu: notification.mp3 (oder .wav/.ogg)
+2. In den Ordner kopieren: android/app/src/main/res/raw/
+3. App neu bauen
+
+WICHTIG:
+- Dateiname: notification (ohne Großbuchstaben)
+- Format: .mp3, .wav oder .ogg
+- Länge: 1-3 Sekunden (kurz und prägnant)
+
+
+
+
+
+
+
+
+
+
