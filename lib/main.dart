@@ -5668,10 +5668,6 @@ class _WishFormState extends State<_WishForm> {
   bool _isLoadingArtist = false;
   final FocusNode _titleFocusNode = FocusNode();
   final FocusNode _artistFocusNode = FocusNode();
-  final LayerLink _titleLayerLink = LayerLink();
-  final LayerLink _artistLayerLink = LayerLink();
-  OverlayEntry? _titleOverlayEntry;
-  OverlayEntry? _artistOverlayEntry;
 
   @override
   void initState() {
@@ -5943,7 +5939,7 @@ class _WishFormState extends State<_WishForm> {
           ],
           // Autocomplete für Titel
           // Vorschläge für Titel anzeigen (oberhalb des Eingabefeldes)
-          if (_titleSuggestions.isNotEmpty && _titleFocusNode.hasFocus)
+          if (_titleSuggestions.isNotEmpty)
             Container(
               margin: const EdgeInsets.only(bottom: 4),
               constraints: const BoxConstraints(maxHeight: 200),
@@ -6004,7 +6000,7 @@ class _WishFormState extends State<_WishForm> {
           const SizedBox(height: 8),
           // Autocomplete für Interpret
           // Vorschläge für Interpret anzeigen (oberhalb des Eingabefeldes)
-          if (_artistSuggestions.isNotEmpty && _artistFocusNode.hasFocus)
+          if (_artistSuggestions.isNotEmpty)
             Container(
               margin: const EdgeInsets.only(bottom: 4),
               constraints: const BoxConstraints(maxHeight: 200),
