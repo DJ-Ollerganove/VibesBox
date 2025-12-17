@@ -16,6 +16,8 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
+import 'package:syncfusion_flutter_charts/charts.dart' as sf_charts;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:image_gallery_saver/image_gallery_saver.dart';
@@ -33,6 +35,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
 import 'firebase_options.dart';
+import 'spotify_service.dart';
 
 // Globale Notification-Instanz
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
@@ -5633,7 +5636,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
   }
 }
 
-class _WishForm extends StatelessWidget {
+class _WishForm extends StatefulWidget {
   const _WishForm({
     required this.formKey,
     required this.nameController,
@@ -5653,16 +5656,280 @@ class _WishForm extends StatelessWidget {
   final String? guestName;
 
   @override
+  State<_WishForm> createState() => _WishFormState();
+}
+
+class _WishFormState extends State<_WishForm> {
+  Timer? _titleDebounceTimer;
+  Timer? _artistDebounceTimer;
+  List<SpotifyTrack> _titleSuggestions = [];
+  List<SpotifyTrack> _artistSuggestions = [];
+  bool _isLoadingTitle = false;
+  bool _isLoadingArtist = false;
+  final FocusNode _titleFocusNode = FocusNode();
+  final FocusNode _artistFocusNode = FocusNode();
+  final LayerLink _titleLayerLink = LayerLink();
+  final LayerLink _artistLayerLink = LayerLink();
+  OverlayEntry? _titleOverlayEntry;
+  OverlayEntry? _artistOverlayEntry;
+
+  @override
+  void initState() {
+    super.initState();
+  }
+
+  @override
+  void dispose() {
+    _titleDebounceTimer?.cancel();
+    _artistDebounceTimer?.cancel();
+    _titleFocusNode.dispose();
+    _artistFocusNode.dispose();
+    super.dispose();
+  }
+
+  void _searchTitle(String query) {
+    if (query.trim().isEmpty) {
+      setState(() {
+        _titleSuggestions = [];
+        _isLoadingTitle = false;
+      });
+      return;
+    }
+
+    // Debounce: Warte 500ms nach dem letzten Tastendruck
+    _titleDebounceTimer?.cancel();
+    _titleDebounceTimer = Timer(const Duration(milliseconds: 500), () async {
+      setState(() {
+        _isLoadingTitle = true;
+      });
+
+      try {
+        print('🔍 Spotify-Suche für Titel: "$query"');
+        final tracks = await SpotifyService.searchTracks(query);
+        print('✅ ${tracks.length} Tracks gefunden für Titel');
+        if (mounted) {
+          setState(() {
+            _titleSuggestions = tracks;
+            _isLoadingTitle = false;
+          });
+          print('✅ ${tracks.length} Titel-Vorschläge gesetzt');
+          // Vorschläge werden automatisch im Formular angezeigt
+        }
+      } catch (e) {
+        print('❌ Fehler bei Spotify-Suche (Titel): $e');
+        if (mounted) {
+          setState(() {
+            _titleSuggestions = [];
+            _isLoadingTitle = false;
+          });
+        }
+      }
+    });
+  }
+
+  void _searchArtist(String query) {
+    if (query.trim().isEmpty) {
+      setState(() {
+        _artistSuggestions = [];
+        _isLoadingArtist = false;
+      });
+      return;
+    }
+
+    // Debounce: Warte 500ms nach dem letzten Tastendruck
+    _artistDebounceTimer?.cancel();
+    _artistDebounceTimer = Timer(const Duration(milliseconds: 500), () async {
+      setState(() {
+        _isLoadingArtist = true;
+      });
+
+      try {
+        print('🔍 Spotify-Suche für Interpret: "$query"');
+        final tracks = await SpotifyService.searchTracks(query, searchType: 'artist');
+        print('✅ ${tracks.length} Tracks gefunden für Interpret');
+        if (mounted) {
+          setState(() {
+            _artistSuggestions = tracks;
+            _isLoadingArtist = false;
+          });
+          print('✅ ${tracks.length} Interpret-Vorschläge gesetzt');
+          // Vorschläge werden automatisch im Formular angezeigt
+        }
+      } catch (e) {
+        print('❌ Fehler bei Spotify-Suche (Interpret): $e');
+        if (mounted) {
+          setState(() {
+            _artistSuggestions = [];
+            _isLoadingArtist = false;
+          });
+        }
+      }
+    });
+  }
+
+  void _onTitleSelected(SpotifyTrack track) {
+    setState(() {
+      widget.titleController.text = track.name;
+      widget.artistController.text = track.artists;
+      _titleSuggestions = [];
+    });
+  }
+
+  void _onArtistSelected(SpotifyTrack track) {
+    setState(() {
+      widget.titleController.text = track.name;
+      widget.artistController.text = track.artists;
+      _artistSuggestions = [];
+    });
+  }
+
+  void _showTitleSuggestionsModal(BuildContext context) {
+    if (_titleSuggestions.isEmpty) return;
+    
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.6,
+        ),
+        decoration: BoxDecoration(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle-Bar
+            Container(
+              margin: const EdgeInsets.symmetric(vertical: 12),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            // Titel
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Text(
+                'Vorschläge für Titel',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            const Divider(),
+            // Liste der Vorschläge
+            Flexible(
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                shrinkWrap: true,
+                itemCount: _titleSuggestions.length,
+                itemBuilder: (context, index) {
+                  final track = _titleSuggestions[index];
+                  return ListTile(
+                    leading: const Icon(Icons.music_note),
+                    title: Text(
+                      track.name,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    subtitle: Text(track.artists),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _onTitleSelected(track);
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showArtistSuggestionsModal(BuildContext context) {
+    if (_artistSuggestions.isEmpty) return;
+    
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.6,
+        ),
+        decoration: BoxDecoration(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle-Bar
+            Container(
+              margin: const EdgeInsets.symmetric(vertical: 12),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            // Titel
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Text(
+                'Vorschläge für Interpret',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            const Divider(),
+            // Liste der Vorschläge
+            Flexible(
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                shrinkWrap: true,
+                itemCount: _artistSuggestions.length,
+                itemBuilder: (context, index) {
+                  final track = _artistSuggestions[index];
+                  return ListTile(
+                    leading: const Icon(Icons.music_note),
+                    title: Text(
+                      track.name,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    subtitle: Text(track.artists),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _onArtistSelected(track);
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Form(
-      key: formKey,
+      key: widget.formKey,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // Namensfeld nur anzeigen, wenn User nicht eingeloggt ist
           if (FirebaseAuth.instance.currentUser == null) ...[
             TextFormField(
-              controller: nameController,
+              controller: widget.nameController,
               decoration: const InputDecoration(
                 labelText: 'Dein Name',
                 prefixIcon: Icon(Icons.person_outline),
@@ -5671,42 +5938,133 @@ class _WishForm extends StatelessWidget {
               validator: (value) {
                 return (value == null || value.trim().isEmpty) ? 'Name fehlt' : null;
               },
-              // Feld ist immer editierbar für nicht eingeloggte User
             ),
             const SizedBox(height: 8),
           ],
+          // Autocomplete für Titel
+          // Vorschläge für Titel anzeigen (oberhalb des Eingabefeldes)
+          if (_titleSuggestions.isNotEmpty && _titleFocusNode.hasFocus)
+            Container(
+              margin: const EdgeInsets.only(bottom: 4),
+              constraints: const BoxConstraints(maxHeight: 200),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.grey.shade300),
+              ),
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: _titleSuggestions.length > 20 ? 20 : _titleSuggestions.length,
+                itemBuilder: (context, index) {
+                  final track = _titleSuggestions[index];
+                  return ListTile(
+                    dense: true,
+                    title: Text(
+                      track.name,
+                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                    ),
+                    subtitle: Text(
+                      track.artists,
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                    onTap: () {
+                      _onTitleSelected(track);
+                    },
+                  );
+                },
+              ),
+            ),
           TextFormField(
-            controller: titleController,
-            decoration: const InputDecoration(
+            controller: widget.titleController,
+            focusNode: _titleFocusNode,
+            decoration: InputDecoration(
               labelText: 'Titel',
-              prefixIcon: Icon(Icons.music_note_outlined),
+              prefixIcon: const Icon(Icons.music_note_outlined),
               helperText: 'Titel oder Interpret muss ausgefüllt sein',
+              suffixIcon: _isLoadingTitle
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: Padding(
+                        padding: EdgeInsets.all(12.0),
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  : null,
             ),
             textCapitalization: TextCapitalization.words,
+            onChanged: (value) {
+              _searchTitle(value);
+            },
             validator: (value) {
-              // Validierung wird in onSubmit gemacht (mindestens Titel ODER Interpret)
               return null;
             },
-            onFieldSubmitted: (_) => onSubmit(),
+            onFieldSubmitted: (_) => widget.onSubmit(),
           ),
           const SizedBox(height: 8),
+          // Autocomplete für Interpret
+          // Vorschläge für Interpret anzeigen (oberhalb des Eingabefeldes)
+          if (_artistSuggestions.isNotEmpty && _artistFocusNode.hasFocus)
+            Container(
+              margin: const EdgeInsets.only(bottom: 4),
+              constraints: const BoxConstraints(maxHeight: 200),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.grey.shade300),
+              ),
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: _artistSuggestions.length > 20 ? 20 : _artistSuggestions.length,
+                itemBuilder: (context, index) {
+                  final track = _artistSuggestions[index];
+                  return ListTile(
+                    dense: true,
+                    title: Text(
+                      track.name,
+                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                    ),
+                    subtitle: Text(
+                      track.artists,
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                    onTap: () {
+                      _onArtistSelected(track);
+                    },
+                  );
+                },
+              ),
+            ),
           TextFormField(
-            controller: artistController,
-            decoration: const InputDecoration(
+            controller: widget.artistController,
+            focusNode: _artistFocusNode,
+            decoration: InputDecoration(
               labelText: 'Interpret',
-              prefixIcon: Icon(Icons.mic),
+              prefixIcon: const Icon(Icons.mic),
               helperText: 'Titel oder Interpret muss ausgefüllt sein',
+              suffixIcon: _isLoadingArtist
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: Padding(
+                        padding: EdgeInsets.all(12.0),
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  : null,
             ),
             textCapitalization: TextCapitalization.words,
+            onChanged: (value) {
+              _searchArtist(value);
+            },
             validator: (value) {
-              // Validierung wird in onSubmit gemacht (mindestens Titel ODER Interpret)
               return null;
             },
-            onFieldSubmitted: (_) => onSubmit(),
+            onFieldSubmitted: (_) => widget.onSubmit(),
           ),
           const SizedBox(height: 8),
           TextFormField(
-            controller: greetingController,
+            controller: widget.greetingController,
             decoration: const InputDecoration(
               labelText: 'Gruß (optional)',
               prefixIcon: Icon(Icons.favorite_outline),
@@ -5724,7 +6082,7 @@ class _WishForm extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           FilledButton.icon(
-            onPressed: onSubmit,
+            onPressed: widget.onSubmit,
             icon: const Icon(Icons.send),
             label: const Text('Wunsch abschicken'),
           ),
@@ -8992,6 +9350,15 @@ class _BeendetePartysPageState extends State<BeendetePartysPage> {
   }
 }
 
+// Hilfsklasse für Chart-Daten
+class _PieChartData {
+  final String category;
+  final double value;
+  final Color color;
+
+  _PieChartData(this.category, this.value, this.color);
+}
+
 // Seite für Party-Statistik
 class PartyStatistikPage extends StatefulWidget {
   final String partyId;
@@ -9549,6 +9916,9 @@ class _PartyStatistikPageState extends State<PartyStatistikPage> {
         print('❌ Fehler beim Laden des DJ-WB.png Logos: $e');
       }
 
+      // Erstelle das Kreisdiagramm-Widget
+      final pieChartWidget = await _buildPieChartWidget();
+
       final pdf = pw.Document();
       
       pdf.addPage(
@@ -9654,15 +10024,7 @@ class _PartyStatistikPageState extends State<PartyStatistikPage> {
                               pw.SizedBox(height: 12),
                               // Kreisdiagramm
                               pw.Center(
-                                child: pw.SizedBox(
-                                  width: 120,
-                                  height: 120,
-                                  child: pw.CustomPaint(
-                                    painter: (canvas, size) {
-                                      _drawPieChart(canvas, size);
-                                    },
-                                  ),
-                                ),
+                                child: pieChartWidget,
                               ),
                               pw.SizedBox(height: 8),
                               // Legende
@@ -9988,57 +10350,402 @@ class _PartyStatistikPageState extends State<PartyStatistikPage> {
     return '';
   }
 
-  // Zeichnet ein Kreisdiagramm für PDF
-  void _drawPieChart(pw.Canvas canvas, pw.Size size) {
-    if (_totalWishes == 0) return;
+  // Erstellt ein Kreisdiagramm-Widget für PDF
+  // Verwendet Syncfusion Charts für echtes Kreisdiagramm
+  Future<pw.Widget> _buildPieChartWidget() async {
+    if (_totalWishes == 0) {
+      return pw.SizedBox.shrink();
+    }
 
-    final center = pw.Offset(size.width / 2, size.height / 2);
-    final radius = (size.width < size.height ? size.width : size.height) / 2 - 10;
-    
-    // Berechne Winkel für jeden Segment
-    final playedAngle = (_playedWishes / _totalWishes) * 360;
-    final rejectedAngle = (_rejectedWishes / _totalWishes) * 360;
-    final notPlayedAngle = (_notPlayedWishes / _totalWishes) * 360;
-    
-    double startAngle = -90; // Start bei oben (12 Uhr)
-    
-    // Gespielte Songs (Grün)
-    if (_playedWishes > 0) {
-      final paint = pw.Paint()..color = PdfColors.green;
-      canvas.drawArc(
-        pw.Rect.fromCircle(center: center, radius: radius),
-        startAngle * (3.14159 / 180), // Konvertiere zu Radian
-        playedAngle * (3.14159 / 180),
-        true,
-        paint,
-      );
-      startAngle += playedAngle;
+    try {
+      // Rendere das Kreisdiagramm mit Syncfusion als Bild
+      final imageBytes = await _renderPieChartWithSyncfusion();
+      
+      if (imageBytes != null && imageBytes.isNotEmpty) {
+        return pw.Image(
+          pw.MemoryImage(imageBytes),
+          width: 120,
+          height: 120,
+        );
+      }
+    } catch (e) {
+      print('Fehler beim Rendern des Kreisdiagramms mit Syncfusion: $e');
     }
-    
-    // Abgelehnte Songs (Rot)
-    if (_rejectedWishes > 0) {
-      final paint = pw.Paint()..color = PdfColors.red;
-      canvas.drawArc(
-        pw.Rect.fromCircle(center: center, radius: radius),
-        startAngle * (3.14159 / 180),
-        rejectedAngle * (3.14159 / 180),
-        true,
-        paint,
+
+    // Fallback: Einfache Darstellung
+    return _buildSimplePieChartWidget();
+  }
+
+  // Rendert ein Kreisdiagramm mit Syncfusion Charts als PNG-Bild
+  Future<Uint8List?> _renderPieChartWithSyncfusion() async {
+    try {
+      // Erstelle die Daten für das Kreisdiagramm
+      final chartData = <_PieChartData>[];
+      if (_playedWishes > 0) {
+        chartData.add(_PieChartData('Gespielt', _playedWishes.toDouble(), Colors.green));
+      }
+      if (_rejectedWishes > 0) {
+        chartData.add(_PieChartData('Abgelehnt', _rejectedWishes.toDouble(), Colors.red));
+      }
+      if (_notPlayedWishes > 0) {
+        chartData.add(_PieChartData('Nicht gespielt', _notPlayedWishes.toDouble(), Colors.orange));
+      }
+
+      if (chartData.isEmpty) {
+        return null;
+      }
+
+      // Erstelle einen GlobalKey für das Chart
+      final chartKey = GlobalKey<sf_charts.SfCircularChartState>();
+
+      // Erstelle das Chart-Widget
+      final chartWidget = SizedBox(
+        width: 120,
+        height: 120,
+        child: sf_charts.SfCircularChart(
+          key: chartKey,
+          series: <sf_charts.PieSeries<_PieChartData, String>>[
+            sf_charts.PieSeries<_PieChartData, String>(
+              dataSource: chartData,
+              xValueMapper: (_PieChartData data, _) => data.category,
+              yValueMapper: (_PieChartData data, _) => data.value,
+              pointColorMapper: (_PieChartData data, _) => data.color,
+              dataLabelSettings: const sf_charts.DataLabelSettings(
+                isVisible: false, // Keine Labels für bessere Darstellung
+              ),
+            ),
+          ],
+          legend: const sf_charts.Legend(isVisible: false),
+        ),
       );
-      startAngle += rejectedAngle;
+
+      // Rendere das Widget als Bild mit der bestehenden Funktion
+      // Diese Funktion rendert das Widget und konvertiert es zu PNG-Bytes
+      return await _renderWidgetToImage(chartWidget, 120, 120);
+    } catch (e, stackTrace) {
+      print('Fehler bei Syncfusion Kreisdiagramm: $e');
+      print('Stack Trace: $stackTrace');
+      return null;
     }
-    
-    // Nicht gespielte Songs (Orange)
-    if (_notPlayedWishes > 0) {
-      final paint = pw.Paint()..color = PdfColors.orange;
-      canvas.drawArc(
-        pw.Rect.fromCircle(center: center, radius: radius),
-        startAngle * (3.14159 / 180),
-        notPlayedAngle * (3.14159 / 180),
-        true,
-        paint,
+  }
+
+  // Erstellt ein einzelnes Segment des Kreisdiagramms (nicht mehr verwendet, aber für Fallback)
+  pw.Widget _buildPieSegment({
+    required PdfColor color,
+    required double startAngle,
+    required double sweepAngle,
+    required double radius,
+    required double percentage,
+  }) {
+    if (sweepAngle < 1) {
+      return pw.SizedBox.shrink();
+    }
+
+    final size = radius * 2;
+    final center = radius;
+
+    // Für große Segmente (>= 180 Grad): Verwende einen vollen Kreis
+    if (sweepAngle >= 180) {
+      return pw.Container(
+        width: size,
+        height: size,
+        decoration: pw.BoxDecoration(
+          color: color,
+          shape: pw.BoxShape.circle,
+        ),
+        child: percentage > 10
+            ? pw.Center(
+                child: pw.Text(
+                  '${percentage.toStringAsFixed(0)}%',
+                  style: pw.TextStyle(
+                    fontSize: 12,
+                    fontWeight: pw.FontWeight.bold,
+                    color: PdfColors.white,
+                  ),
+                ),
+              )
+            : pw.SizedBox.shrink(),
       );
     }
+
+    // Für Segmente >= 90 Grad: Verwende einen Halbkreis mit korrekter Position
+    if (sweepAngle >= 90) {
+      // Normalisiere den Winkel auf 0-360
+      final normalizedAngle = (startAngle % 360 + 360) % 360;
+      
+      // Bestimme Quadrant basierend auf Startwinkel
+      double left = 0;
+      double top = 0;
+      pw.BorderRadius borderRadius;
+      
+      if (normalizedAngle >= 0 && normalizedAngle < 90) {
+        // Rechts oben
+        left = center;
+        top = 0;
+        borderRadius = pw.BorderRadius.only(
+          topRight: pw.Radius.circular(radius),
+        );
+      } else if (normalizedAngle >= 90 && normalizedAngle < 180) {
+        // Links oben
+        left = 0;
+        top = 0;
+        borderRadius = pw.BorderRadius.only(
+          topLeft: pw.Radius.circular(radius),
+        );
+      } else if (normalizedAngle >= 180 && normalizedAngle < 270) {
+        // Links unten
+        left = 0;
+        top = center;
+        borderRadius = pw.BorderRadius.only(
+          bottomLeft: pw.Radius.circular(radius),
+        );
+      } else {
+        // Rechts unten
+        left = center;
+        top = center;
+        borderRadius = pw.BorderRadius.only(
+          bottomRight: pw.Radius.circular(radius),
+        );
+      }
+
+      return pw.Positioned(
+        left: left,
+        top: top,
+        child: pw.Container(
+          width: radius,
+          height: radius,
+          decoration: pw.BoxDecoration(
+            color: color,
+            borderRadius: borderRadius,
+          ),
+        ),
+      );
+    }
+
+    // Für kleine Segmente (< 90 Grad): Verwende einen kleinen farbigen Bereich
+    // Positioniere basierend auf Startwinkel (Mitte des Segments)
+    final normalizedAngle = (startAngle % 360 + 360) % 360;
+    final midAngle = normalizedAngle + (sweepAngle / 2);
+    final angleRad = midAngle * (pi / 180);
+    final segmentSize = max((sweepAngle / 360) * size * 0.6, 8.0); // Mindestgröße 8
+    
+    // Berechne Position basierend auf Winkel (Mitte des Segments)
+    final x = center + (center * 0.6) * cos(angleRad) - segmentSize / 2;
+    final y = center + (center * 0.6) * sin(angleRad) - segmentSize / 2;
+
+    return pw.Positioned(
+      left: x.clamp(0.0, size - segmentSize),
+      top: y.clamp(0.0, size - segmentSize),
+      child: pw.Container(
+        width: segmentSize,
+        height: segmentSize,
+        decoration: pw.BoxDecoration(
+          color: color,
+          shape: pw.BoxShape.circle,
+        ),
+      ),
+    );
+  }
+
+  // Rendert ein Widget zu einem Bild (PNG-Bytes)
+  // Verwendet einen vereinfachten Ansatz mit RenderRepaintBoundary
+  Future<Uint8List?> _renderWidgetToImage(Widget widget, double width, double height) async {
+    try {
+      // Stelle sicher, dass Flutter initialisiert ist
+      WidgetsFlutterBinding.ensureInitialized();
+      
+      // Erstelle einen GlobalKey für das RepaintBoundary
+      final globalKey = GlobalKey();
+      
+      // Erstelle das Widget mit RepaintBoundary
+      final repaintBoundary = RepaintBoundary(
+        key: globalKey,
+        child: SizedBox(
+          width: width,
+          height: height,
+          child: widget,
+        ),
+      );
+      
+      // Erstelle einen neuen PipelineOwner und BuildOwner
+      final pipelineOwner = PipelineOwner();
+      final buildOwner = BuildOwner(focusManager: FocusManager());
+      
+      // Erstelle einen RenderConstrainedBox für die Größe
+      final renderConstrainedBox = RenderConstrainedBox(
+        additionalConstraints: BoxConstraints.tightFor(width: width, height: height),
+      );
+      
+      // Hole den ersten verfügbaren FlutterView oder verwende einen Dummy
+      ui.FlutterView? flutterView;
+      try {
+        final views = ui.PlatformDispatcher.instance.views;
+        if (views.isNotEmpty) {
+          flutterView = views.first;
+        }
+      } catch (e) {
+        print('Kein FlutterView verfügbar: $e');
+      }
+      
+      // Wenn kein FlutterView verfügbar ist, verwenden wir einen anderen Ansatz
+      if (flutterView == null) {
+        print('Kein FlutterView verfügbar, verwende Fallback');
+        return null;
+      }
+      
+      // Erstelle RenderView mit dem FlutterView
+      final renderView = RenderView(
+        view: flutterView,
+        child: renderConstrainedBox,
+      );
+      
+      pipelineOwner.rootNode = renderView;
+      renderView.prepareInitialFrame();
+      
+      // Erstelle das Element für das RepaintBoundary
+      final element = repaintBoundary.createElement();
+      element.mount(null, null);
+      
+      // Hole das RenderObject vom Element
+      final renderObject = element.renderObject;
+      if (renderObject is! RenderRepaintBoundary) {
+        print('RenderObject ist kein RenderRepaintBoundary');
+        return null;
+      }
+      
+      // Setze das RenderObject als Child des RenderConstrainedBox
+      renderConstrainedBox.child = renderObject;
+      
+      // Build und Layout durchführen
+      buildOwner.buildScope(element);
+      buildOwner.finalizeTree();
+      
+      // Layout, Compositing und Paint durchführen
+      pipelineOwner.flushLayout();
+      pipelineOwner.flushCompositingBits();
+      pipelineOwner.flushPaint();
+      
+      // Warte, damit alles gerendert wird
+      await Future.delayed(const Duration(milliseconds: 500));
+      
+      // Konvertiere zu Bild
+      final image = await renderObject.toImage(pixelRatio: 2.0);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      
+      if (byteData != null) {
+        return byteData.buffer.asUint8List();
+      }
+      
+      return null;
+    } catch (e, stackTrace) {
+      print('Fehler bei Widget-zu-Bild-Konvertierung: $e');
+      print('Stack Trace: $stackTrace');
+      return null;
+    }
+  }
+
+  // Erstellt die PieChart-Sections für PDF (ähnlich wie auf der Seite)
+  List<PieChartSectionData> _buildPieChartSectionsForPDF() {
+    final sections = <PieChartSectionData>[];
+    
+    if (_totalWishes == 0) {
+      return sections;
+    }
+
+    final playedPercentage = (_playedWishes / _totalWishes) * 100;
+    final rejectedPercentage = (_rejectedWishes / _totalWishes) * 100;
+    final notPlayedPercentage = (_notPlayedWishes / _totalWishes) * 100;
+
+    // Reihenfolge: Gespielte, Abgelehnte, Nicht gespielte (wird durch Offset unten positioniert)
+    if (playedPercentage > 0) {
+      sections.add(
+        PieChartSectionData(
+          value: _playedWishes.toDouble(),
+          title: '${playedPercentage.toStringAsFixed(1)}%',
+          color: Colors.green,
+          radius: 50,
+          titleStyle: const TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
+      );
+    }
+
+    if (rejectedPercentage > 0) {
+      sections.add(
+        PieChartSectionData(
+          value: _rejectedWishes.toDouble(),
+          title: '${rejectedPercentage.toStringAsFixed(1)}%',
+          color: Colors.red,
+          radius: 50,
+          titleStyle: const TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
+      );
+    }
+
+    if (notPlayedPercentage > 0) {
+      sections.add(
+        PieChartSectionData(
+          value: _notPlayedWishes.toDouble(),
+          title: '${notPlayedPercentage.toStringAsFixed(1)}%',
+          color: Colors.orange,
+          radius: 50,
+          titleStyle: const TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
+      );
+    }
+
+    return sections;
+  }
+
+  // Einfache Fallback-Darstellung
+  pw.Widget _buildSimplePieChartWidget() {
+    final playedPercent = (_playedWishes / _totalWishes) * 100;
+    final rejectedPercent = (_rejectedWishes / _totalWishes) * 100;
+    final notPlayedPercent = (_notPlayedWishes / _totalWishes) * 100;
+
+    PdfColor mainColor;
+    double mainPercent;
+    if (playedPercent >= rejectedPercent && playedPercent >= notPlayedPercent) {
+      mainColor = PdfColors.green;
+      mainPercent = playedPercent;
+    } else if (rejectedPercent >= notPlayedPercent) {
+      mainColor = PdfColors.red;
+      mainPercent = rejectedPercent;
+    } else {
+      mainColor = PdfColors.orange;
+      mainPercent = notPlayedPercent;
+    }
+
+    return pw.Container(
+      width: 120,
+      height: 120,
+      decoration: pw.BoxDecoration(
+        color: mainColor,
+        shape: pw.BoxShape.circle,
+        border: pw.Border.all(color: PdfColors.grey400, width: 1),
+      ),
+      child: pw.Center(
+        child: pw.Text(
+          '${mainPercent.toStringAsFixed(0)}%',
+          style: pw.TextStyle(
+            fontSize: 18,
+            fontWeight: pw.FontWeight.bold,
+            color: PdfColors.white,
+          ),
+        ),
+      ),
+    );
   }
 
   // Erstellt ein horizontales Balkendiagramm

@@ -50,6 +50,8 @@ dependencies:
   qr_flutter: ^4.1.0
   pdf: ^3.11.1
   printing: ^5.13.3
+  syncfusion_flutter_pdf: ^28.1.36
+  syncfusion_flutter_charts: ^28.1.36
   path_provider: ^2.1.5
   share_plus: ^10.1.2
   image_gallery_saver: ^2.0.3
