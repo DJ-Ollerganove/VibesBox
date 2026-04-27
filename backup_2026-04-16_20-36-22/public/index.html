@@ -1,0 +1,1907 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VibesBox – Dein interaktives Event-Erlebnis</title>
+  <meta name="description" content="Musikwünsche, Live-History und Interaktion für dein Event. Mit VibesBox steuern Gäste die Stimmung direkt vom Smartphone.">
+  <meta property="og:title" content="VibesBox – Dein interaktives Event-Erlebnis">
+  <meta property="og:description" content="Musikwünsche, Live-History und Interaktion für dein Event. Mit VibesBox steuern Gäste die Stimmung direkt vom Smartphone.">
+  <meta property="og:image" content="https://vibesbox.app/assets/logo_og.png">
+  <meta property="og:type" content="website">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- reCAPTCHA Enterprise: defer verhindert Render-Blockierung des Hauptdokuments -->
+  <script defer src="https://www.google.com/recaptcha/enterprise.js?render=6LdoeDcsAAAAAIORb90GjRovm2tW5qE4v9q5J-u5"></script>
+  <script src="/vb/scripts/default-pwa-languages.js"></script>
+  <script src="/lang_menu_shared.js"></script>
+  <script src="/party_shared.js"></script>
+  <!-- Übersetzungen: On-Demand aus /vb/lang/ (separate Sprachdateien) + DB-Logik recordLanguageHit -->
+  <!-- Party-Code: nur aus aktueller Adresszeile (?code= / …/party/…); unabhängig von http(s), www, Host. → /vb/ -->
+  <script>
+    (function() {
+      var pathname = (window.location.pathname || '').toLowerCase();
+      if (pathname.indexOf('/vb') !== -1) return;
+      function normalizeDigitsPartyCode(raw) {
+        if (!raw || typeof raw !== 'string') return null;
+        var q = raw.replace(/[^0-9]/g, '').substring(0, 8);
+        return q.length === 8 ? q : null;
+      }
+      function extractPartyCodeFromCurrentUrl() {
+        try {
+          var urlParams = new URLSearchParams(window.location.search || '');
+          var raw = urlParams.get('code');
+          var fromQ = normalizeDigitsPartyCode(raw || '');
+          if (fromQ) return fromQ;
+        } catch (e) {}
+        try {
+          var rawHash = window.location.hash || '';
+          if (rawHash) {
+            var hash = rawHash.replace(/^#/, '');
+            var qi = hash.indexOf('?');
+            var qPart = qi >= 0 ? hash.substring(qi + 1) : (hash.indexOf('code=') !== -1 ? hash : '');
+            if (qPart) {
+              var hp = new URLSearchParams(qPart);
+              var fromH = normalizeDigitsPartyCode(hp.get('code') || '');
+              if (fromH) return fromH;
+            }
+          }
+        } catch (e2) {}
+        var path = (window.location.pathname || '').replace(/^\/+|\/+$/g, '');
+        var parts = path.split('/');
+        var partyIdx = parts.indexOf('party');
+        if (partyIdx !== -1 && parts[partyIdx + 1]) {
+          return normalizeDigitsPartyCode(parts[partyIdx + 1] || '');
+        }
+        return null;
+      }
+      var code = extractPartyCodeFromCurrentUrl();
+      if (!code) return;
+      if (typeof window.IS_DEBUG !== 'undefined' && window.IS_DEBUG) {
+        console.log('DEBUG [Root]: Party-Code aus aktueller URL → /vb/', code);
+      }
+      var lang = '';
+      try {
+        lang = (typeof window.getEffectiveLangForMenu === 'function') ? window.getEffectiveLangForMenu() : '';
+      } catch (e) {}
+      try {
+        if (lang && typeof window.setVbPreferredLangForSession === 'function') {
+          window.setVbPreferredLangForSession(lang);
+        }
+      } catch (e2) {}
+      var origin = window.location.origin || '';
+      var base = origin || '';
+      var pwaUrl = base + '/vb/?code=' + encodeURIComponent(code) + (lang ? '&lang=' + encodeURIComponent(lang) : '');
+      window.location.replace(pwaUrl);
+    })();
+  </script>
+  <script>
+    (function() {
+      window.IS_DEBUG = (new URLSearchParams(window.location.search).get('x') === '99');
+      if (window.IS_DEBUG) console.log('Root Loader: Sprachen nur lokal (DEFAULT_PWA_LANGUAGES / pwaAvailableLanguages).');
+      var LANGUAGE_NAMES = { de: 'Deutsch', en: 'English', fr: 'Français', ru: 'Русский', zh: '中文', es: 'Español', tr: 'Türkçe', pt: 'Português' };
+      var STORAGE_KEY = 'language_stats_date';
+      var PERMANENT_LOCALE_KEY = 'permanent_user_locale';
+
+      if (!window.translations) window.translations = {};
+      window.updatePageTitle = function() {};
+      window.getTranslation = function(key) { return key || ''; };
+
+      function todayStr() {
+        var d = new Date();
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      }
+
+      function readStoredLanguage() {
+        var candidates = [];
+        try {
+          candidates.push((window.localStorage.getItem('pwa_language') || '').trim());
+          candidates.push((window.localStorage.getItem('language') || '').trim());
+          candidates.push((window.localStorage.getItem(PERMANENT_LOCALE_KEY) || '').trim());
+          candidates.push((window.sessionStorage.getItem('pwa_language') || '').trim());
+          candidates.push((window.sessionStorage.getItem('selected_language') || '').trim());
+          candidates.push((window.sessionStorage.getItem('user_language') || '').trim());
+          candidates.push((window.sessionStorage.getItem('app_locale') || '').trim());
+          candidates.push((window.sessionStorage.getItem('language') || '').trim());
+          candidates.push((window.localStorage.getItem('selected_language') || '').trim());
+          candidates.push((window.localStorage.getItem('user_language') || '').trim());
+          candidates.push((window.localStorage.getItem('app_locale') || '').trim());
+        } catch (e) {}
+        for (var i = 0; i < candidates.length; i++) {
+          if (candidates[i]) return candidates[i];
+        }
+        return '';
+      }
+
+      function isManualLanguageLocked() {
+        try {
+          return window.localStorage.getItem('pwa_language_manual') === '1' || window.sessionStorage.getItem('pwa_language_manual') === '1';
+        } catch (e) {
+          return false;
+        }
+      }
+
+      function persistLanguageSelection(langCode, isManual) {
+        if (!langCode) return;
+        if (typeof isManual === 'undefined') isManual = false;
+        try {
+          window.localStorage.setItem(PERMANENT_LOCALE_KEY, langCode);
+          window.sessionStorage.setItem('pwa_language', langCode);
+          window.sessionStorage.setItem('selected_language', langCode);
+          window.sessionStorage.setItem('language', langCode);
+          window.sessionStorage.setItem('user_language', langCode);
+          window.sessionStorage.setItem('app_locale', langCode);
+          window.localStorage.setItem('pwa_language', langCode);
+          window.localStorage.setItem('language', langCode);
+          window.localStorage.setItem('selected_language', langCode);
+          window.localStorage.setItem('user_language', langCode);
+          window.localStorage.setItem('app_locale', langCode);
+          if (isManual) {
+            window.localStorage.setItem('pwa_language_manual', '1');
+            window.sessionStorage.setItem('pwa_language_manual', '1');
+          } else {
+            window.localStorage.removeItem('pwa_language_manual');
+            window.sessionStorage.removeItem('pwa_language_manual');
+          }
+        } catch (e) {}
+        try {
+          if (typeof window.setVbPreferredLangForSession === 'function') {
+            window.setVbPreferredLangForSession(langCode);
+          }
+        } catch (eVb) {}
+      }
+
+      function removeLangParamFromUrl() {
+        try {
+          var current = new URL(window.location.href);
+          if (!current.searchParams.has('lang')) return;
+          current.searchParams.delete('lang');
+          var next = current.pathname + (current.searchParams.toString() ? ('?' + current.searchParams.toString()) : '') + current.hash;
+          window.history.replaceState({}, document.title, next);
+        } catch (e) {}
+      }
+
+      /** Statistik-Sprache = gleiche Logik wie Sprachauswahl (Region zuerst, z. B. en-DE → de). */
+      function logLanguageVisit(loadedLang) {
+        try {
+          if (window.localStorage.getItem(STORAGE_KEY) === todayStr()) return;
+          window.localStorage.setItem(STORAGE_KEY, todayStr());
+          var langForStat = (typeof window.getEffectiveLangForMenu === 'function') ? window.getEffectiveLangForMenu() : loadedLang;
+          var langName = LANGUAGE_NAMES[langForStat] || langForStat;
+          var url = 'https://us-central1-dj-ollerganove.cloudfunctions.net/recordLanguageHit';
+          fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ languageCode: langForStat, languageName: langName, source: 'main' })
+          }).catch(function() {});
+        } catch (e) {}
+      }
+
+      function getTitleLang() {
+        try {
+          if (typeof window.getEffectiveLangForMenu === 'function') return window.getEffectiveLangForMenu();
+          var list = window.pwaAvailableLanguages && window.pwaAvailableLanguages.length ? window.pwaAvailableLanguages : [];
+          var codes = list.length ? list.map(function (e) { return e.code; })
+            : ((window.DEFAULT_PWA_LANGUAGES && window.DEFAULT_PWA_LANGUAGES.length)
+              ? window.DEFAULT_PWA_LANGUAGES.map(function (e) { return e.code; })
+              : ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt']);
+          if (typeof window.resolvePwaLanguage === 'function') return window.resolvePwaLanguage(codes);
+          return (navigator.language && navigator.language.split('-')[0]) || 'en';
+        } catch (e) {
+          return 'en';
+        }
+      }
+
+      function syncRootTextsToDom() {
+        if (typeof window.getTranslation !== 'function') return;
+        document.querySelectorAll('[data-i18n]').forEach(function(el) {
+          var key = el.getAttribute('data-i18n');
+          if (!key) return;
+          var t = window.getTranslation(key);
+          if (t != null && t !== key) el.textContent = t;
+        });
+        document.querySelectorAll('[data-i18n-html]').forEach(function(el) {
+          var key = el.getAttribute('data-i18n-html');
+          if (!key) return;
+          var t = window.getTranslation(key);
+          if (t != null && t !== key) el.innerHTML = t;
+        });
+        document.querySelectorAll('[data-i18n-placeholder]').forEach(function(el) {
+          var key = el.getAttribute('data-i18n-placeholder');
+          if (!key) return;
+          var t = window.getTranslation(key);
+          if (t) el.placeholder = t;
+        });
+        document.querySelectorAll('[data-aria-i18n]').forEach(function(el) {
+          var key = el.getAttribute('data-aria-i18n');
+          if (key) {
+            var t = window.getTranslation(key);
+            if (t && t !== key) el.setAttribute('aria-label', t);
+          }
+        });
+      }
+      function scheduleRootDomI18n() {
+        function run() {
+          try {
+            syncRootTextsToDom();
+          } catch (e2) {
+            console.error(e2);
+          }
+        }
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', run, { once: true });
+        } else {
+          run();
+        }
+      }
+
+      function applyTranslationsAndUI(loadedLang) {
+        if (loadedLang) {
+          window.__pwaLoadedLang = loadedLang;
+          try {
+            if (!isManualLanguageLocked()) {
+              persistLanguageSelection(loadedLang, false);
+            }
+          } catch (e) {}
+          logLanguageVisit(loadedLang);
+        }
+        window.updatePageTitle = function updatePageTitle() {
+          if (typeof window.translations === 'undefined') return;
+          var lang = getTitleLang();
+          var t = window.translations[lang] || window.translations['de'] || window.translations['en'] || {};
+          var pageTitle = t['main_hero_title'] || t['main_meta_title'] || 'VibesBox';
+          document.title = (pageTitle.indexOf('VibesBox') === -1 ? pageTitle + ' - VibesBox' : pageTitle) || 'VibesBox – Dein interaktives Event-Erlebnis';
+        };
+        window.getTranslation = function getTranslation(key) {
+          try {
+            var list = window.pwaAvailableLanguages && window.pwaAvailableLanguages.length ? window.pwaAvailableLanguages : [];
+            var codes = list.length ? list.map(function (e) { return e.code; })
+              : ((window.DEFAULT_PWA_LANGUAGES && window.DEFAULT_PWA_LANGUAGES.length)
+                ? window.DEFAULT_PWA_LANGUAGES.map(function (e) { return e.code; })
+                : ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt']);
+            var lang = (typeof window.getEffectiveLangForMenu === 'function')
+              ? window.getEffectiveLangForMenu()
+              : ((typeof window.resolvePwaLanguage === 'function')
+                ? window.resolvePwaLanguage(codes)
+                : ((navigator.language && navigator.language.split('-')[0]) || 'en'));
+            if (typeof window.translations !== 'undefined' && window.translations[lang] && window.translations[lang][key]) return window.translations[lang][key];
+            if (typeof window.translations !== 'undefined' && window.translations['de'] && window.translations['de'][key]) return window.translations['de'][key];
+            if (typeof window.translations !== 'undefined' && window.translations['en'] && window.translations['en'][key]) return window.translations['en'][key];
+          } catch (e) {}
+          return key;
+        };
+        if (typeof window.updatePageTitle === 'function') window.updatePageTitle();
+        if (window.IS_DEBUG) console.log('Root Loader: Übersetzungen geladen, Sprache:', loadedLang || '(Fallback)');
+        scheduleRootDomI18n();
+        window.dispatchEvent(new Event('translationsReady'));
+      }
+
+            function normalizeLangScriptPath(url) {
+        try {
+          var s = String(url || '').split('?')[0];
+          if (s.indexOf('://') >= 0) {
+            var a = document.createElement('a');
+            a.href = s;
+            return a.pathname || s;
+          }
+          return s;
+        } catch (e) {
+          return String(url || '').split('?')[0];
+        }
+      }
+      function findExistingLangScript(normalizedPath) {
+        var scripts = document.head.querySelectorAll('script[src]');
+        for (var i = 0; i < scripts.length; i++) {
+          var src = scripts[i].getAttribute('src') || '';
+          if (normalizeLangScriptPath(src) === normalizedPath) return scripts[i];
+        }
+        return null;
+      }
+      /** Lädt Sprachdatei. jsPath optional (z. B. "/vb/lang/de.js"), sonst /vb/lang/<langCode>.js */
+      function loadLangScript(langCode, onDone, jsPath) {
+        var bust = window.IS_DEBUG ? ('?v=' + Date.now()) : '';
+        var scriptUrl = (jsPath && (jsPath.indexOf('/') !== -1 || jsPath.indexOf('.js') !== -1))
+          ? (jsPath.indexOf('?') !== -1 ? jsPath : jsPath + bust)
+          : '/vb/lang/' + langCode + '.js' + bust;
+        var normPath = normalizeLangScriptPath(scriptUrl);
+        if (window.IS_DEBUG) console.log('[Language-Debug] Lade Sprach-Script von Pfad:', scriptUrl);
+        function finishOk() {
+          var obj = window['lang_' + langCode];
+          if (!window.translations) window.translations = {};
+          if (obj) window.translations[langCode] = obj;
+          if (onDone) onDone();
+        }
+        var existing = findExistingLangScript(normPath);
+        if (existing) {
+          if (window['lang_' + langCode]) {
+            finishOk();
+            return;
+          }
+          existing.addEventListener('load', finishOk);
+          existing.addEventListener('error', function() {
+            if (onDone) onDone(new Error('Failed to load (existing tag): ' + normPath));
+          });
+          return;
+        }
+        var script = document.createElement('script');
+        script.src = scriptUrl;
+        script.onload = finishOk;
+        script.onerror = function() {
+          console.error('[i18n] Sprachdatei nicht geladen: ' + scriptUrl);
+          if (onDone) onDone(new Error('Failed to load ' + scriptUrl));
+        };
+        document.head.appendChild(script);
+      }
+
+      /** Hot-Swap (spiegelgleich zur Wunschbox): selected_language setzen, Sprache nachladen, UI aktualisieren. */
+      window.pwaHotSwapLanguage = function(langCode, jsPath, onDone) {
+        if (!langCode) { if (onDone) onDone(); return; }
+        persistLanguageSelection(langCode, true);
+        loadLangScript(langCode, function(err) {
+          if (err) {
+            if (onDone) onDone(err);
+            return;
+          }
+          applyTranslationsAndUI(langCode);
+          if (typeof window.updateMainContent === 'function') window.updateMainContent();
+          if (typeof window.updatePageTitle === 'function') window.updatePageTitle();
+          if (onDone) onDone();
+        }, jsPath);
+      };
+
+      /** Root-Sprach-Init: ?lang= → manuelle Wahl (Flag) → Browsersprache → Fallback (wie resolvePwaLanguage). */
+      window.startRootPageInit = function() {
+        var list = window.pwaAvailableLanguages && window.pwaAvailableLanguages.length ? window.pwaAvailableLanguages : [];
+        var codes = list.length ? list.map(function(e) { return e.code; })
+          : ((window.DEFAULT_PWA_LANGUAGES && window.DEFAULT_PWA_LANGUAGES.length)
+            ? window.DEFAULT_PWA_LANGUAGES.map(function(e) { return e.code; })
+            : ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt']);
+        var urlParams = new URLSearchParams(window.location.search);
+        var rawLangParam = (urlParams.get('lang') || '').trim();
+        var hadUrlLang = !!rawLangParam;
+        var langParamTrim = rawLangParam.toLowerCase();
+        if (langParamTrim === 'ar') langParamTrim = '';
+        var initialLang = (typeof window.resolvePwaLanguage === 'function')
+          ? window.resolvePwaLanguage(codes)
+          : ((codes.indexOf('en') !== -1) ? 'en' : (codes[0] || 'en'));
+        var syncEarly = window.__vbSyncLangCode || window.__pwaLoadedLang;
+        if (syncEarly === initialLang && codes.indexOf(syncEarly) !== -1) {
+          var trS = window.translations && window.translations[syncEarly];
+          if (trS && typeof trS === 'object' && Object.keys(trS).length > 0) {
+            persistLanguageSelection(syncEarly, false);
+            if (hadUrlLang) removeLangParamFromUrl();
+            applyTranslationsAndUI(syncEarly);
+            if (typeof window.updateMainContent === 'function') window.updateMainContent();
+            return;
+          }
+        }
+        persistLanguageSelection(initialLang, false);
+        if (hadUrlLang) removeLangParamFromUrl();
+        if (window.IS_DEBUG) {
+          var urlHit = hadUrlLang && langParamTrim && codes.indexOf(langParamTrim) !== -1;
+          var manualOn = isManualLanguageLocked();
+          var navPick = (typeof window.pickBestLangFromNavigatorCodes === 'function') ? window.pickBestLangFromNavigatorCodes(codes) : '';
+          console.log('--- [Spracherkennung] ---');
+          console.log('Browser: navigator.languages =', Array.isArray(navigator.languages) ? navigator.languages.join(', ') : '(nicht gesetzt)');
+          console.log('URL ?lang =', hadUrlLang ? rawLangParam : '(nicht gesetzt)');
+          console.log('Manuelle Sprachwahl (Flag) =', manualOn ? 'ja' : 'nein');
+          console.log('Datenbank: verfügbare Sprachen (codes) =', codes.join(', '));
+          console.log('Gewählte Start-Sprache (initialLang) =', initialLang);
+          console.log('Quelle: ' + (urlHit ? 'URL (?lang)' : manualOn ? 'manuell gespeichert' : (navPick === initialLang ? 'Browsersprache' : 'Fallback')));
+          console.log('--- [Spracherkennung Ende] ---');
+        }
+        var jsPath = null;
+        var forPath = list.length ? list : (window.DEFAULT_PWA_LANGUAGES || []);
+        var pathEntry = forPath.find(function(e) { return e.code === initialLang; });
+        if (pathEntry && pathEntry.js_path) jsPath = pathEntry.js_path;
+        var existingTr = window.translations && window.translations[initialLang];
+        if (existingTr && typeof existingTr === 'object' && Object.keys(existingTr).length > 0) {
+          applyTranslationsAndUI(initialLang);
+          if (typeof window.updateMainContent === 'function') window.updateMainContent();
+          return;
+        }
+        loadLangScript(initialLang, function(err) {
+          if (err) {
+            var fb = codes.indexOf('en') !== -1 ? 'en' : (codes[0] || 'en');
+            loadLangScript(fb, function(e) { if (!e) applyTranslationsAndUI(fb); });
+            return;
+          }
+          applyTranslationsAndUI(initialLang);
+        }, jsPath);
+      };
+
+      /** Beim Sprachwechsel im Dropdown: gewählte Sprache nachladen, falls noch nicht in translations. Pfad aus DB (pwaAvailableLanguages.js_path), sonst Fallback /vb/lang/<code>.js. */
+      window.loadRootLanguage = function(lang, onDone) {
+        if (!onDone) onDone = function() {};
+        if (window.translations && window.translations[lang]) {
+          onDone();
+          return;
+        }
+        var jsPath = null;
+        var plist = window.pwaAvailableLanguages && window.pwaAvailableLanguages.length ? window.pwaAvailableLanguages : (window.DEFAULT_PWA_LANGUAGES || []);
+        var entry = plist.find(function(e) { return e.code === lang; });
+        if (entry && entry.js_path) jsPath = entry.js_path;
+        loadLangScript(lang, onDone, jsPath);
+      };
+
+      try {
+        var cEarly = window.__pwaLoadedLang;
+        if (cEarly && window.translations && window.translations[cEarly] && Object.keys(window.translations[cEarly]).length > 0) {
+          applyTranslationsAndUI(cEarly);
+        } else {
+          startRootPageInit();
+        }
+      } catch (eEarly) {
+        console.error(eEarly);
+      }
+    })();
+  </script>
+  <script type="module" src="/vb/scripts/firebase-init.js"></script>
+  <script>(function(){var u=new URLSearchParams(window.location.search);window.IS_DEBUG=u.get('x')==='99';})();</script>
+  <!-- Footer/Social: gleiche Firestore-Instanz wie firebase-init.js (kein zweiter SDK-Import) -->
+  <script type="module">
+    try {
+      var db = window.firebaseDb;
+      var getDoc = window.firebaseGetDoc;
+      var doc = window.firebaseDoc;
+      if (!db || typeof getDoc !== 'function' || typeof doc !== 'function') {
+        throw new Error('Firebase globals missing (firebase-init)');
+      }
+      function applyFooterText(text) {
+        var el = document.getElementById('footerCopyLine');
+        if (el && text != null && String(text).trim() !== '') el.textContent = String(text).trim();
+      }
+      getDoc(doc(db, 'admin_config', 'global_settings')).then(function(snap) {
+        if (snap && snap.exists()) {
+          var t = snap.data() && snap.data().pdf_footer_text;
+          if (t != null && String(t).trim() !== '') {
+            window.__pdfFooterText = String(t).trim();
+            applyFooterText(window.__pdfFooterText);
+          }
+        }
+      }).catch(function() {});
+
+      var SOCIAL_ICONS = {
+        facebook: '<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>',
+        instagram: '<svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="ig-g" x1="0%" y1="100%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#f9ed32"/><stop offset="25%" style="stop-color:#ee2a7b"/><stop offset="50%" style="stop-color:#d22a8a"/><stop offset="75%" style="stop-color:#8b2ab2"/><stop offset="100%" style="stop-color:#4b2db5"/></linearGradient></defs><path fill="url(#ig-g)" d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z"/></svg>'
+      };
+      function applyVibesboxSocialLinks(platforms) {
+        var container = document.querySelector('#social .social-links');
+        if (!container || !Array.isArray(platforms) || platforms.length === 0) return;
+        var html = '';
+        platforms.forEach(function(p) {
+          var id = (p.id || '').toLowerCase();
+          var url = (p.url || '').trim();
+          if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) return;
+          var icon = SOCIAL_ICONS[id] || '';
+          var cls = 'social-link-fb';
+          if (id === 'instagram') cls = 'social-link-ig';
+          else if (id === 'facebook') cls = 'social-link-fb';
+          html += '<a href="' + url.replace(/"/g, '&quot;') + '" target="_blank" rel="noopener noreferrer" aria-label="' + id + '" class="' + cls + '">' + (icon || '') + '</a>';
+        });
+        if (html) container.innerHTML = html;
+      }
+      getDoc(doc(db, 'admin_config', 'vibesbox_social')).then(function(snap) {
+        if (snap && snap.exists()) {
+          var data = snap.data();
+          var platforms = data && data.platforms;
+          if (Array.isArray(platforms) && platforms.length > 0) {
+            applyVibesboxSocialLinks(platforms);
+          }
+        }
+      }).catch(function() {});
+    } catch (e) {
+      console.error(e);
+    }
+  </script>
+  <style>
+    :root {
+      --bg-dark: #1A1A1A;     /* Sektion Typ A: dunkleres Grau */
+      --bg-light: #2A2A2A;   /* Sektion Typ B: helleres Grau */
+      --bg-card-on-dark: #151515;   /* Karte auf dunkler Sektion – Nuance dunkler */
+      --bg-card-on-light: #242424; /* Karte auf heller Sektion – Nuance dunkler */
+      --accent: #d4834d;
+      --accent-hover: #e0945a;
+      --text: #F0F0F0;       /* gebrochenes Weiß für Lesbarkeit auf Grau */
+      --text-muted: #b0b0b0;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg-dark);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { color: var(--accent-hover); }
+
+    /* Header */
+    .header {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      padding: 1rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #1A1A1A;
+      backdrop-filter: blur(8px);
+      z-index: 100;
+    }
+    .header-logo {
+      height: 44px;
+      width: auto;
+    }
+    .header-schriftzug {
+      height: 45px;
+      width: auto;
+      display: block;
+      vertical-align: middle;
+    }
+    .header-nav {
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+    }
+    .header-nav a {
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+    .header-nav a:hover { color: var(--accent); }
+    .lang-switcher {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+    }
+    .main-lang-wrap {
+      position: relative;
+    }
+    .main-lang-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      background: var(--bg-dark);
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      color: var(--accent);
+      font-size: 1.25rem;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+      flex-shrink: 0;
+    }
+    .main-lang-btn:hover {
+      background: rgba(212, 131, 77, 0.15);
+      box-shadow: 0 0 12px rgba(212, 131, 77, 0.3);
+    }
+    .main-lang-btn[aria-expanded="true"] {
+      background: rgba(212, 131, 77, 0.2);
+      box-shadow: 0 0 12px rgba(212, 131, 77, 0.3);
+    }
+    .main-lang-dropdown {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 8px;
+      min-width: 200px;
+      background: #1A1A1A;
+      border: 1px solid var(--accent);
+      border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(212, 131, 77, 0.25);
+      padding: 6px 0;
+      z-index: 150;
+      display: none;
+      overflow: hidden;
+      flex-direction: column;
+    }
+    .main-lang-dropdown.show {
+      display: flex;
+    }
+    .main-lang-option {
+      display: flex;
+      align-items: center;
+      white-space: nowrap;
+      width: 100%;
+      padding: 10px 16px;
+      background: transparent;
+      border: none;
+      color: var(--text);
+      font-size: 0.9rem;
+      font-weight: 500;
+      text-align: left;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.15s;
+      gap: 0;
+      box-sizing: border-box;
+    }
+    .main-lang-option .main-lang-flag,
+    .language-modal-option .language-flag {
+      width: 1.33em;
+      height: 1em;
+      flex-shrink: 0;
+      display: block;
+    }
+    .main-lang-option .main-lang-flag svg,
+    .language-modal-option .language-flag svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: contain;
+    }
+    .main-lang-option .main-lang-name {
+      margin-left: 12px;
+    }
+    .main-lang-option:hover {
+      background: rgba(212, 131, 77, 0.2);
+      color: var(--accent);
+    }
+    .main-lang-option.active {
+      background: rgba(212, 131, 77, 0.25);
+      color: var(--accent);
+    }
+    /* ÜBER-Dropdown */
+    .nav-uber {
+      position: relative;
+    }
+    .nav-uber-trigger {
+      color: var(--text-muted);
+      font-weight: 500;
+      cursor: pointer;
+      user-select: none;
+      padding: 0.25rem 0;
+    }
+    .nav-uber-trigger:hover { color: var(--accent); }
+    .nav-uber-dropdown {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 0.5rem;
+      min-width: 160px;
+      background: var(--bg-light);
+      border: 1px solid rgba(212,131,77,0.4);
+      border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(26,26,26,0.5);
+      padding: 0.5rem 0;
+      opacity: 0;
+      visibility: hidden;
+      transform: translateY(-4px);
+      transition: opacity 0.2s, visibility 0.2s, transform 0.2s;
+      z-index: 150;
+    }
+    .nav-uber:hover .nav-uber-dropdown,
+    .nav-uber.open .nav-uber-dropdown {
+      opacity: 1;
+      visibility: visible;
+      transform: translateY(0);
+    }
+    .nav-uber-dropdown a {
+      display: block;
+      padding: 0.6rem 1rem;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+    .nav-uber-dropdown a:hover {
+      background: rgba(212,131,77,0.12);
+      color: var(--accent);
+    }
+    /* Legal-Modal (Impressum/Datenschutz/AGB) */
+    .legal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(26,26,26,0.85);
+      z-index: 300;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+    .legal-overlay.show { display: flex; }
+    .legal-modal {
+      background: var(--bg-light);
+      border: 1px solid rgba(212,131,77,0.4);
+      border-radius: 16px;
+      width: 100%;
+      max-width: 720px;
+      max-height: 85vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 12px 40px rgba(26,26,26,0.6);
+    }
+    .legal-modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    .legal-modal-header h3 { font-size: 1.1rem; color: var(--text); }
+    .legal-modal-close {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 1.5rem;
+      cursor: pointer;
+      padding: 0.25rem;
+      line-height: 1;
+    }
+    .legal-modal-close:hover { color: var(--accent); }
+    .legal-modal-body {
+      flex: 1;
+      min-height: 40vh;
+      max-height: 65vh;
+      overflow-y: auto;
+      padding: 1.25rem 1.5rem;
+      background: var(--bg-dark);
+      color: var(--text);
+      border-radius: 0 0 16px 16px;
+      border-top: 1px solid rgba(212,131,77,0.25);
+    }
+    .legal-modal-body h1, .legal-modal-body h2, .legal-modal-body h3 {
+      color: var(--text);
+      margin-top: 1rem;
+      margin-bottom: 0.5rem;
+    }
+    .legal-modal-body h1 { font-size: 1.35rem; }
+    .legal-modal-body h2 { font-size: 1.15rem; }
+    .legal-modal-body h3 { font-size: 1.05rem; }
+    .legal-modal-body p {
+      color: var(--text-muted);
+      margin-bottom: 0.75rem;
+      line-height: 1.6;
+    }
+    .legal-modal-body a {
+      color: var(--accent);
+    }
+    .legal-modal-body a:hover { color: var(--accent-hover); }
+    .legal-modal-body strong { color: var(--text); }
+
+    /* Kontakt Erfolgs-Modal */
+    .contact-success-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(26,26,26,0.9);
+      z-index: 310;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+    .contact-success-overlay.show { display: flex; }
+    .contact-success-modal {
+      background: #1A1A1A;
+      border: 2px solid #4caf50;
+      border-radius: 16px;
+      max-width: 420px;
+      padding: 2rem;
+      text-align: center;
+      color: #fff;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+    }
+    .contact-success-modal .contact-success-icon { font-size: 3rem; margin-bottom: 1rem; color: #4caf50; }
+    .contact-success-modal .contact-success-title { font-size: 1.35rem; font-weight: 700; margin-bottom: 0.75rem; color: #fff; }
+    .contact-success-modal .contact-success-body { font-size: 1rem; color: rgba(255,255,255,0.9); margin-bottom: 1.5rem; line-height: 1.5; }
+    .contact-success-modal .btn { margin-top: 0.5rem; }
+
+    /* Main */
+    main { padding-top: 76px; }
+
+    /* Sektionen – Grau-in-Grau (Dunkel → Hell → Dunkel), kein Schwarz */
+    .section-bg-1 { background: var(--bg-dark); }
+    .section-bg-2 { background: var(--bg-light); }
+    .section-divider {
+      height: 1px;
+      border: none;
+      background: linear-gradient(90deg, var(--bg-dark) 0%, rgba(212,131,77,0.35) 22%, rgba(212,131,77,0.5) 50%, rgba(212,131,77,0.35) 78%, var(--bg-light) 100%);
+      margin: 0;
+    }
+
+    /* 2-Spalten-Grid: Text + Bild-Platzhalter */
+    .two-col-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 2.5rem;
+      align-items: center;
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 0 1.5rem;
+    }
+    @media (max-width: 480px) {
+      .header { padding: 0.75rem 1rem; }
+      .main-lang-dropdown { right: 0; left: auto; max-height: 70vh; overflow-y: auto; min-width: 180px; }
+      .main-lang-option { padding: 10px 12px; }
+      .main-lang-option .main-lang-name { margin-left: 10px; }
+      .main-lang-option .main-lang-flag { width: 1.33em; height: 1em; }
+    }
+    @media (min-width: 768px) {
+      .two-col-grid { grid-template-columns: 1fr 1fr; gap: 3.5rem; }
+      .two-col-grid.reverse .two-col-content { order: 2; }
+      .two-col-grid.reverse .two-col-visual { order: 1; }
+    }
+    .two-col-content h2 { margin-bottom: 1.25rem; }
+    .two-col-content p { margin-bottom: 1rem; }
+    .two-col-content p:last-child { margin-bottom: 0; }
+    .visual-placeholder {
+      min-height: 220px;
+      background: rgba(255,255,255,0.04);
+      border: 2px dashed rgba(212,131,77,0.5);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+
+    /* Typografie – Schlagworte in Kupfer */
+    .accent-large {
+      color: var(--accent);
+      font-size: 1.75rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+    }
+    .accent-inline { color: var(--accent); font-weight: 600; }
+
+    /* Hero – Full-Width, feste Höhe damit bei allen Sprachen gleich groß (kein Nachrutschen) */
+    .hero {
+      height: 85vh;
+      min-height: 320px;
+      max-height: 900px;
+      width: 100vw;
+      max-width: none;
+      margin-left: calc(50% - 50vw);
+      margin-right: calc(50% - 50vw);
+      padding-left: 1.5rem;
+      padding-right: 1.5rem;
+      padding-top: 4rem;
+      padding-bottom: 5rem;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      background-image: linear-gradient(rgba(26,26,26,0.75), rgba(26,26,26,0.65)), url(./vb-header.jpg);
+      background-size: cover;
+      background-position: center;
+      background-repeat: no-repeat;
+      overflow: hidden;
+    }
+    .hero-logo {
+      width: 160px;
+      height: auto;
+      margin-bottom: 2rem;
+    }
+    .hero h1 {
+      font-size: clamp(1.5rem, 4vw, 2.25rem);
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      margin-bottom: 1rem;
+      color: #FFFFFF;
+    }
+    .hero .tagline {
+      font-size: clamp(1rem, 2.5vw, 1.25rem);
+      color: #FFFFFF;
+      margin-bottom: 2.5rem;
+      max-width: 480px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem 2rem;
+      font-family: inherit;
+      font-size: 1.05rem;
+      font-weight: 600;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+    .btn-primary:hover {
+      background: var(--accent-hover);
+      transform: translateY(-1px);
+    }
+
+    /* Section – mehr Whitespace */
+    section {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 5rem 1.5rem;
+    }
+    section.section-wide { max-width: 1000px; }
+    section.section-two-col { max-width: none; padding: 5rem 1.5rem; }
+    section.features-wrap { max-width: 960px; padding: 5rem 1.5rem; }
+    /* Hintergrundbild wie Hero (moderat abgedunkelt 0.72) – für Features- und Kontakt-Sektion */
+    section.section-features-hero-bg,
+    section.section-contact-hero-bg {
+      margin-left: calc(50% - 50vw);
+      margin-right: calc(50% - 50vw);
+      width: 100vw;
+      max-width: none;
+      box-sizing: border-box;
+      background-image: linear-gradient(rgba(0,0,0,0.72), rgba(0,0,0,0.72)), url(./vb-header.jpg);
+      background-size: cover;
+      background-position: center;
+      background-repeat: no-repeat;
+      background-color: #1A1A1A;
+    }
+    /* Kontakt-Sektion: weiße Schrift für bessere Lesbarkeit auf dunklem Hintergrund */
+    section.section-contact-hero-bg h2,
+    section.section-contact-hero-bg .two-col-content > p { color: #fff; }
+    section.section-contact-hero-bg .contact-label { color: rgba(255,255,255,0.95); }
+    section.section-contact-hero-bg .contact-hint { color: rgba(255,255,255,0.75); }
+    section.section-contact-hero-bg .contact-form .msg { color: rgba(255,255,255,0.95); }
+    section.section-contact-hero-bg .contact-form .msg.success { color: #a5d6a7; }
+    /* Eingabefelder in der Kontakt-Sektion: blass milchiger Hintergrund, dunkle Schrift */
+    section.section-contact-hero-bg .contact-form input,
+    section.section-contact-hero-bg .contact-form textarea {
+      background: rgba(255,252,245,0.35);
+      color: #0d0d0d;
+      border: 1px solid rgba(255,255,255,0.4);
+    }
+    section.section-contact-hero-bg .contact-form input::placeholder,
+    section.section-contact-hero-bg .contact-form textarea::placeholder { color: #333; opacity: 1; }
+    section h2 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      color: var(--text);
+    }
+    section p {
+      color: var(--text-muted);
+      margin-bottom: 1rem;
+    }
+
+    /* Feature cards – 3 nebeneinander, Rahmen + Schatten */
+    .features-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 1.5rem;
+      margin-top: 2rem;
+    }
+    @media (min-width: 720px) {
+      .features-grid { grid-template-columns: repeat(3, 1fr); gap: 1.75rem; }
+    }
+    .feature-card {
+      background: var(--bg-card-on-dark);
+      border: 1px solid rgba(212,131,77,0.5);
+      border-radius: 12px;
+      padding: 2rem 1.5rem;
+      text-align: left;
+      box-shadow: 0 4px 24px rgba(26,26,26,0.5), 0 0 0 1px rgba(212,131,77,0.28), 0 0 18px rgba(212,131,77,0.06);
+    }
+    .feature-card h3 {
+      font-size: 1.15rem;
+      font-weight: 600;
+      color: var(--accent);
+      margin-bottom: 0.75rem;
+    }
+    .feature-card p {
+      margin-bottom: 0;
+      font-size: 0.95rem;
+      line-height: 1.6;
+    }
+
+    /* Philosophie – Karte mit Rahmen + Schatten */
+    .philosophy-block {
+      background: var(--bg-card-on-light);
+      border: 1px solid rgba(212,131,77,0.48);
+      border-radius: 12px;
+      padding: 2rem 1.75rem;
+      margin-top: 1rem;
+      box-shadow: 0 4px 24px rgba(26,26,26,0.45), 0 0 0 1px rgba(212,131,77,0.25), 0 0 16px rgba(212,131,77,0.05);
+    }
+    .philosophy-block p {
+      margin-bottom: 0.75rem;
+    }
+    .philosophy-block p:last-child { margin-bottom: 0; }
+
+    /* Social */
+    .social-links {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      margin-top: 1rem;
+    }
+    .social-links a {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      font-size: 1.35rem;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .social-links a:hover {
+      transform: scale(1.08);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+    /* Facebook: offizielles Blau, weißes Icon */
+    .social-links a.social-link-fb {
+      background: #1877F2;
+      color: #fff;
+    }
+    .social-links a.social-link-fb:hover {
+      background: #166fe5;
+    }
+    /* Instagram: Original-Gradient-Icon, neutraler Hintergrund */
+    .social-links a.social-link-ig {
+      background: rgba(0,0,0,0.06);
+      color: inherit;
+    }
+    .social-links a.social-link-ig:hover {
+      background: rgba(0,0,0,0.1);
+    }
+    .social-links a svg {
+      display: block;
+    }
+
+    /* Contact form */
+    .contact-form {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      max-width: 480px;
+      margin-top: 1.5rem;
+    }
+    .contact-form input,
+    .contact-form textarea {
+      width: 100%;
+      padding: 0.85rem 1rem;
+      font-family: inherit;
+      font-size: 1rem;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 10px;
+      background: rgba(255,255,255,0.05);
+      color: var(--text);
+    }
+    .contact-form input::placeholder,
+    .contact-form textarea::placeholder { color: var(--text-muted); opacity: 0.8; }
+    .contact-form textarea { min-height: 120px; resize: vertical; }
+    .contact-form .msg { font-size: 0.9rem; margin-top: 0.5rem; }
+    /* reCAPTCHA v3: Badge ausblenden nur mit sichtbarem Google-Hinweis (Nutzungsbedingungen) */
+    .grecaptcha-badge { visibility: hidden !important; }
+    .recaptcha-legal {
+      font-size: 0.7rem;
+      line-height: 1.45;
+      color: rgba(255,255,255,0.55);
+      margin-top: 0.75rem;
+      max-width: 42rem;
+    }
+    .recaptcha-legal a { color: rgba(255,200,120,0.95); text-decoration: underline; }
+    .contact-form .msg.error { color: var(--accent); }
+    .contact-form .msg.success { color: #81c784; }
+    .contact-form .contact-label {
+      display: block;
+      margin-top: 0.75rem;
+      margin-bottom: 0.25rem;
+      font-size: 0.9rem;
+      color: var(--text-muted);
+    }
+    .contact-form .contact-label:first-of-type { margin-top: 0; }
+    .contact-form .contact-hint {
+      display: block;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-top: 0.25rem;
+      margin-bottom: 0.25rem;
+    }
+
+    /* Footer */
+    .footer {
+      margin-top: 0;
+      padding: 3rem 1.5rem;
+      background: #1A1A1A;
+      text-align: center;
+    }
+    .footer-links {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 1rem 1.5rem;
+      margin-bottom: 1rem;
+    }
+    .footer-links a { color: var(--text-muted); }
+    .footer-copy { font-size: 0.9rem; color: var(--text-muted); }
+
+    /* App-Check Lade-Overlay (Root: Logo + Spinner während intent/VibesBox-Prüfung) */
+    .app-check-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: var(--bg-dark);
+      z-index: 9999;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+    .app-check-overlay.show { display: flex; }
+    .app-check-overlay .app-check-logo {
+      width: 120px;
+      height: auto;
+    }
+    .app-check-overlay .app-check-spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid rgba(212,131,77,0.3);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: app-check-spin 0.8s linear infinite;
+    }
+    @keyframes app-check-spin { to { transform: rotate(360deg); } }
+
+    /* Overlay Party-Code */
+    .overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(26,26,26,0.92);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }
+    .overlay.show { display: flex; }
+    .overlay-box {
+      background: var(--bg-card-on-light);
+      border-radius: 16px;
+      padding: 2rem;
+      max-width: 400px;
+      width: 100%;
+      border: 1px solid rgba(212,131,77,0.5);
+      box-shadow: 0 8px 32px rgba(26,26,26,0.55), 0 0 0 1px rgba(212,131,77,0.22);
+    }
+    .overlay-box h3 {
+      margin-bottom: 1rem;
+      font-size: 1.25rem;
+    }
+    .overlay-box input {
+      width: 100%;
+      padding: 1rem;
+      font-size: 1.1rem;
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 10px;
+      background: rgba(255,255,255,0.06);
+      color: var(--text);
+      margin-bottom: 1rem;
+      letter-spacing: 0.05em;
+    }
+    .overlay-box .btn { width: 100%; }
+    .overlay-close {
+      margin-top: 1rem;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      cursor: pointer;
+    }
+    .overlay-close:hover { color: var(--text); }
+    .overlay-error {
+      display: none;
+      margin-top: 0.75rem;
+      padding: 0.75rem;
+      border-radius: 8px;
+      background: rgba(212, 131, 77, 0.15);
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      font-size: 0.95rem;
+    }
+    .overlay-error.show { display: block; }
+    .overlay-error.future { border-color: rgba(129, 199, 132, 0.6); background: rgba(129, 199, 132, 0.1); color: #a5d6a7; }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <a href="/" aria-label="VibesBox – Startseite">
+      <img src="/vb-schriftzug.png" alt="VibesBox" class="header-schriftzug">
+    </a>
+    <nav class="header-nav">
+      <div class="lang-switcher" id="langSwitcher" aria-label="Sprache wählen"></div>
+      <div class="nav-uber" id="navUber">
+        <span class="nav-uber-trigger" id="navUberTrigger" aria-haspopup="true" aria-expanded="false" data-i18n="main_nav_uber">ÜBER</span>
+        <div class="nav-uber-dropdown" role="menu">
+          <a href="#" role="menuitem" data-legal="impressum.html" data-i18n="button_imprint">Impressum</a>
+          <a href="#" role="menuitem" data-legal="datenschutz.html" data-i18n="button_privacy">Datenschutz</a>
+          <a href="#" role="menuitem" data-legal="agb.html" data-i18n="button_terms">AGB</a>
+        </div>
+      </div>
+    </nav>
+  </header>
+
+  <!-- Legal-Modal (Inhalt aus VR-PWA translations.js – gleiche Keys, Mehrsprachigkeit) -->
+  <div class="legal-overlay" id="legalOverlay" aria-hidden="true">
+    <div class="legal-modal">
+      <div class="legal-modal-header">
+        <h3 id="legalModalTitle">Impressum</h3>
+        <button type="button" class="legal-modal-close" id="legalModalClose" aria-label="" data-aria-i18n="button_close">&times;</button>
+      </div>
+      <div class="legal-modal-body" id="legalModalBody" role="document"></div>
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      var navUber = document.getElementById('navUber');
+      var navUberTrigger = document.getElementById('navUberTrigger');
+      var legalOverlay = document.getElementById('legalOverlay');
+      var legalModalBody = document.getElementById('legalModalBody');
+      var legalModalTitle = document.getElementById('legalModalTitle');
+      var legalModalClose = document.getElementById('legalModalClose');
+
+      function getCurrentLang() {
+        try {
+          if (typeof window.getEffectiveLangForMenu === 'function') {
+            return window.getEffectiveLangForMenu();
+          }
+          return window.localStorage.getItem('permanent_user_locale') || window.localStorage.getItem('pwa_language') || window.localStorage.getItem('language') || (navigator.language && navigator.language.split('-')[0]) || 'en';
+        } catch (e) {
+          return 'en';
+        }
+      }
+
+      function getLegalContent(type) {
+        if (typeof translations === 'undefined') return { title: type, html: '<p>Übersetzungen werden geladen…</p>' };
+        var lang = getCurrentLang();
+        var t = translations[lang] || translations['de'] || {};
+        var tDe = translations['de'] || {};
+        var title = '';
+        var html = '';
+
+        if (type === 'impressum') {
+          title = t['imprint_title'] || tDe['imprint_title'] || 'Impressum';
+          if (t['legal_language_notice']) {
+            html += '<p style="font-weight: bold; margin-bottom: 16px;">' + t['legal_language_notice'] + '</p>';
+          }
+          html += (tDe['imprint_html_content'] || '');
+        } else if (type === 'datenschutz') {
+          title = t['privacy_title'] || tDe['privacy_title'] || 'Datenschutz';
+          if (t['legal_language_notice']) {
+            html += '<p style="font-weight: bold; margin-bottom: 16px;">' + t['legal_language_notice'] + '</p>';
+          }
+          html += (t['privacy_html_content'] || tDe['privacy_html_content'] || '');
+        } else if (type === 'agb') {
+          title = t['terms_title'] || tDe['terms_title'] || 'AGB';
+          if (t['agb_intro']) {
+            html += '<p style="margin-bottom: 16px;">' + t['agb_intro'] + '</p>';
+          }
+          html += (t['terms_html_content'] || tDe['terms_html_content'] || '');
+        }
+
+        html += '<div style="margin-top: 32px; padding-top: 16px; border-top: 1px solid rgba(212,131,77,0.3); text-align: center; font-size: 0.85rem; color: var(--text-muted);">© VibesBox</div>';
+        return { title: title, html: html };
+      }
+
+      function openLegalModal(type) {
+        var data = getLegalContent(type);
+        legalModalTitle.textContent = data.title;
+        legalModalBody.innerHTML = data.html;
+        legalModalBody.querySelectorAll('a[href^="http"]').forEach(function(a) {
+          a.setAttribute('target', '_blank');
+          a.setAttribute('rel', 'noopener noreferrer');
+        });
+        legalOverlay.classList.add('show');
+        legalOverlay.setAttribute('aria-hidden', 'false');
+        legalModalBody.scrollTop = 0;
+      }
+
+      if (navUberTrigger) {
+        navUberTrigger.addEventListener('click', function(e) {
+          e.preventDefault();
+          navUber.classList.toggle('open');
+          navUberTrigger.setAttribute('aria-expanded', navUber.classList.contains('open'));
+        });
+      }
+      document.querySelectorAll('.nav-uber-dropdown a').forEach(function(a) {
+        a.addEventListener('click', function(e) {
+          e.preventDefault();
+          var page = this.getAttribute('data-legal');
+          if (!page) return;
+          var type = page.replace('.html', '');
+          openLegalModal(type);
+          navUber.classList.remove('open');
+          navUberTrigger.setAttribute('aria-expanded', 'false');
+        });
+      });
+      if (legalModalClose) {
+        legalModalClose.addEventListener('click', function() {
+          legalOverlay.classList.remove('show');
+          legalOverlay.setAttribute('aria-hidden', 'true');
+        });
+      }
+      if (legalOverlay) {
+        legalOverlay.addEventListener('click', function(e) {
+          if (e.target === legalOverlay) {
+            legalOverlay.classList.remove('show');
+            legalOverlay.setAttribute('aria-hidden', 'true');
+          }
+        });
+      }
+      document.addEventListener('click', function(e) {
+        if (navUber && !navUber.contains(e.target)) {
+          navUber.classList.remove('open');
+          navUberTrigger.setAttribute('aria-expanded', 'false');
+        }
+      });
+    })();
+  </script>
+
+  <script>
+    (function() {
+      function getMainLang() {
+        try {
+          if (typeof window.getEffectiveLangForMenu === 'function') return window.getEffectiveLangForMenu();
+          var s = window.localStorage.getItem('pwa_language') || window.localStorage.getItem('language') || window.localStorage.getItem('permanent_user_locale');
+          if (s && String(s).trim()) return String(s).trim().split('-')[0].toLowerCase();
+          return (navigator.language && navigator.language.split('-')[0]) || 'en';
+        } catch (e) {
+          return 'en';
+        }
+      }
+      window.getMainLang = getMainLang;
+      window.mainT = function(key) {
+        var lang = getMainLang();
+        if (typeof translations === 'undefined') return key;
+        var t = translations[lang] || translations['de'] || {};
+        return t[key] != null ? t[key] : key;
+      };
+
+      function updatePageTitle(title) {
+        if (title) {
+          document.title = title + " - VibesBox";
+        } else if (typeof translations !== 'undefined') {
+          var lang = getMainLang();
+          var t = translations[lang] || translations['de'] || {};
+          var pageTitle = t['main_hero_title'] || t['main_meta_title'] || 'VibesBox';
+          document.title = pageTitle + (pageTitle.indexOf('VibesBox') === -1 ? ' - VibesBox' : '');
+        }
+      }
+
+      function updateContent() {
+        if (typeof translations === 'undefined') return;
+        var lang = getMainLang();
+        var t = translations[lang] || translations['de'] || {};
+        document.querySelectorAll('[data-i18n]').forEach(function(el) {
+          var key = el.getAttribute('data-i18n');
+          if (t[key] != null) el.textContent = t[key];
+        });
+        document.querySelectorAll('[data-i18n-html]').forEach(function(el) {
+          var key = el.getAttribute('data-i18n-html');
+          if (t[key] != null) el.innerHTML = t[key];
+        });
+        document.querySelectorAll('[data-i18n-placeholder]').forEach(function(el) {
+          var key = el.getAttribute('data-i18n-placeholder');
+          if (t[key] != null) el.placeholder = t[key];
+        });
+        document.querySelectorAll('[data-aria-i18n]').forEach(function(el) {
+          var key = el.getAttribute('data-aria-i18n');
+          if (key && t[key] != null) el.setAttribute('aria-label', t[key]);
+        });
+        var footerAppLink = document.querySelector('a[data-i18n="main_footer_app"]');
+        if (footerAppLink) footerAppLink.href = '/vb/' + (lang ? '?lang=' + lang : '');
+        updatePageTitle();
+      }
+
+      window.updateMainContent = updateContent;
+
+      function runWhenTranslationsAndDOMReady() {
+        buildDatabaseLangMenu('langSwitcher', false);
+        updateContent();
+        updatePageTitle();
+        if (window.__pdfFooterText) {
+          var fc = document.getElementById('footerCopyLine');
+          if (fc) fc.textContent = window.__pdfFooterText;
+        }
+        var closeBtn = document.getElementById('legalModalClose');
+        if (closeBtn && typeof window.getTranslation === 'function') closeBtn.setAttribute('aria-label', window.getTranslation('button_close') || 'Schließen');
+      }
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', runWhenTranslationsAndDOMReady);
+      } else {
+        runWhenTranslationsAndDOMReady();
+      }
+      window.addEventListener('translationsReady', runWhenTranslationsAndDOMReady);
+    })();
+  </script>
+
+  <main>
+    <section class="hero">
+      <img src="/icon/vibesbox-logo.png" alt="VibesBox" class="hero-logo">
+      <h1 data-i18n="main_hero_title">VIBESBOX – Die Verbindung zwischen DJ und Gast.</h1>
+      <p class="tagline" data-i18n="main_hero_tagline">Das digitale Herzstück für jede Party. Modern, direkt und ohne Barrieren.</p>
+      <button type="button" class="btn btn-primary" id="heroCodeBtn" data-i18n="main_hero_btn_code">Party-Code eingeben</button>
+    </section>
+    <hr class="section-divider" aria-hidden="true">
+
+    <section id="intro" class="section-two-col section-bg-2">
+      <div class="two-col-grid">
+        <div class="two-col-content">
+          <h2 data-i18n="main_intro_title">Was VIBESBOX ausmacht</h2>
+          <p class="intro-p1" data-i18n="main_intro_paragraph1">Die direkte Verbindung für deine Party: Gäste schicken ihre Musikwünsche einfach und ohne App-Pflicht über den Browser. Du als DJ behältst in deiner App die volle Kontrolle und steuerst alles zentral aus einer Hand. Modern, intuitiv und direkt – damit der Vibe auf dem Dancefloor immer stimmt.</p>
+          <p data-i18n="main_intro_paragraph2"></p>
+        </div>
+        <div class="two-col-visual">
+          <div class="visual-placeholder" aria-hidden="true" data-i18n="main_visual_placeholder">Bild-Platzhalter</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="features-wrap section-features-hero-bg">
+      <p class="accent-large" data-i18n="main_features_accent">3 Bereiche, eine Plattform</p>
+      <h2 data-i18n="main_features_title">Für Gäste, DJs und den reibungslosen Ablauf</h2>
+      <div class="features-grid">
+        <div class="feature-card">
+          <h3 data-i18n="main_feature_guest_title">Für Gäste</h3>
+          <p data-i18n="main_feature_guest_body">Schneller Zugriff via QR-Code direkt im Browser. Keine App-Installation notwendig. Musikwünsche einfach und ohne Hürden abschicken.</p>
+        </div>
+        <div class="feature-card">
+          <h3 data-i18n="main_feature_dj_title">Für DJs</h3>
+          <p data-i18n="main_feature_dj_body">Professionelles Management aller Musikwünsche per App. Behalte die volle Kontrolle über den Flow der Party und reagiere sofort auf die Tanzfläche.</p>
+        </div>
+        <div class="feature-card">
+          <h3 data-i18n="main_feature_auto_title">Automatisierung</h3>
+          <p data-i18n="main_feature_auto_body">VIBESBOX hält im Hintergrund alle Fäden zusammen – von der intelligenten Wunschliste bis zur automatischen Dokumentation des Abends.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="philosophy" class="section-two-col section-bg-2">
+      <div class="two-col-grid reverse">
+        <div class="two-col-content">
+          <h2 data-i18n="main_philosophy_title">Philosophie</h2>
+          <div class="philosophy-block">
+            <p class="philosophy-p" data-i18n-html="main_philosophy_body">VIBESBOX verbessert die Interaktion zwischen DJ und Gästen – damit die Party als gemeinsames Erlebnis im Mittelpunkt steht. <strong>Die Party gehört dem Moment.</strong></p>
+          </div>
+        </div>
+        <div class="two-col-visual">
+          <div class="visual-placeholder" aria-hidden="true" data-i18n="main_visual_placeholder">Bild-Platzhalter</div>
+        </div>
+      </div>
+    </section>
+    <hr class="section-divider" aria-hidden="true">
+
+    <section id="social" class="section-bg-1">
+      <h2 data-i18n="main_social_title">Folge uns</h2>
+      <p data-i18n="main_social_intro">Neuigkeiten und Einblicke findest du hier:</p>
+      <div class="social-links">
+        <a href="https://www.facebook.com/vibesbox.official" target="_blank" rel="noopener noreferrer" aria-label="Facebook" class="social-link-fb">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+        </a>
+        <a href="https://www.instagram.com/vibesbox.official" target="_blank" rel="noopener noreferrer" aria-label="Instagram" class="social-link-ig">
+          <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="ig-gradient" x1="0%" y1="100%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#f9ed32"/><stop offset="25%" style="stop-color:#ee2a7b"/><stop offset="50%" style="stop-color:#d22a8a"/><stop offset="75%" style="stop-color:#8b2ab2"/><stop offset="100%" style="stop-color:#4b2db5"/></linearGradient></defs><path fill="url(#ig-gradient)" d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z"/></svg>
+        </a>
+      </div>
+    </section>
+
+    <section id="contact" class="section-two-col section-contact-hero-bg">
+      <div class="two-col-grid">
+        <div class="two-col-content">
+          <h2 data-i18n="main_contact_title">Kontakt</h2>
+          <p data-i18n="main_contact_intro">Fragen oder Feedback? Schreib uns. Mindestens E-Mail oder Telefon angeben.</p>
+          <form id="contactForm" class="contact-form">
+        <label for="contactName" class="contact-label" data-i18n="main_contact_label_name">Vor- und Nachname *</label>
+        <input type="text" id="contactName" name="name" data-i18n-placeholder="main_contact_placeholder_name" placeholder="Vor- und Nachname" required maxlength="100" aria-required="true">
+        <label for="contactEmail" class="contact-label" data-i18n="main_contact_label_email">E-Mail</label>
+        <span id="contact-hint-email" class="contact-hint" data-i18n="main_contact_hint_contact_required">Mindestens E-Mail oder Telefon angeben (Pflicht).</span>
+        <input type="email" id="contactEmail" name="email" data-i18n-placeholder="main_contact_placeholder_email" placeholder="E-Mail-Adresse" maxlength="200" aria-describedby="contact-hint-email">
+        <label for="contactPhone" class="contact-label" data-i18n="main_contact_label_phone">Telefon</label>
+        <span id="contact-hint-phone" class="contact-hint" data-i18n="main_contact_hint_contact_required">Mindestens E-Mail oder Telefon angeben (Pflicht).</span>
+        <input type="text" id="contactPhone" name="phone" data-i18n-placeholder="main_contact_placeholder_phone" placeholder="Telefonnummer" maxlength="50" aria-describedby="contact-hint-phone">
+        <label for="contactSubject" class="contact-label" data-i18n="main_contact_label_subject">Betreff</label>
+        <input type="text" id="contactSubject" name="subject" data-i18n-placeholder="main_contact_placeholder_subject" placeholder="Betreff (optional)" maxlength="200">
+        <label for="contactMessage" class="contact-label" data-i18n="main_contact_label_message">Nachricht *</label>
+        <textarea id="contactMessage" name="message" data-i18n-placeholder="main_contact_placeholder_message" placeholder="Deine Nachricht" required maxlength="3000" rows="6" aria-required="true"></textarea>
+        <button type="submit" class="btn btn-primary" id="contactSubmitBtn" data-i18n="main_contact_btn_submit">Nachricht senden</button>
+        <p class="recaptcha-legal">This site is protected by reCAPTCHA and the Google <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a> and <a href="https://policies.google.com/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a> apply.</p>
+        <p id="contactMsg" class="msg" aria-live="polite"></p>
+          </form>
+        </div>
+        <div class="two-col-visual">
+          <div class="visual-placeholder" aria-hidden="true" data-i18n="main_visual_placeholder">Bild-Platzhalter</div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <footer class="footer">
+    <p class="footer-copy" id="footerCopyLine">© VibesBox</p>
+  </footer>
+
+  <!-- Kontakt Erfolgs-Modal (versteckt, wird bei 200 OK geöffnet) -->
+  <div class="contact-success-overlay" id="contactSuccessOverlay" aria-hidden="true">
+    <div class="contact-success-modal">
+      <div class="contact-success-icon" aria-hidden="true">✓</div>
+      <h3 class="contact-success-title" id="contactSuccessTitle"></h3>
+      <p class="contact-success-body" id="contactSuccessBody"></p>
+      <button type="button" class="btn btn-primary" id="contactSuccessClose" data-i18n="button_close"></button>
+    </div>
+  </div>
+
+  <div class="overlay" id="codeOverlay">
+    <div class="overlay-box">
+      <h3 id="codeOverlayTitle" data-i18n="main_overlay_code_title"></h3>
+      <input type="text" id="partyCodeInput" data-i18n-placeholder="main_overlay_code_placeholder" placeholder="" autocomplete="off" maxlength="8" pattern="[0-9]{8}" inputmode="numeric" aria-label="">
+      <p id="codeOverlayError" class="overlay-error" aria-live="polite"></p>
+      <button type="button" class="btn btn-primary" id="codeSubmitBtn" data-i18n="main_overlay_btn_submit" disabled></button>
+      <button type="button" class="overlay-close" id="codeOverlayClose" data-i18n="main_overlay_btn_close"></button>
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      const heroCodeBtn = document.getElementById('heroCodeBtn');
+      const codeOverlay = document.getElementById('codeOverlay');
+      const partyCodeInput = document.getElementById('partyCodeInput');
+      const codeSubmitBtn = document.getElementById('codeSubmitBtn');
+      const codeOverlayClose = document.getElementById('codeOverlayClose');
+
+      const codeOverlayError = document.getElementById('codeOverlayError');
+
+      function isValidOverlayCodeLen(len) {
+        return len === 8;
+      }
+      function updateCodeSubmitEnabled() {
+        if (!partyCodeInput || !codeSubmitBtn) return;
+        var v = sanitizePartyCodeInput(partyCodeInput.value || '');
+        codeSubmitBtn.disabled = !isValidOverlayCodeLen(v.length);
+      }
+
+      function applyOverlayL10n() {
+        var titleEl = document.getElementById('codeOverlayTitle');
+        if (titleEl) titleEl.textContent = mainOverlayT('main_overlay_code_title');
+        if (partyCodeInput) {
+          partyCodeInput.placeholder = mainOverlayT('main_overlay_code_placeholder');
+        }
+        if (codeSubmitBtn) codeSubmitBtn.textContent = mainOverlayT('main_overlay_btn_submit');
+        if (codeOverlayClose) codeOverlayClose.textContent = mainOverlayT('main_overlay_btn_close');
+        updateCodeSubmitEnabled();
+      }
+
+      heroCodeBtn.addEventListener('click', function() {
+        applyOverlayL10n();
+        partyCodeInput.value = '';
+        codeOverlayError.textContent = '';
+        codeOverlayError.innerHTML = '';
+        codeOverlayError.classList.remove('show', 'future');
+        codeSubmitBtn.textContent = mainOverlayT('main_overlay_btn_submit');
+        codeOverlayClose.textContent = mainOverlayT('main_overlay_btn_close');
+        updateCodeSubmitEnabled();
+        codeOverlay.classList.add('show');
+        partyCodeInput.focus();
+      });
+
+      function hideCodeError() {
+        codeOverlayError.textContent = '';
+        codeOverlayError.innerHTML = '';
+        codeOverlayError.classList.remove('show', 'future');
+      }
+
+      function showCodeError(msg, isFuture) {
+        codeOverlayError.classList.remove('future');
+        var fallback = mainOverlayT('main_code_error_invalid');
+        if (isFuture && msg && msg.indexOf('<') !== -1) {
+          codeOverlayError.innerHTML = msg;
+          codeOverlayError.classList.add('future');
+        } else {
+          codeOverlayError.textContent = msg || fallback;
+        }
+        codeOverlayError.classList.add('show');
+      }
+
+      function sanitizePartyCodeInput(val) {
+        if (val == null || typeof val !== 'string') return '';
+        return val.replace(/[^0-9]/g, '').substring(0, 8);
+      }
+
+      function mainOverlayT(key) {
+        return typeof window.mainT === 'function' ? window.mainT(key) : key;
+      }
+      function goToApp() {
+        var raw = (partyCodeInput.value || '').trim();
+        var code = sanitizePartyCodeInput(raw);
+        partyCodeInput.value = code;
+        if (!code || !isValidOverlayCodeLen(code.length)) {
+          showCodeError(mainOverlayT('main_code_error_8_digits'));
+          return;
+        }
+        hideCodeError();
+        codeSubmitBtn.disabled = true;
+        codeSubmitBtn.textContent = mainOverlayT('main_overlay_btn_checking');
+        if (typeof window.checkPartyCode !== 'function') {
+          showCodeError(mainOverlayT('main_code_error_reload'));
+          codeSubmitBtn.textContent = mainOverlayT('main_overlay_btn_submit');
+          updateCodeSubmitEnabled();
+          return;
+        }
+        var lang = '';
+        try {
+          lang = (typeof window.getEffectiveLangForMenu === 'function')
+            ? window.getEffectiveLangForMenu()
+            : (localStorage.getItem('pwa_language') || localStorage.getItem('language') || localStorage.getItem('permanent_user_locale') || '').trim();
+        } catch (e) {}
+        var langNorm = (lang || '').toString().trim().split('-')[0].toLowerCase();
+        var vbUrl = '/vb/' + (langNorm ? '?lang=' + encodeURIComponent(langNorm) : '');
+        var navigatedAway = false;
+        window.checkPartyCode(code).then(function(result) {
+          if (result && result.success && result.data && result.data.party_id) {
+            try {
+              localStorage.setItem('pendingPartyId', result.data.party_id);
+            } catch (e) {}
+            try {
+              if (langNorm && typeof window.setVbPreferredLangForSession === 'function') {
+                window.setVbPreferredLangForSession(langNorm);
+              }
+            } catch (eLang) {}
+            navigatedAway = true;
+            window.location.href = vbUrl;
+            return;
+          }
+          if (result && result.type === 'future' && result.start_time_posix && typeof window.formatPartyLocalTime === 'function' && typeof window.calculateTimeUntilParty === 'function') {
+            var lang2 = window.getMainLang ? window.getMainLang() : (localStorage.getItem('pwa_language') || 'en');
+            var rawTime = window.formatPartyLocalTime(result.start_time_posix, result.timezone_id || 'UTC', lang2);
+            var clockStr = mainOverlayT('time_format_clock').replace('{time}', rawTime);
+            var dateStr = typeof window.formatPartyLocalDate === 'function' ? window.formatPartyLocalDate(result.start_time_posix, result.timezone_id || 'UTC', lang2) : '';
+            var timeInfo = window.calculateTimeUntilParty(result.start_time_posix, window.mainT);
+            var intro = mainOverlayT('main_party_not_started_intro');
+            var startsAt = mainOverlayT('main_party_starts_at').replace('{time}', clockStr);
+            var startIn = mainOverlayT('main_party_start_in').replace('{countdown}', timeInfo);
+            var fullMsg = intro + '<br><br>' + (dateStr ? '<strong>' + dateStr + '</strong><br><br>' : '') + '<strong>' + startsAt + '</strong><br><br>' + startIn;
+            showCodeError(fullMsg, true);
+          } else {
+            var errKey = (result && result.messageKey) ? result.messageKey : 'main_code_error_invalid';
+            showCodeError(mainOverlayT(errKey));
+          }
+        }).catch(function() {
+          showCodeError(mainOverlayT('main_code_error_invalid'));
+        }).finally(function() {
+          if (!navigatedAway) {
+            codeSubmitBtn.textContent = mainOverlayT('main_overlay_btn_submit');
+            updateCodeSubmitEnabled();
+          }
+        });
+      }
+
+      partyCodeInput.addEventListener('input', function() {
+        this.value = sanitizePartyCodeInput(this.value);
+        updateCodeSubmitEnabled();
+      });
+      partyCodeInput.addEventListener('keypress', function(e) {
+        if (e.key !== 'Enter' && (e.key.length !== 1 || !/^[0-9]$/.test(e.key))) e.preventDefault();
+      });
+      codeSubmitBtn.addEventListener('click', goToApp);
+      partyCodeInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); goToApp(); }
+      });
+
+      codeOverlayClose.addEventListener('click', function() {
+        codeOverlay.classList.remove('show');
+      });
+      codeOverlay.addEventListener('click', function(e) {
+        if (e.target === codeOverlay) codeOverlay.classList.remove('show');
+      });
+
+      updateCodeSubmitEnabled();
+
+      // Kontaktformular – vereinheitlicht mit VR-Seite (Felder, Validierung, Cloud Function, Kupfer-Design)
+      const contactForm = document.getElementById('contactForm');
+      const contactSubmitBtn = document.getElementById('contactSubmitBtn');
+      const contactMsg = document.getElementById('contactMsg');
+      const contactNameInput = document.getElementById('contactName');
+      const contactEmailInput = document.getElementById('contactEmail');
+      const contactPhoneInput = document.getElementById('contactPhone');
+      const contactSubjectInput = document.getElementById('contactSubject');
+      const contactMessageInput = document.getElementById('contactMessage');
+      const CONTACT_URL = 'https://validaterecaptchaandsavecontact-5yehncoc7a-uc.a.run.app';
+      const RECAPTCHA_SITE_KEY = '6LdoeDcsAAAAAIORb90GjRovm2tW5qE4v9q5J-u5'; // Domain dj-ollerganove.web.app muss in Google reCAPTCHA Admin (reCAPTCHA v3) für diesen Site-Key unter "Domains" eingetragen sein
+      const LANDING_RECIPIENT = 'info@vibesbox.app';
+      // Cloud Function erwartet Token unter gRecaptchaResponse, source für Herkunft (z. B. landingpage).
+      var contactT = (typeof window.getTranslation === 'function') ? window.getTranslation : function(k) { return k || ''; };
+
+      // sanitizeInput/sanitizeEmail: 1:1 aus VR-Seite (XSS/Injection-Schutz)
+      function sanitizeInput(input) {
+        if (!input || typeof input !== 'string') return '';
+        var s = input
+          .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+          .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
+          .replace(/<[^>]+>/g, '')
+          .replace(/javascript:/gi, '')
+          .replace(/on\w+\s*=/gi, '')
+          .replace(/data:/gi, '')
+          .replace(/vbscript:/gi, '')
+          .replace(/onload=/gi, '')
+          .replace(/onerror=/gi, '')
+          .replace(/onclick=/gi, '')
+          .replace(/onmouseover=/gi, '')
+          .replace(/onfocus=/gi, '')
+          .replace(/onblur=/gi, '')
+          .replace(/onchange=/gi, '')
+          .replace(/onsubmit=/gi, '')
+          .replace(/eval\(/gi, '')
+          .replace(/expression\(/gi, '')
+          .replace(/import\s+/gi, '')
+          .replace(/from\s+/gi, '')
+          .replace(/require\(/gi, '')
+          .replace(/SELECT\s+/gi, '')
+          .replace(/INSERT\s+/gi, '')
+          .replace(/UPDATE\s+/gi, '')
+          .replace(/DELETE\s+/gi, '')
+          .replace(/DROP\s+/gi, '')
+          .replace(/UNION\s+/gi, '')
+          .replace(/OR\s+1\s*=\s*1/gi, '')
+          .replace(/OR\s+'1'\s*=\s*'1'/gi, '')
+          .replace(/;\s*DROP\s+TABLE/gi, '')
+          .replace(/--/g, '')
+          .replace(/\/\*/g, '')
+          .replace(/\*\//g, '')
+          .trim();
+        return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;').replace(/\//g, '&#x2F;');
+      }
+      function sanitizeEmail(email) {
+        return email ? sanitizeInput(email) : '';
+      }
+      function showContactError(msg) {
+        contactMsg.textContent = msg || contactT('contact_error_sending');
+        contactMsg.className = 'msg error';
+      }
+      var contactSuccessOverlay = document.getElementById('contactSuccessOverlay');
+      var contactSuccessTitle = document.getElementById('contactSuccessTitle');
+      var contactSuccessBody = document.getElementById('contactSuccessBody');
+      var contactSuccessClose = document.getElementById('contactSuccessClose');
+      function openContactSuccessModal() {
+        contactMsg.textContent = '';
+        contactMsg.className = 'msg';
+        if (contactSuccessTitle) contactSuccessTitle.textContent = contactT('main_contact_success_title');
+        if (contactSuccessBody) contactSuccessBody.textContent = contactT('main_contact_success_message');
+        if (contactSuccessClose) contactSuccessClose.textContent = contactT('button_close');
+        if (contactSuccessOverlay) contactSuccessOverlay.classList.add('show');
+        contactSuccessOverlay.setAttribute('aria-hidden', 'false');
+      }
+      function closeContactSuccessModal() {
+        if (contactSuccessOverlay) contactSuccessOverlay.classList.remove('show');
+        contactSuccessOverlay.setAttribute('aria-hidden', 'true');
+        contactForm.reset();
+        contactMsg.textContent = '';
+        contactMsg.className = 'msg';
+        contactSubmitBtn.disabled = false;
+        contactSubmitBtn.textContent = contactT('main_contact_btn_submit');
+        if (window.updateMainContent) window.updateMainContent();
+      }
+      if (contactSuccessClose) contactSuccessClose.addEventListener('click', closeContactSuccessModal);
+      if (contactSuccessOverlay) contactSuccessOverlay.addEventListener('click', function(e) { if (e.target === contactSuccessOverlay) closeContactSuccessModal(); });
+
+      contactForm.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        contactMsg.textContent = '';
+        contactMsg.className = 'msg';
+
+        var name = sanitizeInput((contactNameInput.value || '').trim());
+        var email = sanitizeEmail((contactEmailInput.value || '').trim());
+        var phone = sanitizeInput((contactPhoneInput.value || '').replace(/\s+$/, ''));
+        var subject = sanitizeInput((contactSubjectInput.value || '').trim());
+        var message = sanitizeInput((contactMessageInput.value || '').trim());
+
+        if (!name) {
+          showContactError(contactT('contact_error_name_required'));
+          return;
+        }
+        if (name.length > 100) {
+          showContactError(contactT('contact_error_name_too_long'));
+          return;
+        }
+        if (!email && !phone) {
+          showContactError(contactT('contact_error_email_or_phone_required'));
+          return;
+        }
+        if (email && email.indexOf('@') === -1) {
+          showContactError(contactT('contact_error_invalid_email'));
+          return;
+        }
+        if (email.length > 200) {
+          showContactError(contactT('main_contact_error_email_too_long'));
+          return;
+        }
+        if (phone.length > 50) {
+          showContactError(contactT('main_contact_error_phone_too_long'));
+          return;
+        }
+        if (subject.length > 200) {
+          showContactError(contactT('contact_error_subject_too_long'));
+          return;
+        }
+        if (!message) {
+          showContactError(contactT('contact_error_message_required'));
+          return;
+        }
+        if (message.length > 3000) {
+          showContactError(contactT('contact_error_message_too_long'));
+          return;
+        }
+
+        contactSubmitBtn.disabled = true;
+        contactSubmitBtn.textContent = contactT('contact_sending');
+
+        try {
+          var recaptchaToken = null;
+          try {
+            if (typeof grecaptcha === 'undefined' || !grecaptcha.enterprise || !grecaptcha.enterprise.ready) {
+              throw new Error('grecaptcha enterprise nicht geladen');
+            }
+            recaptchaToken = await new Promise(function(resolve, reject) {
+              try {
+                grecaptcha.enterprise.ready(function() {
+                  grecaptcha.enterprise.execute(RECAPTCHA_SITE_KEY, { action: 'submit' }).then(resolve).catch(reject);
+                });
+              } catch (e) {
+                reject(e);
+              }
+            });
+          } catch (recaptchaErr) {
+            console.warn('[Kontakt] reCAPTCHA fehlgeschlagen (unterdrückt):', recaptchaErr && recaptchaErr.message);
+          }
+          if (!recaptchaToken || typeof recaptchaToken !== 'string') {
+            showContactError(contactT('contact_error_sending') || contactT('contact_error_recaptcha_token_missing') || 'reCAPTCHA konnte nicht geladen werden. Bitte Seite neu laden.');
+            contactSubmitBtn.disabled = false;
+            contactSubmitBtn.textContent = contactT('main_contact_btn_submit');
+            if (window.updateMainContent) window.updateMainContent();
+            return;
+          }
+          console.log('[Kontakt] reCAPTCHA Token Länge:', recaptchaToken.length);
+
+          var body = {
+            gRecaptchaResponse: recaptchaToken,
+            name: name,
+            email: email || '',
+            phone: phone || '',
+            subject: subject || '',
+            message: message,
+            partyId: '',
+            language: (typeof localStorage !== 'undefined' && (localStorage.getItem('pwa_language') || localStorage.getItem('language'))) || 'en',
+            client_id: '',
+            recipientEmail: LANDING_RECIPIENT,
+            source: 'landingpage'
+          };
+          console.log('[Kontakt] Payload (vor fetch):', JSON.stringify(body, null, 2));
+
+          var res = await fetch(CONTACT_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          });
+
+          var data = await res.json().catch(function() { return {}; });
+
+          if (res.ok && data.success) {
+            openContactSuccessModal();
+            contactForm.reset();
+          } else {
+            console.error('[Kontakt] Server-Fehler – Status:', res.status, 'Body:', data, 'code:', data.code, 'hint:', data.hint);
+            var errMsg = data.error || data.message || contactT('contact_error_sending');
+            if (data.code === 'MISSING_TOKEN') errMsg = contactT('contact_error_recaptcha_token_missing');
+            else if (data.code === 'RECAPTCHA_VALIDATION_FAILED' || data.code === 'RECAPTCHA_LOW_SCORE') errMsg = contactT('contact_error_recaptcha_validation_failed');
+            else if (data.code === 'RECAPTCHA_NOT_CONFIGURED') errMsg = contactT('contact_error_sending') || 'Service temporarily unavailable.';
+            else if (data.code === 'MISSING_FIELDS') errMsg = (data.error || errMsg) + (data.missing && data.missing.length ? ' [' + data.missing.join(', ') + ']' : '');
+            if (data.hint) errMsg = errMsg + ' ' + data.hint;
+            showContactError(errMsg);
+          }
+        } catch (err) {
+          console.error('[Kontakt] Fetch-Fehler:', err);
+          showContactError(err.message || contactT('contact_error_sending'));
+        }
+        contactSubmitBtn.disabled = false;
+        contactSubmitBtn.textContent = contactT('main_contact_btn_submit');
+        if (window.updateMainContent) window.updateMainContent();
+      });
+    })();
+  </script>
+</body>
+</html>

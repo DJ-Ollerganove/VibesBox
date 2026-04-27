@@ -1,0 +1,390 @@
+FEHLENDE CODE-BLÖCKE UND METHODEN IN neue_party_page.dart
+Vergleich: temp_code.txt (Backup) vs. lib/pages/neue_party_page.dart (aktuell)
+
+================================================================================
+1. HELPER-METHODEN FÜR DATUM/ZEIT-BERECHNUNGEN
+================================================================================
+
+- DateTime _getMinStartDateTime()
+  Zeile 713 im Backup
+  Berechnet minimale Startzeit (aktuell + 5 Minuten)
+  STATUS: FEHLT KOMPLETT
+
+- DateTime? _getMaxEndDateTime()
+  Zeile 719 im Backup
+  Berechnet maximale Endzeit (Startzeit + 23:59 Stunden)
+  STATUS: FEHLT KOMPLETT
+
+- List<int> _getAvailableStartHours()
+  Zeile 735 im Backup
+  Berechnet verfügbare Startstunden basierend auf gewähltem Datum
+  Berücksichtigt: Heute vs. Zukunft, minimale Startzeit (5 Minuten Regel)
+  STATUS: FEHLT KOMPLETT
+
+- List<int> _getAvailableStartMinutes([int? tempHour])
+  Zeile 762 im Backup
+  Berechnet verfügbare Startminuten basierend auf gewählter Stunde
+  Parameter tempHour für temporäre Auswahl im Dialog
+  STATUS: FEHLT KOMPLETT
+
+- DateTime? _getMinEndDate()
+  Zeile 790 im Backup
+  Berechnet minimales Enddatum (kann am selben Tag wie Startdatum sein)
+  STATUS: FEHLT KOMPLETT
+
+- DateTime? _getMaxEndDate()
+  Zeile 797 im Backup
+  Berechnet maximales Enddatum basierend auf maximaler Endzeit
+  STATUS: FEHLT KOMPLETT
+
+- List<int> _getAvailableEndHours()
+  Zeile 804 im Backup
+  Berechnet verfügbare Endstunden basierend auf Startzeit und gewähltem Enddatum
+  Berücksichtigt: Gleicher Tag vs. späterer Tag, maximale Partylänge
+  STATUS: FEHLT KOMPLETT
+
+- List<int> _getAvailableEndMinutes([int? tempHour])
+  Zeile 840 im Backup
+  Berechnet verfügbare Endminuten basierend auf Startzeit, Enddatum und gewählter Endstunde
+  Parameter tempHour für temporäre Auswahl im Dialog
+  STATUS: FEHLT KOMPLETT
+
+================================================================================
+2. GETTER-METHODEN FÜR LEGACY-KOMPATIBILITÄT
+================================================================================
+
+- TimeOfDay? get _startTime
+  Zeile 1576 im Backup
+  Getter der _startHour und _startMinute zu TimeOfDay konvertiert
+  STATUS: FEHLT KOMPLETT
+
+- TimeOfDay? get _endTime
+  Zeile 1581 im Backup
+  Getter der _endHour und _endMinute zu TimeOfDay konvertiert
+  STATUS: FEHLT KOMPLETT
+
+================================================================================
+3. DATUM/ZEIT-AUSWAHL-METHODEN (PLATZHALTER)
+================================================================================
+
+- Future<void> _selectStartDate()
+  Zeile 878 im Backup (vollständig) vs. Zeile 210 (Platzhalter)
+  Vollständige Implementierung mit:
+  - showDatePicker mit firstDate (heute) und lastDate (max 1 Jahr)
+  - selectableDayPredicate für Datumsvalidierung
+  - Reset von _startHour, _startMinute, _endDate, _endHour, _endMinute bei Änderung
+  STATUS: NUR PLATZHALTER
+
+- Future<void> _selectStartHour()
+  Zeile 908 im Backup
+  Vollständige Implementierung mit:
+  - StatefulBuilder Dialog
+  - GridView für Stundenauswahl (4 Spalten)
+  - Automatischer Übergang zur Minutenauswahl
+  - PWA-Design (Gradient, oranger Rahmen)
+  STATUS: FEHLT KOMPLETT
+
+- Future<void> _selectStartMinute()
+  Zeile 1143 im Backup
+  Vollständige Implementierung mit:
+  - AlertDialog mit ListView oder GridView
+  - Zurück-Button zur Stundenauswahl
+  STATUS: FEHLT KOMPLETT
+
+- Future<void> _selectStartTime()
+  Zeile 1586 im Backup (vollständig) vs. Zeile 217 (Platzhalter)
+  Intelligente Routing-Logik:
+  - Prüft ob Datum gewählt
+  - Prüft ob Stunde gewählt -> öffnet Stunde-Auswahl
+  - Prüft ob Minute gewählt -> öffnet Minute-Auswahl
+  - Erlaubt Änderung wenn beide gewählt
+  STATUS: NUR PLATZHALTER
+
+- Future<void> _selectEndDate()
+  Zeile 1218 im Backup (vollständig) vs. Zeile 224 (Platzhalter)
+  Vollständige Implementierung mit:
+  - Validierung dass Startdatum/Startzeit gewählt
+  - showDatePicker mit minEndDate und maxEndDate
+  - selectableDayPredicate basierend auf Startzeit
+  - Reset von _endHour, _endMinute bei Änderung
+  STATUS: NUR PLATZHALTER
+
+- Future<void> _selectEndHour()
+  Zeile 1257 im Backup
+  Vollständige Implementierung mit:
+  - StatefulBuilder Dialog
+  - GridView für Stundenauswahl (4 Spalten)
+  - Automatischer Übergang zur Minutenauswahl
+  - PWA-Design (Gradient, oranger Rahmen)
+  - Berechnung verfügbarer Stunden basierend auf Startzeit
+  STATUS: FEHLT KOMPLETT
+
+- Future<void> _selectEndMinute()
+  Zeile 1496 im Backup
+  Vollständige Implementierung mit:
+  - AlertDialog mit ListView oder GridView
+  - Zurück-Button zur Stundenauswahl
+  - Berechnung verfügbarer Minuten basierend auf Startzeit und Endstunde
+  STATUS: FEHLT KOMPLETT
+
+- Future<void> _selectEndTime()
+  Zeile 1614 im Backup (vollständig) vs. Zeile 231 (Platzhalter)
+  Intelligente Routing-Logik:
+  - Prüft ob Startdatum/Startzeit gewählt
+  - Prüft ob Enddatum gewählt
+  - Prüft ob Endstunde gewählt -> öffnet Stunde-Auswahl
+  - Prüft ob Endminute gewählt -> öffnet Minute-Auswahl
+  - Erlaubt Änderung wenn beide gewählt
+  STATUS: NUR PLATZHALTER
+
+================================================================================
+4. PARTY-SPEICHERUNG (PLATZHALTER)
+================================================================================
+
+- Future<void> _saveParty()
+  Zeile 1653 im Backup (vollständig, ~524 Zeilen) vs. Zeile 264 (Platzhalter)
+  Vollständige Implementierung enthält:
+  
+  a) Validierungen:
+     - Form-Validierung
+     - Prüfung aller Datums-/Uhrzeit-Felder
+     - Startzeit muss mindestens 5 Minuten in Zukunft
+     - Endzeit muss nach Startzeit
+     - Maximale Partylänge: 23:59 Stunden
+     - Prüfung der Limits (Guest/User)
+  
+  b) Location-Daten-Verarbeitung:
+     - Unterscheidung zwischen 'dropdown', 'search', 'current' Modus
+     - Verarbeitung von _selectedLocationModel
+     - Verarbeitung von _selectedGooglePlace
+     - Fallback auf System-Zeitzone
+     - locationIdForPartyCode Logik für feste Codes
+  
+  c) Party-Code-Generierung:
+     - Retry-Logik (max 3 Versuche)
+     - Unterscheidung zwischen festem Code und dynamischem Code
+     - PartyService.generatePartyCode() Aufrufe
+     - PartyService.determinePartyCodeForNewParty() Fallback
+  
+  d) Unix-Timestamp-Berechnung:
+     - _convertLocalTimeToUnixTimestamp() Aufrufe
+     - Google Time Zone API Integration
+     - Fallback-Mechanismen
+     - Präzise UTC-Umrechnung für Cronjob
+  
+  e) Firebase-Speicherung:
+     - partyData Map mit allen Feldern
+     - Timestamp-Erstellung
+     - Collection 'parties' .add()
+     - Collection 'party_status' .add()
+  
+  f) Location-Speicherung (optional):
+     - Prüfung _saveLocationForFutureParties
+     - Generierung festen Codes für Location (900k-Bereich)
+     - PartyService.createOrUpdateLocation()
+     - Update der Party mit location_id
+  
+  g) Fehlerbehandlung:
+     - Try-Catch-Blöcke
+     - Netzwerkfehler-Erkennung
+     - Fehler-Dialog mit PWA-Design
+     - Erfolgs-Snackbar
+  
+  h) UI-Feedback:
+     - Loading-State (_isLoading)
+     - Erfolgs-Nachricht
+     - Navigator.pop() nach Erfolg
+  
+  STATUS: NUR PLATZHALTER (SnackBar mit "wird implementiert...")
+
+================================================================================
+5. HILFS-METHODEN FÜR PARTY-CODE UND LOCATION
+================================================================================
+
+- Future<String> _generateUniquePartyCode(int min, int max, BuildContext context)
+  Zeile 547 im Backup
+  Generiert eindeutigen Party-Code mit Retry-Logik
+  Prüft gegen 'parties' und 'locations' Collections
+  STATUS: FEHLT KOMPLETT
+
+- Future<String?> _findOrCreateLocation(String locationName, String createdBy)
+  Zeile 586 im Backup
+  Findet oder erstellt Location in Datenbank
+  Normalisiert Location-Namen (case-insensitive)
+  Generiert Party-Code für neue Locations (900k-Bereich)
+  STATUS: FEHLT KOMPLETT
+
+- Future<int> _convertLocalTimeToUnixTimestamp(...)
+  Zeile 634 im Backup
+  Konvertiert lokale Zeit zu UTC Unix-Timestamp
+  Nutzt Google Time Zone API für präzise Offset-Berechnung
+  Fallback-Mechanismen wenn API fehlschlägt
+  Kritisch für Cronjob-Genauigkeit
+  STATUS: FEHLT KOMPLETT
+
+================================================================================
+6. ERWEITERTE _loadLocations() METHODE
+================================================================================
+
+- Future<void> _loadLocations()
+  Zeile 418 im Backup (erweitert) vs. Zeile 172 (vereinfacht)
+  Backup-Version enthält:
+  - Retry-Logik mit orderBy
+  - Fallback ohne orderBy
+  - Manuelle Sortierung als letzter Fallback
+  - Manuelle Filterung wenn alle Locations geladen werden
+  - Ausführliche Debug-Logs
+  - Behandlung von 'party_code' Feld (altes Feld für Kompatibilität)
+  STATUS: VEREINFACHT (fehlt Retry-Logik und Fallbacks)
+
+================================================================================
+7. FORMATIERUNGS-METHODEN
+================================================================================
+
+- String _formatTime(TimeOfDay? time, BuildContext context)
+  Zeile 2185 im Backup
+  Vollständige Zeitformatierung mit:
+  - Lokalisierung (12h/24h Format)
+  - AM/PM Unterstützung
+  - Französische Formatierung (h statt :)
+  - "Uhr" Text für deutsche Lokalisierung
+  STATUS: FEHLT KOMPLETT
+
+- String _formatStartTime(BuildContext context)
+  Zeile 2218 im Backup (erweitert) vs. Zeile 277 (vereinfacht)
+  Backup-Version:
+  - Prüft _startDate
+  - Zeigt "Stunde wählen" wenn _startHour null
+  - Zeigt "Minute wählen" wenn _startMinute null
+  - Nutzt _formatTime() für finale Formatierung
+  Aktuelle Version: Nur einfache Formatierung ohne Zwischenzustände
+  STATUS: VEREINFACHT
+
+- String _formatEndTime(BuildContext context)
+  Zeile 2226 im Backup (erweitert) vs. Zeile 284 (vereinfacht)
+  Backup-Version:
+  - Prüft _endDate
+  - Zeigt "Stunde wählen" wenn _endHour null
+  - Zeigt "Minute wählen" wenn _endMinute null
+  - Nutzt _formatTime() für finale Formatierung
+  Aktuelle Version: Nur einfache Formatierung ohne Zwischenzustände
+  STATUS: VEREINFACHT
+
+================================================================================
+8. UI-ELEMENTE IM BUILD-METHODE
+================================================================================
+
+a) STANDORT & ZEITZONE-SEKTION (komplett fehlend):
+   Zeile 2330-2773 im Backup
+  
+   - Überschrift "Standort & Zeitzone:"
+   - Button "Aus gespeicherten Locations wählen" (wenn _locations nicht leer)
+   - RadioButton "Meine aktuelle Zeitzone nutzen" (nur bei privaten Partys)
+   - RadioButton "Ort suchen" / "Anderen Ort suchen"
+   - PlacesAutocompleteField (wenn _locationSelectionMode == 'search')
+   - Karten-Button (IconButton mit Icons.map)
+   - Anzeige ausgewählten Google Place (Container mit Name, Adresse, Clear-Button)
+   - Checkboxen für Location-Speicherung:
+     * "Location für zukünftige Partys speichern"
+     * "Immer denselben Party-Code für diesen Ort verwenden" (nested)
+   - Anzeige ausgewählter Location aus Dialog (wenn _locationSelectionMode == 'dropdown')
+   - Code-Option SwitchListTile für einmaligen Event-Code (bei festem Code)
+   - Hinweistext zur Zeitzone
+   - Privatsphäre-Switch "Location-Details auf QR-Code & Übersicht anzeigen"
+  
+  STATUS: KOMPLETT FEHLEND
+
+b) BEGINN-SEKTION (vereinfacht):
+   Zeile 2775-2883 im Backup
+  
+   Backup enthält zusätzlich:
+   - Text "Start:" als Unterüberschrift vor Datum/Zeit-Row
+   - Vollständige _formatStartTime() mit Zwischenzuständen
+   
+   STATUS: TEILWEISE VORHANDEN (fehlt "Start:" Unterüberschrift)
+
+c) ENDE-SEKTION (vereinfacht):
+   Zeile 2885-3011 im Backup
+  
+   Backup identisch mit aktueller Version
+   STATUS: VORHANDEN
+
+d) WUNSCH-LIMITS-SEKTION:
+   Zeile 3013-3077 im Backup
+  
+   Backup identisch mit aktueller Version
+   STATUS: VORHANDEN
+
+e) SPEICHERN-BUTTON:
+   Zeile 3079-3119 im Backup
+  
+   Backup identisch mit aktueller Version
+   STATUS: VORHANDEN
+
+================================================================================
+9. ZUSÄTZLICHE FUNKTIONALITÄTEN
+================================================================================
+
+- Google Places Integration:
+  - PlacesAutocompleteField Widget
+  - LocationMapPickerPage Navigation
+  - Zeitzone-Aktualisierung bei Place-Auswahl
+  - Nachladen der Zeitzone wenn nicht vorhanden
+  STATUS: FEHLT KOMPLETT (UI-Elemente nicht im build())
+
+- Location-Speicherung UI:
+  - Checkboxen für zukünftige Speicherung
+  - Option für festen Party-Code pro Location
+  STATUS: FEHLT KOMPLETT (UI-Elemente nicht im build())
+
+- Code-Verwaltung UI:
+  - SwitchListTile für einmaligen Event-Code
+  - Anzeige fester Codes
+  STATUS: FEHLT KOMPLETT (UI-Elemente nicht im build())
+
+- Privatsphäre-Einstellung:
+  - SwitchListTile für öffentliche Anzeige der Location
+  STATUS: FEHLT KOMPLETT (UI-Elemente nicht im build())
+
+================================================================================
+10. ZUSAMMENFASSUNG
+================================================================================
+
+GESAMT FEHLENDE METHODEN: 15
+- _getMinStartDateTime()
+- _getMaxEndDateTime()
+- _getAvailableStartHours()
+- _getAvailableStartMinutes()
+- _getMinEndDate()
+- _getMaxEndDate()
+- _getAvailableEndHours()
+- _getAvailableEndMinutes()
+- get _startTime
+- get _endTime
+- _selectStartHour()
+- _selectStartMinute()
+- _selectEndHour()
+- _selectEndMinute()
+- _generateUniquePartyCode()
+- _findOrCreateLocation()
+- _convertLocalTimeToUnixTimestamp()
+- _formatTime()
+
+PLATZHALTER-METHODEN (müssen implementiert werden): 5
+- _selectStartDate()
+- _selectStartTime()
+- _selectEndDate()
+- _selectEndTime()
+- _saveParty()
+
+VEREINFACHTE METHODEN: 3
+- _loadLocations() (fehlt Retry-Logik)
+- _formatStartTime() (fehlt Zwischenzustände)
+- _formatEndTime() (fehlt Zwischenzustände)
+
+FEHLENDE UI-SEKTIONEN: 1 große Sektion
+- Komplette "Standort & Zeitzone"-Sektion (~443 Zeilen im Backup)
+  Enthält: RadioButtons, PlacesAutocompleteField, Karten-Button, 
+           Checkboxen, SwitchListTiles, Anzeige-Widgets
+
+GESAMT FEHLENDE ZEILEN (geschätzt): ~2000+ Zeilen Code

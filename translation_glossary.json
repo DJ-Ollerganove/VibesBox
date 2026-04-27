@@ -1,0 +1,26 @@
+{
+  "_comment": "Fester Produktbegriff für die Song-Request-Funktion (Gast-PWA / DJ-App). DE behält Wunschbox; andere Sprachen fachlich statt wörtlicher 'Box'.",
+  "apply_wishbox_ui_script": "tools/apply_wishbox_i18n.py",
+  "wishbox_term": {
+    "de": "Wunschbox",
+    "en": "Music requests",
+    "fr": "Demandes musicales",
+    "es": "Peticiones musicales",
+    "it": "Richieste musicali",
+    "pt": "Pedidos de música",
+    "ru": "Музыкальные заявки",
+    "uk": "Музичні запити",
+    "tr": "Müzik istekleri",
+    "zh": "点歌",
+    "ar": "الطلبات الموسيقية"
+  },
+  "machine_translation": {
+    "placeholder": "[[[WISHBOX_GLOSS]]]",
+    "apply_after_translate": true,
+    "normalize_english_before_api": [
+      { "pattern": "(?i)\\bwish\\s+box\\b", "replace_with_placeholder": true },
+      { "pattern": "(?i)\\bwishbox\\b", "replace_with_placeholder": true },
+      { "pattern": "(?i)\\bwunschbox\\b", "replace_with_placeholder": true }
+    ]
+  }
+}

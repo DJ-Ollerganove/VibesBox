@@ -1,0 +1,3133 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:ui';
+import 'package:flutter/material.dart';
+import 'dart:math';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart';
+import '../l10n/app_localizations.dart';
+import '../widgets/places_autocomplete_field.dart';
+import '../models/location_result.dart';
+import '../models/location_model.dart';
+import '../services/party_service.dart';
+import '../services/google_places_service.dart';
+import '../config/app_config.dart';
+import '../utils/ui_constants.dart';
+import '../widgets/common/pwa_widget_cell.dart';
+import 'location_map_picker_page.dart';
+
+// Sanitization-Funktion: Entfernt potenziell gefährliche Zeichen und HTML-Tags
+String sanitizeInput(String input) {
+  if (input.isEmpty) return '';
+  
+  // Entferne HTML-Tags (einfache Regex-basierte Lösung)
+  String sanitized = input
+      .replaceAll(RegExp(r'<[^>]*>'), '') // Entferne HTML-Tags
+      .replaceAll(RegExp(r'javascript:', caseSensitive: false), '') // Entferne javascript: Links
+      .replaceAll(RegExp(r'on\w+\s*=', caseSensitive: false), '') // Entferne Event-Handler wie onclick=
+      .trim();
+  
+  // Entferne gefährliche Zeichen-Kombinationen
+  sanitized = sanitized
+      .replaceAll('&lt;', '<')
+      .replaceAll('&gt;', '>')
+      .replaceAll('&amp;', '&')
+      .replaceAll('&quot;', '"')
+      .replaceAll('&#x27;', "'")
+      .replaceAll('&#x2F;', '/');
+  
+  return sanitized;
+}
+
+class NeuePartyPage extends StatefulWidget {
+  const NeuePartyPage({super.key});
+
+  @override
+  State<NeuePartyPage> createState() => _NeuePartyPageState();
+
+  /// Zeigt die Neue Party Seite als Dialog
+  static Future<void> show(BuildContext context) async {
+    await showDialog(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.7),
+      barrierDismissible: true,
+      builder: (dialogContext) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.all(16),
+        child: Container(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.9,
+            maxHeight: MediaQuery.of(context).size.height * 0.9,
+          ),
+          child: const NeuePartyPage(),
+        ),
+      ),
+    );
+  }
+}
+
+class _NeuePartyPageState extends State<NeuePartyPage> {
+  final _formKey = GlobalKey<FormState>();
+  final _partyNameController = TextEditingController();
+  final _locationNameController = TextEditingController();
+  int? _selectedGuestLimit = 2; // Standard: 2 Wünsche/Stunde
+  int? _selectedUserLimit = 5; // Standard: 5 Wünsche/Stunde
+  DateTime? _startDate;
+  int? _startHour; // Schrittweise: Stunde
+  int? _startMinute; // Schrittweise: Minute
+  DateTime? _endDate;
+  int? _endHour; // Schrittweise: Stunde
+  int? _endMinute; // Schrittweise: Minute
+  String _partyType = 'private'; // Standard: privat
+  bool _isLoading = false;
+  String? _selectedLocationId; // Ausgewählte Location-ID
+  String? locationId; // Location-ID für Party-Speicherung
+  List<Map<String, dynamic>> _locations = []; // Liste aller Locations des DJs
+  LocationResult? _selectedGooglePlace; // Ausgewählter Google Place
+  String? _currentTimezoneId; // Aktuelle Zeitzone (Google Place oder System)
+  String _locationSelectionMode = 'current'; // 'current', 'search' oder 'dropdown' - Standort-Auswahlmodus
+  bool _showLocationPublicly = false; // Location-Details auf QR-Code & Übersicht anzeigen
+  bool _saveLocationForFutureParties = false; // Location für zukünftige Partys speichern
+  bool _useFixedPartyCodeForLocation = false; // Immer denselben Party-Code für diesen Ort verwenden
+  bool _useOneTimeEventCode = false; // Einmaligen Event-Code nutzen (ignoriere festen Code)
+  LocationModel? _selectedLocationModel; // Ausgewählte Location aus Dialog
+  
+  // Erstelle Listen für Dropdown-Optionen
+  final List<int> _guestLimitOptions = List.generate(11, (index) => index); // 0-10
+  final List<int> _userLimitOptions = List.generate(26, (index) => index); // 0-25
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLocations();
+    _updateSystemTimezone();
+  }
+
+  /// Ermittelt die System-Zeitzone des Geräts
+  /// Fallback-Mechanismus wenn keine Google Location gewählt wurde
+  void _updateSystemTimezone() {
+    try {
+      final now = DateTime.now();
+      // Versuche IANA-Zeitzone zu ermitteln
+      // Da timezone Package nicht verfügbar ist, verwenden wir einen einfacheren Ansatz
+      final timeZoneName = now.timeZoneName;
+      
+      // Mapping von häufigen Zeitzonen-Abkürzungen zu IANA-IDs
+      // Dies ist ein vereinfachter Ansatz - für Produktion sollte timezone Package verwendet werden
+      String systemTimezoneId;
+      
+      // Versuche über timeZoneOffset eine bessere Schätzung zu machen
+      final offset = now.timeZoneOffset;
+      final offsetHours = offset.inHours;
+      
+      // Einfaches Mapping basierend auf Offset (nicht perfekt, aber funktional)
+      if (offsetHours == 1) {
+        systemTimezoneId = 'Europe/Berlin'; // CET
+      } else if (offsetHours == 2) {
+        systemTimezoneId = 'Europe/Berlin'; // CEST
+      } else if (offsetHours == 0) {
+        systemTimezoneId = 'UTC';
+      } else {
+        // Fallback: Verwende UTC wenn unbekannt
+        systemTimezoneId = 'UTC';
+      }
+      
+      // Für Deutschland: Prüfe ob wir in Deutschland sind (vereinfacht)
+      if (timeZoneName.contains('CET') || timeZoneName.contains('CEST')) {
+        systemTimezoneId = 'Europe/Berlin';
+      } else if (timeZoneName == 'UTC') {
+        systemTimezoneId = 'UTC';
+      }
+      
+      // Verwende WidgetsBinding.instance.addPostFrameCallback um setState sicher aufzurufen
+      if (mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            setState(() {
+              _currentTimezoneId = systemTimezoneId;
+            });
+          }
+        });
+      }
+      
+      print('✅ System-Zeitzone ermittelt: $systemTimezoneId (Offset: $offsetHours Stunden)');
+    } catch (e) {
+      print('❌ Fehler beim Ermitteln der System-Zeitzone: $e');
+      // Fallback auf UTC
+      if (mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            setState(() {
+              _currentTimezoneId = 'UTC';
+            });
+          }
+        });
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _partyNameController.dispose();
+    _locationNameController.dispose();
+    super.dispose();
+  }
+
+  /// Zeigt zentrierten Dialog zur Auswahl gespeicherter Locations
+  void _showLocationSelectionDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.black,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: UIConstants.appOrange, width: 2),
+        ),
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 400, maxHeight: 600),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  border: Border(
+                    bottom: BorderSide(color: UIConstants.appOrange.withOpacity(0.3), width: 1),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.location_on, color: UIConstants.appOrange, size: 24),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        'Gespeicherte Locations',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ],
+                ),
+              ),
+              // Liste der Locations
+              Flexible(
+                child: _locations.isEmpty
+                    ? Padding(
+                        padding: const EdgeInsets.all(32.0),
+                        child: Text(
+                          'Keine gespeicherten Locations vorhanden',
+                          style: TextStyle(color: Colors.grey.shade400),
+                          textAlign: TextAlign.center,
+                        ),
+                      )
+                    : ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: _locations.length,
+                        itemBuilder: (context, index) {
+                          final location = _locations[index];
+                          return ListTile(
+                            leading: Icon(Icons.location_city, color: UIConstants.appOrange),
+                            title: Text(
+                              location['location_name'] as String,
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                            ),
+                            subtitle: location['address'] != null && (location['address'] as String).isNotEmpty
+                                ? Text(
+                                    location['address'] as String,
+                                    style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                                  )
+                                : null,
+                            trailing: Icon(Icons.chevron_right, color: UIConstants.appOrange),
+                            onTap: () async {
+                              // Lade vollständiges Location-Dokument
+                              final locationDoc = await FirebaseFirestore.instance
+                                  .collection('locations')
+                                  .doc(location['id'] as String)
+                                  .get();
+                              
+                              if (!mounted || !locationDoc.exists) return;
+                              
+                              final locationModel = LocationModel.fromFirestore(locationDoc);
+                              final hasFixedCode = locationModel.fixedPartyCode != null;
+                              
+                              // Wenn Location einen festen Code hat, zeige Option für einmaligen Code (für beide Party-Typen)
+                              if (hasFixedCode) {
+                                Navigator.pop(context); // Schließe Location-Auswahl-Dialog
+                                
+                                // Zeige Bestätigungs-Dialog mit Option für einmaligen Code
+                                bool useCustomCode = false;
+                                await showDialog(
+                                  context: context,
+                                  builder: (confirmContext) => StatefulBuilder(
+                                    builder: (context, setDialogState) => Dialog(
+                                      backgroundColor: Colors.black,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(16),
+                                        side: BorderSide(color: UIConstants.appOrange, width: 2),
+                                      ),
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(24.0),
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Icon(Icons.location_on, color: UIConstants.appOrange, size: 24),
+                                                const SizedBox(width: 12),
+                                                Expanded(
+                                                  child: Text(
+                                                    'Location auswählen',
+                                                    style: TextStyle(
+                                                      color: Colors.white,
+                                                      fontSize: 18,
+                                                      fontWeight: FontWeight.bold,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 20),
+                                            Text(
+                                              locationModel.locationName,
+                                              style: TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 16,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                            if (locationModel.address != null && locationModel.address!.isNotEmpty) ...[
+                                              const SizedBox(height: 8),
+                                              Text(
+                                                locationModel.address!,
+                                                style: TextStyle(color: Colors.grey.shade400, fontSize: 14),
+                                              ),
+                                            ],
+                                            const SizedBox(height: 24),
+                                            // Checkbox für einmaligen Code
+                                            CheckboxListTile(
+                                              title: Text(
+                                                'Einmaligen Code für dieses Event generieren?',
+                                                style: TextStyle(color: Colors.white, fontSize: 14),
+                                              ),
+                                              subtitle: Text(
+                                                'Ansonsten wird der feste Code dieser Location verwendet',
+                                                style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                                              ),
+                                              value: useCustomCode,
+                                              activeColor: UIConstants.appOrange,
+                                              checkColor: Colors.black,
+                                              onChanged: (value) {
+                                                setDialogState(() {
+                                                  useCustomCode = value ?? false;
+                                                });
+                                              },
+                                              contentPadding: EdgeInsets.zero,
+                                            ),
+                                            const SizedBox(height: 24),
+                                            Row(
+                                              mainAxisAlignment: MainAxisAlignment.end,
+                                              children: [
+                                                TextButton(
+                                                  onPressed: () => Navigator.pop(context),
+                                                  child: Text(
+                                                    'Abbrechen',
+                                                    style: TextStyle(color: Colors.grey.shade400),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 12),
+                                                ElevatedButton(
+                                                  style: ElevatedButton.styleFrom(
+                                                    backgroundColor: UIConstants.appOrange,
+                                                    foregroundColor: Colors.black,
+                                                  ),
+                                                  onPressed: () {
+                                                    Navigator.pop(context);
+                                                    // Übernehme Location mit Option
+                                                    if (mounted) {
+                                                      setState(() {
+                                                        _selectedLocationModel = locationModel;
+                                                        _selectedLocationId = location['id'] as String;
+                                                        _locationSelectionMode = 'dropdown';
+                                                        _selectedGooglePlace = null;
+                                                        _locationNameController.clear();
+                                                        _currentTimezoneId = locationModel.timezoneId ?? 'UTC';
+                                                        locationId = location['id'] as String;
+                                                        _saveLocationForFutureParties = false;
+                                                        _useFixedPartyCodeForLocation = false;
+                                                        _useOneTimeEventCode = useCustomCode; // WICHTIG: Setze Option
+                                                      });
+                                                      print('✅ Location ausgewählt: ${locationModel.locationName}');
+                                                      print('   Einmaligen Code generieren: $useCustomCode');
+                                                      if (locationModel.fixedPartyCode != null) {
+                                                        print('   Fester Code vorhanden: ${locationModel.fixedPartyCode}');
+                                                      }
+                                                    }
+                                                  },
+                                                  child: const Text('Auswählen'),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              } else {
+                                // Kein fester Code oder private Party - direkt übernehmen
+                                Navigator.pop(context);
+                                if (mounted) {
+                                  setState(() {
+                                    _selectedLocationModel = locationModel;
+                                    _selectedLocationId = location['id'] as String;
+                                    _locationSelectionMode = 'dropdown';
+                                    _selectedGooglePlace = null;
+                                    _locationNameController.clear();
+                                    _currentTimezoneId = locationModel.timezoneId ?? 'UTC';
+                                    locationId = location['id'] as String;
+                                    _saveLocationForFutureParties = false;
+                                    _useFixedPartyCodeForLocation = false;
+                                    _useOneTimeEventCode = false;
+                                  });
+                                  print('✅ Location ausgewählt: ${locationModel.locationName}');
+                                }
+                              }
+                            },
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Lade alle Locations des aktuellen DJs aus der Datenbank (mit neuen Feldern)
+  Future<void> _loadLocations() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        print('⚠️ Kein User eingeloggt, kann keine Locations laden');
+        return;
+      }
+      
+      print('🔍 Lade Locations für User: ${user.uid} (Email: ${user.email})');
+      
+      // Versuche zuerst mit orderBy
+      try {
+        final locationsSnapshot = await FirebaseFirestore.instance
+            .collection('locations')
+            .where('created_by', isEqualTo: user.uid)
+            .orderBy('location_name')
+            .get();
+        
+        setState(() {
+          _locations = locationsSnapshot.docs.map((doc) {
+            final data = doc.data();
+            return {
+              'id': doc.id,
+              'location_name': data['location_name'] ?? '',
+              'address': data['address'] ?? '',
+              'latitude': data['latitude'],
+              'longitude': data['longitude'],
+              'timezone_id': data['timezone_id'] ?? 'UTC',
+              'fixed_party_code': data['fixed_party_code'],
+              'party_code': data['party_code'] ?? '', // Altes Feld (für Kompatibilität)
+              'created_by': data['created_by'] ?? '',
+            };
+          }).toList();
+        });
+        
+        print('✅ Locations geladen (mit orderBy): ${_locations.length}');
+      } catch (e) {
+        // Falls orderBy fehlschlägt (z.B. wegen fehlendem Index), versuche ohne orderBy
+        print('⚠️ Fehler mit orderBy, versuche ohne: $e');
+        try {
+          final locationsSnapshot = await FirebaseFirestore.instance
+              .collection('locations')
+              .where('created_by', isEqualTo: user.uid)
+              .get();
+          
+          final locationsList = locationsSnapshot.docs.map((doc) {
+            final data = doc.data();
+            return {
+              'id': doc.id,
+              'location_name': data['location_name'] ?? '',
+              'address': data['address'] ?? '',
+              'latitude': data['latitude'],
+              'longitude': data['longitude'],
+              'timezone_id': data['timezone_id'] ?? 'UTC',
+              'fixed_party_code': data['fixed_party_code'],
+              'party_code': data['party_code'] ?? '', // Altes Feld (für Kompatibilität)
+              'created_by': data['created_by'] ?? '',
+            };
+          }).toList();
+          
+          // Sortiere manuell nach location_name
+          locationsList.sort((a, b) {
+            final nameA = (a['location_name'] as String).toLowerCase();
+            final nameB = (b['location_name'] as String).toLowerCase();
+            return nameA.compareTo(nameB);
+          });
+          
+          setState(() {
+            _locations = locationsList;
+          });
+          
+          print('✅ Locations geladen (ohne orderBy, manuell sortiert): ${_locations.length}');
+        } catch (e2) {
+          print('❌ Fehler beim Laden ohne orderBy: $e2');
+          // Als letzter Fallback: Lade alle Locations (ohne Filter)
+          print('⚠️ Versuche alle Locations zu laden (ohne Filter)...');
+          try {
+            final allLocationsSnapshot = await FirebaseFirestore.instance
+                .collection('locations')
+                .get();
+            
+            // Filtere manuell nach created_by
+            final filteredLocations = allLocationsSnapshot.docs.where((doc) {
+              final data = doc.data();
+              final createdBy = data['created_by'] as String?;
+              return createdBy == user.uid;
+            }).map((doc) {
+              final data = doc.data();
+              return {
+                'id': doc.id,
+                'location_name': data['location_name'] ?? '',
+                'address': data['address'] ?? '',
+                'latitude': data['latitude'],
+                'longitude': data['longitude'],
+                'timezone_id': data['timezone_id'] ?? 'UTC',
+                'fixed_party_code': data['fixed_party_code'],
+                'party_code': data['party_code'] ?? '', // Altes Feld (für Kompatibilität)
+                'created_by': data['created_by'] ?? '',
+              };
+            }).toList();
+            
+            filteredLocations.sort((a, b) {
+              final nameA = (a['location_name'] as String).toLowerCase();
+              final nameB = (b['location_name'] as String).toLowerCase();
+              return nameA.compareTo(nameB);
+            });
+            
+            setState(() {
+              _locations = filteredLocations;
+            });
+            
+            print('✅ Locations geladen (manuell gefiltert): ${_locations.length}');
+          } catch (e3) {
+            print('❌ Fehler beim Laden aller Locations: $e3');
+          }
+        }
+      }
+      
+      // Debug: Zeige alle geladenen Locations
+      print('📋 Finale Locations-Liste: ${_locations.length}');
+      for (var location in _locations) {
+        print('  ✅ Location: ${location['location_name']} (ID: ${location['id']})');
+      }
+    } catch (e) {
+      print('❌ Fehler beim Laden der Locations: $e');
+    }
+  }
+
+  // Generiere einen eindeutigen Party-Code
+  Future<String> _generateUniquePartyCode(int min, int max, BuildContext context) async {
+    final random = Random();
+    String code = '';
+    bool isUnique = false;
+    int attempts = 0;
+    const maxAttempts = 100;
+    
+    while (!isUnique && attempts < maxAttempts) {
+      code = (min + random.nextInt(max - min + 1)).toString();
+      
+      // Prüfe ob Code bereits existiert
+      final existingParties = await FirebaseFirestore.instance
+          .collection('parties')
+          .where('party_code', isEqualTo: code)
+          .limit(1)
+          .get();
+      
+      final existingLocations = await FirebaseFirestore.instance
+          .collection('locations')
+          .where('party_code', isEqualTo: code)
+          .limit(1)
+          .get();
+      
+      if (existingParties.docs.isEmpty && existingLocations.docs.isEmpty) {
+        isUnique = true;
+      } else {
+        attempts++;
+      }
+    }
+    
+    if (!isUnique || code.isEmpty) {
+      final localizations = AppLocalizations.of(context);
+      throw Exception(localizations?.error_generating_party_code ?? 'Konnte keinen eindeutigen Party-Code generieren');
+    }
+    
+    return code;
+  }
+
+  // Finde oder erstelle eine Location
+  Future<String?> _findOrCreateLocation(String locationName, String createdBy) async {
+    if (locationName.isEmpty) {
+      return null;
+    }
+    
+    // Normalisiere Location-Name für Vergleich (kleinschreibung, trim)
+    final normalizedName = locationName.trim().toLowerCase();
+    
+    // Prüfe ob Location bereits existiert (case-insensitive)
+    final existingLocations = await FirebaseFirestore.instance
+        .collection('locations')
+        .get();
+    
+    for (var doc in existingLocations.docs) {
+      final data = doc.data();
+      final existingName = (data['location_name'] ?? '').toString().trim().toLowerCase();
+      if (existingName == normalizedName) {
+        print('Location bereits vorhanden: ${doc.id}');
+        return doc.id;
+      }
+    }
+    
+    // Location existiert nicht, erstelle neue
+    print('Erstelle neue Location: $locationName');
+    
+    // Generiere eindeutigen Partycode für Location (900000-999999)
+    final locationCode = await _generateUniquePartyCode(900000, 999999, context);
+    
+    final locationRef = await FirebaseFirestore.instance
+        .collection('locations')
+        .add({
+      'location_name': sanitizeInput(locationName.trim()),
+      'party_code': locationCode,
+      'created_by': createdBy,
+      'created_at': Timestamp.now(),
+    });
+    
+    print('Neue Location erstellt: ${locationRef.id} mit Code: $locationCode');
+    
+    // Lade Locations neu
+    await _loadLocations();
+    
+    return locationRef.id;
+  }
+
+  /// Konvertiert lokale Zeit zu UTC Unix-Timestamp (in Sekunden seit Epoch)
+  /// Nutzt Google Time Zone API für präzise Offset-Berechnung
+  /// WICHTIG: Diese Funktion ist kritisch für den Cronjob - muss absolut präzise sein
+  Future<int> _convertLocalTimeToUnixTimestamp(
+    DateTime localDateTime,
+    String timezoneId,
+    double? latitude,
+    double? longitude,
+  ) async {
+    try {
+      // Wenn wir Koordinaten haben, nutze Google Time Zone API für präzisen Offset
+      if (latitude != null && longitude != null && latitude != 0.0 && longitude != 0.0) {
+        try {
+          final apiKey = AppConfig.googleMapsApiKey;
+          
+          // Erstelle einen vorläufigen UTC-Timestamp für die API-Anfrage
+          // Verwende die lokale Zeit als Basis für die Schätzung
+          final tempUtcDateTime = DateTime.utc(
+            localDateTime.year,
+            localDateTime.month,
+            localDateTime.day,
+            localDateTime.hour,
+            localDateTime.minute,
+          );
+          final tempUtcTimestamp = tempUtcDateTime.millisecondsSinceEpoch ~/ 1000;
+          
+          final url = Uri.parse(
+            'https://maps.googleapis.com/maps/api/timezone/json'
+            '?location=$latitude,$longitude'
+            '&timestamp=$tempUtcTimestamp'
+            '&key=$apiKey'
+          );
+
+          final response = await http.get(url);
+          
+          if (response.statusCode == 200) {
+            final data = json.decode(response.body);
+            if (data['status'] == 'OK') {
+              final rawOffset = (data['rawOffset'] as num?)?.toInt() ?? 0; // Sekunden (ohne DST)
+              final dstOffset = (data['dstOffset'] as num?)?.toInt() ?? 0; // Sekunden (DST)
+              final totalOffset = rawOffset + dstOffset; // Gesamt-Offset in Sekunden
+              
+              // Logik: Lokale Zeit = UTC Zeit + Offset
+              // Also: UTC Zeit = Lokale Zeit - Offset
+              // Erstelle UTC DateTime aus lokaler Zeit
+              final utcDateTime = DateTime.utc(
+                localDateTime.year,
+                localDateTime.month,
+                localDateTime.day,
+                localDateTime.hour,
+                localDateTime.minute,
+              );
+              
+              // Subtrahiere den Offset um die echte UTC-Zeit zu bekommen
+              final actualUtcDateTime = utcDateTime.subtract(Duration(seconds: totalOffset));
+              final unixTimestamp = actualUtcDateTime.millisecondsSinceEpoch ~/ 1000;
+              
+              print('   ✅ Präzise Umrechnung: Lokal ${localDateTime.year}-${localDateTime.month.toString().padLeft(2, '0')}-${localDateTime.day.toString().padLeft(2, '0')} ${localDateTime.hour.toString().padLeft(2, '0')}:${localDateTime.minute.toString().padLeft(2, '0')} -> UTC Unix: $unixTimestamp (Offset: ${totalOffset}s = ${totalOffset ~/ 3600}h)');
+              return unixTimestamp;
+            }
+          }
+        } catch (e) {
+          print('⚠️ Google Time Zone API Fehler, verwende Fallback: $e');
+        }
+      }
+      
+      // Fallback: Verwende System-Zeitzone (nicht perfekt, aber funktional)
+      // Dies wird verwendet wenn keine Koordinaten vorhanden sind (z.B. "Meine aktuelle Zeitzone")
+      final utcDateTime = localDateTime.toUtc();
+      final unixTimestamp = utcDateTime.millisecondsSinceEpoch ~/ 1000;
+      print('   ⚠️ Fallback-Umrechnung (System-Zeitzone): $unixTimestamp');
+      return unixTimestamp;
+    } catch (e) {
+      print('❌ Fehler bei Zeit-Umrechnung: $e');
+      // Letzter Fallback
+      final fallbackTimestamp = localDateTime.toUtc().millisecondsSinceEpoch ~/ 1000;
+      print('   ❌ Letzter Fallback: $fallbackTimestamp');
+      return fallbackTimestamp;
+    }
+  }
+
+  /// Berechnet die minimale Startzeit (aktuell + 5 Minuten)
+  DateTime _getMinStartDateTime() {
+    final now = DateTime.now();
+    return now.add(const Duration(minutes: 5));
+  }
+
+  /// Berechnet die maximale Endzeit (Startzeit + 23:59 Stunden)
+  DateTime? _getMaxEndDateTime() {
+    if (_startDate == null || _startHour == null || _startMinute == null) {
+      return null;
+    }
+    final startDateTime = DateTime(
+      _startDate!.year,
+      _startDate!.month,
+      _startDate!.day,
+      _startHour!,
+      _startMinute!,
+    );
+    // Maximal 23 Stunden und 59 Minuten später
+    return startDateTime.add(const Duration(hours: 23, minutes: 59));
+  }
+
+  /// Berechnet verfügbare Startstunden basierend auf gewähltem Datum
+  List<int> _getAvailableStartHours() {
+    if (_startDate == null) return [];
+    
+    final now = DateTime.now();
+    final minStartDateTime = _getMinStartDateTime();
+    
+    // Wenn das gewählte Datum heute ist
+    if (_startDate!.year == now.year && 
+        _startDate!.month == now.month && 
+        _startDate!.day == now.day) {
+      // Erste verfügbare Stunde ist die Stunde von minStartDateTime
+      // Wenn minStartDateTime.minute > 0, dann ist die erste Stunde noch verfügbar
+      // Beispiel: Wenn es 11:54 ist, können wir noch 11 wählen (dann aber nur Minute 59)
+      // Wenn es 11:55 ist, können wir erst ab 12 wählen
+      final firstHour = minStartDateTime.hour;
+      // Wenn minStartDateTime.minute == 0, bedeutet das, dass wir bereits in der nächsten Stunde sind
+      // In diesem Fall sollten wir ab der nächsten Stunde starten
+      final startHour = minStartDateTime.minute > 0 ? firstHour : firstHour + 1;
+      if (startHour >= 24) return [];
+      return List.generate(24 - startHour, (index) => startHour + index);
+    } else {
+      // Zukünftiges Datum: alle 24 Stunden verfügbar
+      return List.generate(24, (index) => index);
+    }
+  }
+
+  /// Berechnet verfügbare Startminuten basierend auf gewählter Stunde
+  List<int> _getAvailableStartMinutes([int? tempHour]) {
+    final hourToUse = tempHour ?? _startHour;
+    if (_startDate == null || hourToUse == null) return [];
+    
+    final now = DateTime.now();
+    final minStartDateTime = _getMinStartDateTime();
+    
+    // Wenn das gewählte Datum heute ist und die Stunde die aktuelle Stunde ist
+    if (_startDate!.year == now.year && 
+        _startDate!.month == now.month && 
+        _startDate!.day == now.day &&
+        hourToUse == now.hour) {
+      // Erste verfügbare Minute ist minStartDateTime.minute
+      // Wenn minStartDateTime.minute > 0, dann müssen wir mindestens diese Minute wählen
+      // Beispiel: Wenn es 11:54 ist, können wir noch 11:59 wählen
+      // Wenn es 11:55 ist, können wir nur noch 11:56-11:59 wählen
+      final firstMinute = minStartDateTime.minute;
+      // Wenn firstMinute == 0, bedeutet das, dass wir bereits in der nächsten Stunde sind
+      // In diesem Fall sollten wir keine Minuten für diese Stunde anbieten
+      if (firstMinute == 0) return [];
+      return List.generate(60 - firstMinute, (index) => firstMinute + index);
+    } else {
+      // Zukünftiges Datum oder zukünftige Stunde: alle 60 Minuten verfügbar
+      return List.generate(60, (index) => index);
+    }
+  }
+
+  /// Berechnet verfügbare Enddaten basierend auf Startzeit
+  DateTime? _getMinEndDate() {
+    if (_startDate == null || _startHour == null || _startMinute == null) {
+      return null;
+    }
+    return _startDate; // Enddatum kann am selben Tag wie Startdatum sein
+  }
+
+  DateTime? _getMaxEndDate() {
+    final maxEndDateTime = _getMaxEndDateTime();
+    if (maxEndDateTime == null) return null;
+    return DateTime(maxEndDateTime.year, maxEndDateTime.month, maxEndDateTime.day);
+  }
+
+  /// Berechnet verfügbare Endstunden basierend auf Startzeit und gewähltem Enddatum
+  List<int> _getAvailableEndHours() {
+    if (_startDate == null || _startHour == null || _startMinute == null || _endDate == null) {
+      return [];
+    }
+    
+    final startDateTime = DateTime(
+      _startDate!.year,
+      _startDate!.month,
+      _startDate!.day,
+      _startHour!,
+      _startMinute!,
+    );
+    final maxEndDateTime = _getMaxEndDateTime()!;
+    
+    // Wenn Enddatum == Startdatum
+    if (_endDate!.year == _startDate!.year &&
+        _endDate!.month == _startDate!.month &&
+        _endDate!.day == _startDate!.day) {
+      // Erste verfügbare Stunde ist Startstunde (aber nur wenn noch Zeit für mindestens 1 Minute)
+      // Wenn Startminute < 59, kann die Startstunde gewählt werden
+      // Sonst muss es die nächste Stunde sein
+      final minHour = _startMinute! < 59 ? _startHour! : _startHour! + 1;
+      final maxHour = maxEndDateTime.hour;
+      if (maxHour < minHour) return [];
+      if (maxHour == minHour && maxEndDateTime.hour == _startHour && maxEndDateTime.minute < _startMinute! + 1) {
+        return [];
+      }
+      return List.generate(maxHour - minHour + 1, (index) => minHour + index);
+    } else {
+      // Enddatum ist später: alle Stunden bis maxEndDateTime.hour
+      final maxHour = maxEndDateTime.hour;
+      return List.generate(maxHour + 1, (index) => index);
+    }
+  }
+
+  /// Berechnet verfügbare Endminuten basierend auf Startzeit, Enddatum und gewählter Endstunde
+  List<int> _getAvailableEndMinutes([int? tempHour]) {
+    final hourToUse = tempHour ?? _endHour;
+    if (_startDate == null || _startHour == null || _startMinute == null || 
+        _endDate == null || hourToUse == null) {
+      return [];
+    }
+    
+    final startDateTime = DateTime(
+      _startDate!.year,
+      _startDate!.month,
+      _startDate!.day,
+      _startHour!,
+      _startMinute!,
+    );
+    final maxEndDateTime = _getMaxEndDateTime()!;
+    
+    // Wenn Enddatum == Startdatum und Endstunde == Startstunde
+    if (_endDate!.year == _startDate!.year &&
+        _endDate!.month == _startDate!.month &&
+        _endDate!.day == _startDate!.day &&
+        hourToUse == _startHour) {
+      // Erste verfügbare Minute ist Startminute + 1
+      final minMinute = _startMinute! + 1;
+      final maxMinute = 59; // Maximal bis Minute 59 in derselben Stunde
+      if (maxMinute < minMinute) return [];
+      return List.generate(maxMinute - minMinute + 1, (index) => minMinute + index);
+    } else if (_endDate!.year == maxEndDateTime.year &&
+               _endDate!.month == maxEndDateTime.month &&
+               _endDate!.day == maxEndDateTime.day &&
+               hourToUse == maxEndDateTime.hour) {
+      // Enddatum/Stunde ist das Maximum: nur Minuten bis maxEndDateTime.minute
+      return List.generate(maxEndDateTime.minute + 1, (index) => index);
+    } else {
+      // Normale Situation: alle 60 Minuten verfügbar
+      return List.generate(60, (index) => index);
+    }
+  }
+
+  Future<void> _selectStartDate() async {
+    final now = DateTime.now();
+    final maxDate = now.add(const Duration(days: 365));
+    
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _startDate ?? now,
+      firstDate: now, // Nur ab heute
+      lastDate: maxDate, // Max 1 Jahr in die Zukunft
+      selectableDayPredicate: (DateTime date) {
+        // Alle Tage zwischen heute und maxDate sind wählbar
+        return date.isAfter(now.subtract(const Duration(days: 1))) && 
+               date.isBefore(maxDate.add(const Duration(days: 1)));
+      },
+    );
+    
+    if (picked != null) {
+      setState(() {
+        _startDate = picked;
+        // Zurücksetzen von Stunde/Minute wenn Datum geändert wird
+        _startHour = null;
+        _startMinute = null;
+        // Endzeit zurücksetzen wenn Startzeit geändert wird
+        _endDate = null;
+        _endHour = null;
+        _endMinute = null;
+      });
+    }
+  }
+
+  Future<void> _selectStartHour() async {
+    if (_startDate == null) return;
+    
+    final availableHours = _getAvailableStartHours();
+    if (availableHours.isEmpty) return;
+    
+    int? selectedHour;
+    bool showMinutes = false;
+    
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          if (showMinutes && selectedHour != null) {
+            // Minutenauswahl anzeigen - Kompakt mit Grid
+            final availableMinutes = _getAvailableStartMinutes(selectedHour);
+            return Container(
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment(-1.0, -1.0),
+                  end: Alignment(1.0, 1.0),
+                  colors: [
+                    Color(0xFF1F2937),
+                    Color(0xFF121417),
+                  ],
+                ),
+                border: Border.all(
+                  color: UIConstants.appOrange,
+                  width: 2,
+                ),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Row(
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.arrow_back, color: UIConstants.appOrange),
+                          onPressed: () {
+                            setDialogState(() {
+                              showMinutes = false;
+                            });
+                          },
+                        ),
+                        Expanded(
+                          child: Text(
+                            'Startminute wählen',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Flexible(
+                    child: Container(
+                      constraints: const BoxConstraints(maxHeight: 400),
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: GridView.builder(
+                        shrinkWrap: true,
+                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 6,
+                          crossAxisSpacing: 8,
+                          mainAxisSpacing: 8,
+                          childAspectRatio: 1.2,
+                        ),
+                        itemCount: availableMinutes.length,
+                        itemBuilder: (context, index) {
+                          final minute = availableMinutes[index];
+                          final isSelected = _startMinute == minute;
+                          return InkWell(
+                            onTap: () {
+                              setState(() {
+                                _startHour = selectedHour;
+                                _startMinute = minute;
+                                // Endzeit zurücksetzen wenn Startzeit geändert wird
+                                _endDate = null;
+                                _endHour = null;
+                                _endMinute = null;
+                              });
+                              Navigator.pop(dialogContext);
+                            },
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? UIConstants.appOrange.withOpacity(0.5)
+                                    : Colors.grey.shade800,
+                                border: Border.all(
+                                  color: isSelected
+                                      ? UIConstants.appOrange
+                                      : Colors.grey.shade600,
+                                  width: isSelected ? 2 : 1,
+                                ),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Center(
+                                child: Text(
+                                  minute.toString().padLeft(2, '0'),
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: isSelected
+                                        ? FontWeight.bold
+                                        : FontWeight.normal,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(dialogContext),
+                      child: Text(
+                        'Abbrechen',
+                        style: TextStyle(color: UIConstants.appOrange),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+          
+            // Stundenauswahl anzeigen - Kompakt mit Grid
+          return Container(
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment(-1.0, -1.0),
+                end: Alignment(1.0, 1.0),
+                colors: [
+                  Color(0xFF1F2937),
+                  Color(0xFF121417),
+                ],
+              ),
+              border: Border.all(
+                color: UIConstants.appOrange,
+                width: 2,
+              ),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Text(
+                    'Startstunde wählen',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                Flexible(
+                  child: Container(
+                    constraints: const BoxConstraints(maxHeight: 400),
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: GridView.builder(
+                      shrinkWrap: true,
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 4,
+                        crossAxisSpacing: 8,
+                        mainAxisSpacing: 8,
+                        childAspectRatio: 1.5,
+                      ),
+                      itemCount: availableHours.length,
+                      itemBuilder: (context, index) {
+                        final hour = availableHours[index];
+                        final isSelected = _startHour == hour;
+                        return InkWell(
+                          onTap: () {
+                            selectedHour = hour;
+                            setDialogState(() {
+                              showMinutes = true;
+                            });
+                          },
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: isSelected
+                                  ? UIConstants.appOrange.withOpacity(0.5)
+                                  : Colors.grey.shade800,
+                              border: Border.all(
+                                color: isSelected
+                                    ? UIConstants.appOrange
+                                    : Colors.grey.shade600,
+                                width: isSelected ? 2 : 1,
+                              ),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Center(
+                              child: Text(
+                                '${hour.toString().padLeft(2, '0')}:00',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: isSelected
+                                      ? FontWeight.bold
+                                      : FontWeight.normal,
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    child: Text(
+                      'Abbrechen',
+                      style: TextStyle(color: UIConstants.appOrange),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _selectStartMinute() async {
+    if (_startDate == null || _startHour == null) return;
+    
+    final availableMinutes = _getAvailableStartMinutes();
+    if (availableMinutes.isEmpty) return;
+    
+    final selectedMinute = await showDialog<int>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.black,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: UIConstants.appOrange, width: 2),
+        ),
+        title: Row(
+          children: [
+            IconButton(
+              icon: const Icon(Icons.arrow_back, color: UIConstants.appOrange),
+              onPressed: () {
+                Navigator.pop(context);
+                // Öffne Stundenauswahl erneut
+                _selectStartHour();
+              },
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Startminute wählen',
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: availableMinutes.length,
+            itemBuilder: (context, index) {
+              final minute = availableMinutes[index];
+              return ListTile(
+                title: Text(
+                  '${_startHour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}',
+                  style: const TextStyle(color: Colors.white),
+                ),
+                selected: _startMinute == minute,
+                selectedTileColor: UIConstants.appOrange.withOpacity(0.3),
+                onTap: () => Navigator.pop(context, minute),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(
+              'Abbrechen',
+              style: TextStyle(color: UIConstants.appOrange),
+            ),
+          ),
+        ],
+      ),
+    );
+    
+    if (selectedMinute != null) {
+      setState(() {
+        _startMinute = selectedMinute;
+        // Endzeit zurücksetzen wenn Startzeit geändert wird
+        _endDate = null;
+        _endHour = null;
+        _endMinute = null;
+      });
+    }
+  }
+
+  Future<void> _selectEndDate() async {
+    if (_startDate == null || _startHour == null || _startMinute == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Bitte wähle zuerst Startdatum und Startzeit aus.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+    
+    final minEndDate = _getMinEndDate();
+    final maxEndDate = _getMaxEndDate();
+    if (minEndDate == null || maxEndDate == null) return;
+    
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _endDate ?? minEndDate,
+      firstDate: minEndDate,
+      lastDate: maxEndDate,
+      selectableDayPredicate: (DateTime date) {
+        // Nur Tage zwischen minEndDate und maxEndDate sind wählbar
+        return (date.isAfter(minEndDate.subtract(const Duration(days: 1))) || 
+                date.isAtSameMomentAs(minEndDate)) &&
+               (date.isBefore(maxEndDate.add(const Duration(days: 1))) || 
+                date.isAtSameMomentAs(maxEndDate));
+      },
+    );
+    
+    if (picked != null) {
+      setState(() {
+        _endDate = picked;
+        // Zurücksetzen von Stunde/Minute wenn Datum geändert wird
+        _endHour = null;
+        _endMinute = null;
+      });
+    }
+  }
+
+  Future<void> _selectEndHour() async {
+    if (_endDate == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Bitte wähle zuerst das Enddatum aus.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+    
+    final availableHours = _getAvailableEndHours();
+    if (availableHours.isEmpty) return;
+    
+    int? selectedHour;
+    bool showMinutes = false;
+    
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          if (showMinutes && selectedHour != null) {
+            // Minutenauswahl anzeigen - Kompakt mit Grid
+            final availableMinutes = _getAvailableEndMinutes(selectedHour);
+            return Container(
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment(-1.0, -1.0),
+                  end: Alignment(1.0, 1.0),
+                  colors: [
+                    Color(0xFF1F2937),
+                    Color(0xFF121417),
+                  ],
+                ),
+                border: Border.all(
+                  color: UIConstants.appOrange,
+                  width: 2,
+                ),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Row(
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.arrow_back, color: UIConstants.appOrange),
+                          onPressed: () {
+                            setDialogState(() {
+                              showMinutes = false;
+                            });
+                          },
+                        ),
+                        Expanded(
+                          child: Text(
+                            'Endminute wählen',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Flexible(
+                    child: Container(
+                      constraints: const BoxConstraints(maxHeight: 400),
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: GridView.builder(
+                        shrinkWrap: true,
+                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 6,
+                          crossAxisSpacing: 8,
+                          mainAxisSpacing: 8,
+                          childAspectRatio: 1.2,
+                        ),
+                        itemCount: availableMinutes.length,
+                        itemBuilder: (context, index) {
+                          final minute = availableMinutes[index];
+                          final isSelected = _endMinute == minute;
+                          return InkWell(
+                            onTap: () {
+                              setState(() {
+                                _endHour = selectedHour;
+                                _endMinute = minute;
+                              });
+                              Navigator.pop(dialogContext);
+                            },
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? UIConstants.appOrange.withOpacity(0.5)
+                                    : Colors.grey.shade800,
+                                border: Border.all(
+                                  color: isSelected
+                                      ? UIConstants.appOrange
+                                      : Colors.grey.shade600,
+                                  width: isSelected ? 2 : 1,
+                                ),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Center(
+                                child: Text(
+                                  minute.toString().padLeft(2, '0'),
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: isSelected
+                                        ? FontWeight.bold
+                                        : FontWeight.normal,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(dialogContext),
+                      child: Text(
+                        'Abbrechen',
+                        style: TextStyle(color: UIConstants.appOrange),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+          
+          // Stundenauswahl anzeigen - Kompakt mit Grid
+          return Container(
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment(-1.0, -1.0),
+                end: Alignment(1.0, 1.0),
+                colors: [
+                  Color(0xFF1F2937),
+                  Color(0xFF121417),
+                ],
+              ),
+              border: Border.all(
+                color: UIConstants.appOrange,
+                width: 2,
+              ),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Text(
+                    'Endstunde wählen',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                Flexible(
+                  child: Container(
+                    constraints: const BoxConstraints(maxHeight: 400),
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: GridView.builder(
+                      shrinkWrap: true,
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 4,
+                        crossAxisSpacing: 8,
+                        mainAxisSpacing: 8,
+                        childAspectRatio: 1.5,
+                      ),
+                      itemCount: availableHours.length,
+                      itemBuilder: (context, index) {
+                        final hour = availableHours[index];
+                        final isSelected = _endHour == hour;
+                        return InkWell(
+                          onTap: () {
+                            selectedHour = hour;
+                            setDialogState(() {
+                              showMinutes = true;
+                            });
+                          },
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: isSelected
+                                  ? UIConstants.appOrange.withOpacity(0.5)
+                                  : Colors.grey.shade800,
+                              border: Border.all(
+                                color: isSelected
+                                    ? UIConstants.appOrange
+                                    : Colors.grey.shade600,
+                                width: isSelected ? 2 : 1,
+                              ),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Center(
+                              child: Text(
+                                '${hour.toString().padLeft(2, '0')}:00',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: isSelected
+                                      ? FontWeight.bold
+                                      : FontWeight.normal,
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    child: Text(
+                      'Abbrechen',
+                      style: TextStyle(color: UIConstants.appOrange),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _selectEndMinute() async {
+    if (_endDate == null || _endHour == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Bitte wähle zuerst die Endstunde aus.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+    
+    final availableMinutes = _getAvailableEndMinutes();
+    if (availableMinutes.isEmpty) return;
+    
+    final selectedMinute = await showDialog<int>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.black,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: UIConstants.appOrange, width: 2),
+        ),
+        title: Row(
+          children: [
+            IconButton(
+              icon: const Icon(Icons.arrow_back, color: UIConstants.appOrange),
+              onPressed: () {
+                Navigator.pop(context);
+                // Öffne Stundenauswahl erneut
+                _selectEndHour();
+              },
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Endminute wählen',
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: availableMinutes.length,
+            itemBuilder: (context, index) {
+              final minute = availableMinutes[index];
+              return ListTile(
+                title: Text(
+                  '${_endHour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}',
+                  style: const TextStyle(color: Colors.white),
+                ),
+                selected: _endMinute == minute,
+                selectedTileColor: UIConstants.appOrange.withOpacity(0.3),
+                onTap: () => Navigator.pop(context, minute),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(
+              'Abbrechen',
+              style: TextStyle(color: UIConstants.appOrange),
+            ),
+          ),
+        ],
+      ),
+    );
+    
+    if (selectedMinute != null) {
+      setState(() {
+        _endMinute = selectedMinute;
+      });
+    }
+  }
+
+  // Legacy-Methoden für Kompatibilität (werden aus den neuen Werten berechnet)
+  TimeOfDay? get _startTime {
+    if (_startHour == null || _startMinute == null) return null;
+    return TimeOfDay(hour: _startHour!, minute: _startMinute!);
+  }
+
+  TimeOfDay? get _endTime {
+    if (_endHour == null || _endMinute == null) return null;
+    return TimeOfDay(hour: _endHour!, minute: _endMinute!);
+  }
+
+  Future<void> _selectStartTime() async {
+    // Wenn noch kein Datum gewählt, zeige Fehler
+    if (_startDate == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Bitte wähle zuerst das Startdatum aus.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+    
+    // Wenn noch keine Stunde gewählt, öffne Stunde-Auswahl
+    if (_startHour == null) {
+      await _selectStartHour();
+      return;
+    }
+    
+    // Wenn Stunde gewählt aber keine Minute, öffne Minute-Auswahl
+    if (_startMinute == null) {
+      await _selectStartMinute();
+      return;
+    }
+    
+    // Wenn beide gewählt, erlaube Änderung (öffne Stunde-Auswahl)
+    await _selectStartHour();
+  }
+
+  Future<void> _selectEndTime() async {
+    // Wenn noch kein Startdatum/Startzeit gewählt, zeige Fehler
+    if (_startDate == null || _startHour == null || _startMinute == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Bitte wähle zuerst Startdatum und Startzeit aus.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+    
+    // Wenn noch kein Enddatum gewählt, zeige Fehler
+    if (_endDate == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Bitte wähle zuerst das Enddatum aus.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+    
+    // Wenn noch keine Stunde gewählt, öffne Stunde-Auswahl
+    if (_endHour == null) {
+      await _selectEndHour();
+      return;
+    }
+    
+    // Wenn Stunde gewählt aber keine Minute, öffne Minute-Auswahl
+    if (_endMinute == null) {
+      await _selectEndMinute();
+      return;
+    }
+    
+    // Wenn beide gewählt, erlaube Änderung (öffne Stunde-Auswahl)
+    await _selectEndHour();
+  }
+
+  Future<void> _saveParty() async {
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+
+    if (_startDate == null || _startHour == null || _startMinute == null || 
+        _endDate == null || _endHour == null || _endMinute == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Bitte wähle alle Datums- und Uhrzeiten aus.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    final startDateTime = DateTime(
+      _startDate!.year,
+      _startDate!.month,
+      _startDate!.day,
+      _startHour!,
+      _startMinute!,
+    );
+
+    final endDateTime = DateTime(
+      _endDate!.year,
+      _endDate!.month,
+      _endDate!.day,
+      _endHour!,
+      _endMinute!,
+    );
+
+    // Validierung: Startzeit muss mindestens 5 Minuten in der Zukunft sein
+    final minStartDateTime = _getMinStartDateTime();
+    if (startDateTime.isBefore(minStartDateTime)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Die Startzeit muss mindestens 5 Minuten in der Zukunft liegen.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    if (endDateTime.isBefore(startDateTime) || endDateTime.isAtSameMomentAs(startDateTime)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Das Enddatum muss nach dem Startdatum liegen.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    // Validierung: Maximale Partylänge ist 23:59 Stunden
+    final duration = endDateTime.difference(startDateTime);
+    final maxDuration = const Duration(hours: 23, minutes: 59);
+    if (duration > maxDuration) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Die Partylänge darf maximal 23 Stunden und 59 Minuten betragen.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    // Validierung der Limits
+    if (_selectedGuestLimit == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Bitte wähle ein Limit für Gäste aus.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+    
+    if (_selectedUserLimit == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Bitte wähle ein Limit für User aus.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+    
+    final guestLimit = _selectedGuestLimit!;
+    final userLimit = _selectedUserLimit!;
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      // Hole aktuellen User (DJ)
+      final user = FirebaseAuth.instance.currentUser;
+      final createdBy = user?.uid ?? '';
+      final createdByEmail = user?.email ?? '';
+      
+      String partyName;
+      String partyCode = ''; // Initialisiert, wird später durch PartyService gesetzt
+      
+      // Location-Daten aus Google Place (falls vorhanden)
+      String? locationName;
+      String? locationAddress;
+      double? latitude;
+      double? longitude;
+      String? timezoneId;
+      String? placeId;
+      
+      // Daten-Trennung basierend auf Auswahlmodus
+      String? locationIdForPartyCode; // Für Code-Generierung (wird nur verwendet wenn festen Code nutzen)
+      
+      if (_locationSelectionMode == 'dropdown' && _selectedLocationModel != null) {
+        // Location aus Dialog ausgewählt
+        locationName = _selectedLocationModel!.locationName;
+        locationAddress = _selectedLocationModel!.address;
+        latitude = _selectedLocationModel!.latitude;
+        longitude = _selectedLocationModel!.longitude;
+        timezoneId = _selectedLocationModel!.timezoneId;
+        placeId = null; // Kein Google Place ID für gespeicherte Locations
+        // locationIdForPartyCode wird nur gesetzt wenn festen Code verwenden
+        // WICHTIG: Nur wenn useCustomCode NICHT aktiv ist (für beide Party-Typen)
+        if (_selectedLocationModel!.fixedPartyCode != null && 
+            !_useOneTimeEventCode) {
+          // Bei öffentlichen Partys: locationIdForPartyCode wird für Code-Generierung verwendet
+          // Bei privaten Partys: locationIdForPartyCode wird ignoriert (immer dynamisch)
+          if (_partyType == 'public') {
+            locationIdForPartyCode = _selectedLocationModel!.id;
+          }
+        }
+        print('✅ Location aus Dialog ausgewählt: $locationName');
+        if (_selectedLocationModel!.fixedPartyCode != null) {
+          print('   Fester Code vorhanden: ${_selectedLocationModel!.fixedPartyCode}');
+          print('   Einmaligen Code nutzen: $_useOneTimeEventCode');
+        }
+      } else if (_locationSelectionMode == 'search' && _selectedGooglePlace != null) {
+        // "Anderen Ort suchen" wurde gewählt und Google Place ausgewählt
+        locationName = _selectedGooglePlace!.name;
+        locationAddress = _selectedGooglePlace!.address;
+        latitude = _selectedGooglePlace!.latitude;
+        longitude = _selectedGooglePlace!.longitude;
+        timezoneId = _selectedGooglePlace!.timezoneId;
+        placeId = _selectedGooglePlace!.placeId;
+        locationIdForPartyCode = null; // Wird später gesetzt wenn Location gespeichert wird
+        print('✅ Google Place ausgewählt: $locationName');
+      } else {
+        // "Mein aktueller Standort" wurde gewählt oder keine Location ausgewählt
+        // Location-Details werden nicht angegeben, aber Zeitzone wird gespeichert
+        locationName = 'Vom DJ nicht angegeben';
+        locationAddress = '';
+        latitude = null;
+        longitude = null;
+        placeId = null;
+        locationIdForPartyCode = null;
+        // Verwende System-Zeitzone
+        timezoneId = _currentTimezoneId ?? 'UTC';
+        print('✅ Verwende System-Zeitzone: $timezoneId');
+      }
+      
+      // Sicherstellen, dass timezoneId immer vorhanden ist
+      if (timezoneId == null || timezoneId.isEmpty) {
+        timezoneId = _currentTimezoneId ?? 'UTC';
+        print('⚠️ Fallback auf UTC-Zeitzone');
+      }
+      
+      // Party-Name und Party-Code für beide Party-Typen
+      partyName = sanitizeInput(_partyNameController.text.trim());
+      
+      // Nutze PartyService für Code-Generierung mit Retry-Logik
+      // Logik:
+      // - Öffentlich + Location mit fixed_party_code + "Einmaligen Code" AUS: Nutze festen Code
+      // - Öffentlich + Location mit fixed_party_code + "Einmaligen Code" AN: Generiere dynamischen Code
+      // - Öffentlich + Location ohne fixed_party_code: Generiere dynamischen Code
+      // - Privat: Immer dynamischen Code (auch bei gespeicherten Locations)
+      try {
+        // Prüfe ob Location mit festem Code gewählt wurde und ob dieser verwendet werden soll
+        bool shouldUseFixedCode = false;
+        if (_partyType == 'public' && 
+            locationIdForPartyCode != null && 
+            _selectedLocationModel != null &&
+            _selectedLocationModel!.fixedPartyCode != null &&
+            !_useOneTimeEventCode) {
+          // Öffentlich + Location mit festem Code + Option "Einmaligen Code" ist AUS
+          shouldUseFixedCode = true;
+        }
+        
+        if (shouldUseFixedCode) {
+          // Verwende festen Code der Location
+          partyCode = _selectedLocationModel!.fixedPartyCode!;
+          print('✅ Verwende festen Code der Location: $partyCode');
+        } else {
+          // Generiere dynamischen Code (100k-899k)
+          // Bei privaten Partys: locationIdForPartyCode wird ignoriert (immer dynamisch)
+          // Bei öffentlichen Partys: locationIdForPartyCode wird ignoriert wenn _useOneTimeEventCode = true
+          partyCode = await PartyService.generatePartyCode(
+            isFixedCode: false,
+            createdBy: createdBy,
+          );
+          print('✅ Dynamischer Party-Code generiert: $partyCode');
+        }
+      } catch (e) {
+        print('❌ Fehler bei Party-Code-Generierung: $e');
+        // Retry-Logik: Versuche es nochmal (max. 3 Versuche)
+        bool codeGenerated = false;
+        int retryCount = 0;
+        const maxRetries = 3;
+        
+        while (!codeGenerated && retryCount < maxRetries) {
+          retryCount++;
+          print('🔄 Wiederhole Code-Generierung (Versuch $retryCount/$maxRetries)...');
+          
+          try {
+            // Warte kurz bevor Retry (um Race Conditions zu vermeiden)
+            await Future.delayed(Duration(milliseconds: 500 * retryCount));
+            
+            partyCode = await PartyService.determinePartyCodeForNewParty(
+              partyType: _partyType,
+              locationId: locationIdForPartyCode,
+              createdBy: createdBy,
+            );
+            codeGenerated = true;
+            print('✅ Party-Code nach Retry generiert: $partyCode');
+          } catch (retryError) {
+            print('❌ Retry $retryCount fehlgeschlagen: $retryError');
+            if (retryCount >= maxRetries) {
+              // Alle Versuche fehlgeschlagen
+              throw Exception('Konnte nach $maxRetries Versuchen keinen gültigen Party-Code generieren. Bitte versuche es erneut.');
+            }
+          }
+        }
+        
+        if (!codeGenerated) {
+          throw Exception('Konnte keinen gültigen Party-Code generieren. Bitte versuche es erneut.');
+        }
+      }
+      
+      // locationId wird nur für öffentliche Partys mit vorhandenen Locations verwendet
+      // (alte Logik für Dropdown-Auswahl - kann später entfernt werden)
+      locationId = null;
+      
+      // Unix-Berechnung: Konvertiere lokale Zeit zu UTC Unix-Timestamp
+      // Nutze timezone_id für die präzise Umrechnung (wichtig für Cronjob)
+      int startTimePosix;
+      int endTimePosix;
+      
+      // Erstelle DateTime-Objekte in lokaler Zeit (basierend auf gewählter Zeitzone)
+      // WICHTIG: Diese werden nur für die Anzeige verwendet, nicht für die Speicherung
+      final localStartDateTime = DateTime(
+        _startDate!.year,
+        _startDate!.month,
+        _startDate!.day,
+        _startHour!,
+        _startMinute!,
+      );
+      
+      final localEndDateTime = DateTime(
+        _endDate!.year,
+        _endDate!.month,
+        _endDate!.day,
+        _endHour!,
+        _endMinute!,
+      );
+      
+      try {
+        // Konvertiere zu UTC Unix-Timestamp basierend auf timezone_id
+        // Verwende Google Time Zone API um den Offset für das jeweilige Datum zu bekommen
+        startTimePosix = await _convertLocalTimeToUnixTimestamp(
+          localStartDateTime,
+          timezoneId,
+          latitude,
+          longitude,
+        );
+        
+        endTimePosix = await _convertLocalTimeToUnixTimestamp(
+          localEndDateTime,
+          timezoneId,
+          latitude,
+          longitude,
+        );
+        
+        print('✅ Unix-Timestamps berechnet (präzise):');
+        print('   Start (UTC): $startTimePosix');
+        print('   End (UTC): $endTimePosix');
+        print('   Zeitzone: $timezoneId');
+        print('   Start lokale Zeit: ${localStartDateTime.year}-${localStartDateTime.month.toString().padLeft(2, '0')}-${localStartDateTime.day.toString().padLeft(2, '0')} ${localStartDateTime.hour.toString().padLeft(2, '0')}:${localStartDateTime.minute.toString().padLeft(2, '0')}');
+        print('   End lokale Zeit: ${localEndDateTime.year}-${localEndDateTime.month.toString().padLeft(2, '0')}-${localEndDateTime.day.toString().padLeft(2, '0')} ${localEndDateTime.hour.toString().padLeft(2, '0')}:${localEndDateTime.minute.toString().padLeft(2, '0')}');
+      } catch (e) {
+        print('❌ Fehler bei Unix-Berechnung: $e');
+        // Fallback: Verwende normale Timestamps (System-Zeitzone)
+        startTimePosix = startDateTime.toUtc().millisecondsSinceEpoch ~/ 1000;
+        endTimePosix = endDateTime.toUtc().millisecondsSinceEpoch ~/ 1000;
+        print('⚠️ Fallback auf System-Zeitzone für Unix-Berechnung');
+      }
+      
+      // VERGLEICHS-CHECK: Prüfe Dauer der Party (Ende minus Start) in UTC
+      final durationSeconds = endTimePosix - startTimePosix;
+      final durationHours = durationSeconds / 3600.0;
+      final durationMinutes = (durationSeconds % 3600) / 60.0;
+      print('=== Speichere Party ===');
+      print('Party Name: $partyName');
+      print('Party Code: $partyCode');
+      print('Start lokale Zeit: ${localStartDateTime.year}-${localStartDateTime.month.toString().padLeft(2, '0')}-${localStartDateTime.day.toString().padLeft(2, '0')} ${localStartDateTime.hour.toString().padLeft(2, '0')}:${localStartDateTime.minute.toString().padLeft(2, '0')}');
+      print('End lokale Zeit: ${localEndDateTime.year}-${localEndDateTime.month.toString().padLeft(2, '0')}-${localEndDateTime.day.toString().padLeft(2, '0')} ${localEndDateTime.hour.toString().padLeft(2, '0')}:${localEndDateTime.minute.toString().padLeft(2, '0')}');
+      print('Start Unix (UTC): $startTimePosix');
+      print('End Unix (UTC): $endTimePosix');
+      print('Dauer (UTC): ${durationHours.toStringAsFixed(2)} Stunden (${durationMinutes.toStringAsFixed(0)} Minuten)');
+      
+      // ENDZEIT-SYNCHRONISATION: Beide Felder müssen aus demselben UTC-Wert abgeleitet werden
+      // WICHTIG: Keine lokale Umrechnung - der bereits berechnete UTC-Wert ist das Gesetz
+      final startDateUtc = Timestamp.fromMillisecondsSinceEpoch(startTimePosix * 1000);
+      final endDateUtc = Timestamp.fromMillisecondsSinceEpoch(endTimePosix * 1000);
+      
+      print('Start Timestamp (UTC): $startDateUtc');
+      print('End Timestamp (UTC): $endDateUtc');
+      
+      final partyData = {
+        'party_name': partyName,
+        'start_date': startDateUtc, // Abgeleitet vom UTC Unix-Timestamp - ABSOLUT KONSISTENT
+        'end_date': endDateUtc, // Abgeleitet vom UTC Unix-Timestamp - ABSOLUT KONSISTENT
+        'start_time_posix': startTimePosix, // Unix-Timestamp in UTC (Sekunden seit Epoch) - PRÄZISE für Cronjob
+        'end_time_posix': endTimePosix, // Unix-Timestamp in UTC (Sekunden seit Epoch) - PRÄZISE für Cronjob
+        'lifecycle_status': 'active', // Status für Cronjob
+        'created_at': Timestamp.now(),
+        'party_code': partyCode,
+        'party_type': _partyType, // 'private' oder 'public'
+        'created_by': createdBy, // User-ID des DJs
+        'created_by_email': createdByEmail, // Email des DJs
+        'dj_code': createdBy, // DJ-Code (User-ID des DJs)
+        'guest_limit_per_hour': guestLimit,
+        'user_limit_per_hour': userLimit,
+      };
+      
+      // Füge location_id nur bei öffentlichen Partys hinzu (wenn vorhandene Location ausgewählt)
+      if (_partyType == 'public' && locationIdForPartyCode != null) {
+        partyData['location_id'] = locationIdForPartyCode;
+      }
+      
+      // Füge Location-Daten hinzu
+      partyData['location_name'] = locationName ?? 'Vom DJ nicht angegeben';
+      if (locationAddress != null && locationAddress.isNotEmpty) {
+        partyData['location_address'] = locationAddress;
+      } else {
+        partyData['location_address'] = '';
+      }
+      if (latitude != null && latitude != 0.0) {
+        partyData['latitude'] = latitude;
+      }
+      if (longitude != null && longitude != 0.0) {
+        partyData['longitude'] = longitude;
+      }
+      // Zeitzone ist immer vorhanden (entweder Google oder System-Fallback)
+      partyData['timezone_id'] = timezoneId ?? 'UTC';
+      if (placeId != null && placeId.isNotEmpty) {
+        partyData['place_id'] = placeId;
+      }
+      // Privatsphäre-Einstellung
+      partyData['show_location_publicly'] = _showLocationPublicly;
+      
+      final docRef = await FirebaseFirestore.instance
+          .collection('parties')
+          .add(partyData);
+      
+      print('Party gespeichert mit ID: ${docRef.id}');
+      
+      // Location speichern (wenn Checkbox aktiviert und Google Place/Karte ausgewählt)
+      // WICHTIG: Dies passiert NACH dem Party-Speichern, damit wir die Party-ID haben
+      if (_saveLocationForFutureParties && 
+          (_selectedGooglePlace != null || (_locationSelectionMode == 'search' && latitude != null && longitude != null))) {
+        try {
+          String? fixedPartyCode;
+          if (_useFixedPartyCodeForLocation) {
+            // Generiere festen Party-Code (900k-Bereich) für die Location
+            // Dieser Code wird dann für zukünftige Partys an dieser Location verwendet
+            fixedPartyCode = await PartyService.generatePartyCode(
+              isFixedCode: true,
+              createdBy: createdBy,
+            );
+            print('✅ Fester Party-Code für Location generiert: $fixedPartyCode');
+            
+            // Aktualisiere die gerade erstellte Party mit diesem festen Code
+            // (nur wenn noch kein fester Code von der Location verwendet wurde)
+            if (locationIdForPartyCode == null) {
+              await docRef.update({'party_code': fixedPartyCode});
+              partyCode = fixedPartyCode; // Aktualisiere für party_status
+              print('✅ Party-Code auf festen Location-Code aktualisiert: $fixedPartyCode');
+            }
+          }
+          
+          // Erstelle oder aktualisiere Location
+          final savedLocationId = await PartyService.createOrUpdateLocation(
+            locationName: locationName ?? 'Unbenannte Location',
+            address: locationAddress,
+            latitude: latitude,
+            longitude: longitude,
+            timezoneId: timezoneId ?? 'UTC',
+            createdBy: createdBy,
+            fixedPartyCode: fixedPartyCode,
+            updateExisting: true,
+          );
+          
+          print('✅ Location gespeichert/aktualisiert: $savedLocationId');
+          
+          // Aktualisiere die Party mit der location_id (falls noch nicht gesetzt)
+          if (_partyType == 'public' && locationIdForPartyCode == null) {
+            await docRef.update({'location_id': savedLocationId});
+            print('✅ Party mit location_id verknüpft: $savedLocationId');
+          }
+        } catch (e) {
+          print('❌ Fehler beim Speichern der Location: $e');
+          // Fehler beim Speichern der Location ist nicht kritisch, Party wurde bereits erstellt
+          // Zeige Warnung aber keine Fehlermeldung
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Party wurde erstellt, aber Location konnte nicht gespeichert werden: $e'),
+                backgroundColor: Colors.orange,
+                duration: const Duration(seconds: 4),
+              ),
+            );
+          }
+        }
+      }
+      
+      // Erstelle Eintrag in party_status Collection
+      await FirebaseFirestore.instance
+          .collection('party_status')
+          .add({
+        'party_code': partyCode,
+        'dj_code': createdBy, // User-ID des aktuellen DJ-Users
+        'status': true, // true = aktiv, false = inaktiv
+        'created_at': Timestamp.now(),
+        'party_id': docRef.id, // Referenz zur Party-Dokument-ID
+      });
+      
+      print('Party-Status gespeichert für Party-Code: $partyCode, DJ-Code: $createdBy');
+      print('✅ Party erfolgreich erstellt: ${docRef.id} mit Code: $partyCode');
+
+      if (mounted) {
+        // Zeige Erfolgs-Snackbar
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.check_circle, color: Colors.white),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    AppLocalizations.of(context)?.party_created_success ?? 'Party wurde erfolgreich angelegt.',
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+        
+        // Zurück zur Übersicht
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      print('❌ Fehler beim Speichern der Party: $e');
+      if (mounted) {
+        final localizations = AppLocalizations.of(context);
+        
+        // Prüfe ob es ein Netzwerkfehler ist
+        String errorMessage;
+        if (e.toString().contains('network') || 
+            e.toString().contains('internet') || 
+            e.toString().contains('connection') ||
+            e.toString().contains('timeout')) {
+          errorMessage = 'Keine Internetverbindung. Bitte prüfe deine Verbindung und versuche es erneut.';
+        } else if (e.toString().contains('Party-Code') || e.toString().contains('Code generieren')) {
+          errorMessage = localizations?.error_generating_party_code ?? 'Fehler bei der Code-Generierung. Bitte versuche es erneut.';
+        } else {
+          errorMessage = '${localizations?.error_saving_party ?? 'Fehler beim Speichern:'} ${e.toString()}';
+        }
+        
+        // Zeige Fehler-Dialog im Schwarz/Orange Design
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: Colors.black,
+            title: Row(
+              children: [
+                Icon(Icons.error_outline, color: UIConstants.appOrange, size: 24),
+                const SizedBox(width: 8),
+                const Text(
+                  'Fehler',
+                  style: TextStyle(color: Colors.white, fontSize: 18),
+                ),
+              ],
+            ),
+            content: Text(
+              errorMessage,
+              style: const TextStyle(color: Colors.white70, fontSize: 14),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(
+                  localizations?.ok ?? 'OK',
+                  style: TextStyle(color: UIConstants.appOrange, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+              side: BorderSide(color: UIConstants.appOrange, width: 2),
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  String _formatDate(DateTime? date, BuildContext context) {
+    final localizations = AppLocalizations.of(context);
+    if (date == null) return localizations?.not_selected ?? 'Nicht ausgewählt';
+    return '${date.day.toString().padLeft(2, '0')}.${date.month.toString().padLeft(2, '0')}.${date.year}';
+  }
+
+  String _formatTime(TimeOfDay? time, BuildContext context) {
+    final localizations = AppLocalizations.of(context);
+    if (time == null) return localizations?.not_selected ?? 'Nicht ausgewählt';
+    
+    // Erstelle ein DateTime-Objekt für die Formatierung
+    final now = DateTime.now();
+    final dateTime = DateTime(now.year, now.month, now.day, time.hour, time.minute);
+    
+    // Verwende die zentrale Formatierungsfunktion
+    final locale = Localizations.localeOf(context);
+    final minute = time.minute.toString().padLeft(2, '0');
+    final use12HourFormat = locale.languageCode == 'en';
+    final useHInsteadOfColon = locale.languageCode == 'fr';
+    final timeSeparator = useHInsteadOfColon ? 'h' : ':';
+    
+    if (use12HourFormat) {
+      final hour12 = time.hour == 0 ? 12 : (time.hour > 12 ? time.hour - 12 : time.hour);
+      final amPm = time.hour < 12 
+          ? (localizations?.time_am ?? 'AM')
+          : (localizations?.time_pm ?? 'PM');
+      return '$hour12$timeSeparator$minute $amPm';
+    } else {
+      final hour = time.hour.toString().padLeft(2, '0');
+      final clock = localizations?.party_time_clock ?? 'Uhr';
+      if (useHInsteadOfColon) {
+        return '$hour$timeSeparator$minute';
+      } else {
+        return '$hour$timeSeparator$minute $clock';
+      }
+    }
+  }
+
+  /// Formatiert Startzeit für Anzeige (schrittweise)
+  String _formatStartTime(BuildContext context) {
+    if (_startDate == null) return 'Nicht ausgewählt';
+    if (_startHour == null) return 'Stunde wählen';
+    if (_startMinute == null) return 'Minute wählen';
+    return _formatTime(TimeOfDay(hour: _startHour!, minute: _startMinute!), context);
+  }
+
+  /// Formatiert Endzeit für Anzeige (schrittweise)
+  String _formatEndTime(BuildContext context) {
+    if (_endDate == null) return 'Nicht ausgewählt';
+    if (_endHour == null) return 'Stunde wählen';
+    if (_endMinute == null) return 'Minute wählen';
+    return _formatTime(TimeOfDay(hour: _endHour!, minute: _endMinute!), context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    return BackdropFilter(
+      filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.3),
+        ),
+        child: PwaWidgetCell(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header mit Titel und Schließen-Button
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    AppLocalizations.of(context)?.new_party_title ?? 'Neue Party anlegen',
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              // Scrollbarer Inhalt
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const SizedBox(height: 8),
+                        // Art der Veranstaltung (muss ausgewählt werden)
+                        Text(
+                          AppLocalizations.of(context)?.event_type_label ?? 'Art der Veranstaltung:',
+                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: RadioListTile<String>(
+                                title: Text(AppLocalizations.of(context)?.party_type_private ?? 'Privat'),
+                                value: 'private',
+                                groupValue: _partyType,
+                                contentPadding: EdgeInsets.zero,
+                                dense: true,
+                                onChanged: (value) {
+                                  setState(() {
+                                    _partyType = value!;
+                                  });
+                                },
+                              ),
+                            ),
+                            Expanded(
+                              child: RadioListTile<String>(
+                                title: Text(AppLocalizations.of(context)?.party_type_public ?? 'Öffentlich'),
+                                value: 'public',
+                                groupValue: _partyType,
+                                contentPadding: EdgeInsets.zero,
+                                dense: true,
+                                onChanged: (value) {
+                                  setState(() {
+                                    _partyType = value!;
+                                  });
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        // Party-Name (für beide Party-Typen)
+                        TextFormField(
+                          controller: _partyNameController,
+                          decoration: InputDecoration(
+                            labelText: AppLocalizations.of(context)?.party_name_label_new ?? 'Name der Party',
+                            hintText: AppLocalizations.of(context)?.party_name_hint ?? 'z.B. Geburtstagsfeier, Hochzeit, etc.',
+                            border: const OutlineInputBorder(),
+                          ),
+                          validator: (value) {
+                            if (value == null || value.trim().isEmpty) {
+                              return AppLocalizations.of(context)?.party_name_required ?? 'Bitte gib einen Partynamen ein.';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 16),
+                        // Standort & Zeitzone-Auswahl
+                        Text(
+                          'Standort & Zeitzone:',
+                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+                        ),
+                        const SizedBox(height: 8),
+                        // Button für gespeicherte Locations (bei beiden Party-Typen)
+                        if (_locations.isNotEmpty) ...[
+                          ElevatedButton.icon(
+                            onPressed: () => _showLocationSelectionDialog(context),
+                            icon: const Icon(Icons.location_on, color: Colors.white),
+                            label: const Text('Aus gespeicherten Locations wählen'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.black,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+                              side: BorderSide(color: UIConstants.appOrange, width: 2),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                        ],
+                        // Radiobuttons für Standort-Auswahl
+                        // Radio-Button "Meine aktuelle Zeitzone" nur bei privaten Partys
+                        if (_partyType == 'private')
+                          RadioListTile<String>(
+                            title: const Text('Meine aktuelle Zeitzone nutzen', style: TextStyle(color: Colors.white)),
+                            subtitle: Text(
+                              'Zeitzone: ${_currentTimezoneId ?? 'Wird ermittelt...'}',
+                              style: TextStyle(
+                                color: Colors.grey.shade400,
+                                fontSize: 12,
+                              ),
+                            ),
+                            value: 'current',
+                            groupValue: _locationSelectionMode,
+                            contentPadding: EdgeInsets.zero,
+                            dense: true,
+                            activeColor: UIConstants.appOrange,
+                            onChanged: (value) {
+                              setState(() {
+                                _locationSelectionMode = value!;
+                                // Zurücksetzen der Google Place Auswahl
+                                _selectedGooglePlace = null;
+                                _locationNameController.clear();
+                                _selectedLocationId = null;
+                                _selectedLocationModel = null;
+                                locationId = null;
+                                // System-Zeitzone verwenden
+                                _updateSystemTimezone();
+                              });
+                            },
+                          ),
+                        RadioListTile<String>(
+                        title: Text(
+                          _partyType == 'public' 
+                              ? 'Ort suchen' 
+                              : 'Anderen Ort suchen',
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                        value: 'search',
+                        groupValue: _locationSelectionMode,
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        activeColor: UIConstants.appOrange,
+                        onChanged: (value) {
+                          setState(() {
+                            _locationSelectionMode = value!;
+                            _selectedLocationId = null;
+                            _selectedLocationModel = null;
+                            locationId = null;
+                            // Reset Checkboxen wenn zurück zu Suche
+                            _saveLocationForFutureParties = false;
+                            _useFixedPartyCodeForLocation = false;
+                            _useOneTimeEventCode = false;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      // Hybrid-Suche: PlacesAutocompleteField + Karten-Button
+                      if (_locationSelectionMode == 'search') ...[
+                        Row(
+                          children: [
+                            Expanded(
+                              child: PlacesAutocompleteField(
+                          initialValue: _selectedGooglePlace?.name ?? _locationNameController.text,
+                          validator: (value) {
+                            return null;
+                          },
+                          onPlaceSelected: (LocationResult? result) {
+                            setState(() {
+                              _selectedGooglePlace = result;
+                              if (result != null) {
+                                _locationNameController.text = result.name;
+                                // Aktualisiere Zeitzone wenn Google Place ausgewählt
+                                _currentTimezoneId = result.timezoneId;
+                                // Reset Checkboxen wenn neue Location ausgewählt wird
+                                _saveLocationForFutureParties = false;
+                                _useFixedPartyCodeForLocation = false;
+                                _useOneTimeEventCode = false;
+                                print('✅ Google Place ausgewählt: ${result.name}');
+                                print('   Adresse: ${result.address}');
+                                print('   Koordinaten: ${result.latitude}, ${result.longitude}');
+                                if (result.timezoneId != null) {
+                                  print('   Zeitzone: ${result.timezoneId}');
+                                }
+                              } else {
+                                _locationNameController.clear();
+                                // Fallback auf System-Zeitzone
+                                _updateSystemTimezone();
+                                // Reset Checkboxen
+                                _saveLocationForFutureParties = false;
+                                _useFixedPartyCodeForLocation = false;
+                                _useOneTimeEventCode = false;
+                              }
+                            });
+                          },
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Container(
+                              decoration: BoxDecoration(
+                                color: Colors.black,
+                                border: Border.all(color: UIConstants.appOrange, width: 2),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: IconButton(
+                                icon: const Icon(Icons.map, color: UIConstants.appOrange),
+                                tooltip: 'Auf Karte wählen',
+                                onPressed: () async {
+                                  // Öffne Karten-Picker
+                                  final result = await Navigator.push<LocationResult?>(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (context) => LocationMapPickerPage(
+                                        initialLatitude: _selectedGooglePlace?.latitude,
+                                        initialLongitude: _selectedGooglePlace?.longitude,
+                                        initialLocationName: _selectedGooglePlace?.name,
+                                      ),
+                                    ),
+                                  );
+
+                                  if (result != null && mounted) {
+                                    setState(() {
+                                      _selectedGooglePlace = result;
+                                      _locationNameController.text = result.name;
+                                      _currentTimezoneId = result.timezoneId;
+                                      // Reset Checkboxen wenn neue Location von Karte ausgewählt wird
+                                      _saveLocationForFutureParties = false;
+                                      _useFixedPartyCodeForLocation = false;
+                                      _useOneTimeEventCode = false;
+                                      print('✅ Position von Karte ausgewählt: ${result.latitude}, ${result.longitude}');
+                                      print('   Zeitzone: ${result.timezoneId ?? 'Wird geladen...'}');
+                                      if (result.timezoneId == null) {
+                                        print('   ⚠️ Zeitzone wird nachgeladen...');
+                                        // Lade Zeitzone nachträglich falls nicht vorhanden
+                                        GooglePlacesService.getTimezoneIdForCoordinates(
+                                          result.latitude,
+                                          result.longitude,
+                                        ).then((timezoneId) {
+                                          if (mounted && timezoneId != null) {
+                                            setState(() {
+                                              _currentTimezoneId = timezoneId;
+                                              print('   ✅ Zeitzone nachgeladen: $timezoneId');
+                                            });
+                                          }
+                                        });
+                                      }
+                                    });
+                                  }
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                        // Zeige ausgewählten Google Place an
+                        if (_selectedGooglePlace != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8.0),
+                            child: Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.grey.shade900,
+                                border: Border.all(color: UIConstants.appOrange, width: 2),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.check_circle, color: Colors.green, size: 20),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          _selectedGooglePlace!.name,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          _selectedGooglePlace!.address,
+                                          style: TextStyle(
+                                            color: Colors.grey.shade400,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.clear, color: Colors.grey),
+                                    onPressed: () {
+                                      setState(() {
+                                        _selectedGooglePlace = null;
+                                        _locationNameController.clear();
+                                        // Fallback auf System-Zeitzone
+                                        _updateSystemTimezone();
+                                        // Reset Checkboxen wenn Location entfernt wird
+                                        _saveLocationForFutureParties = false;
+                                        _useFixedPartyCodeForLocation = false;
+                                        _useOneTimeEventCode = false;
+                                      });
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        // Checkboxen für Location-Speicherung (nur wenn Google Place oder Karte ausgewählt UND Party ist öffentlich UND NICHT aus Dropdown)
+                        if (_selectedGooglePlace != null && 
+                            _partyType == 'public' && 
+                            _locationSelectionMode == 'search' &&
+                            _selectedLocationModel == null) ...[
+                          const SizedBox(height: 16),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade900,
+                              border: Border.all(color: UIConstants.appOrange, width: 2),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                CheckboxListTile(
+                                  title: const Text(
+                                    'Location für zukünftige Partys speichern',
+                                    style: TextStyle(color: Colors.white),
+                                  ),
+                                  value: _saveLocationForFutureParties,
+                                  activeColor: UIConstants.appOrange,
+                                  checkColor: Colors.white,
+                                  onChanged: (value) {
+                                    setState(() {
+                                      _saveLocationForFutureParties = value ?? false;
+                                      if (!_saveLocationForFutureParties) {
+                                        _useFixedPartyCodeForLocation = false;
+                                      }
+                                    });
+                                  },
+                                ),
+                                if (_saveLocationForFutureParties)
+                                  Padding(
+                                    padding: const EdgeInsets.only(left: 48.0),
+                                    child: CheckboxListTile(
+                                      title: const Text(
+                                        'Immer denselben Party-Code für diesen Ort verwenden',
+                                        style: TextStyle(color: Colors.white70, fontSize: 14),
+                                      ),
+                                      value: _useFixedPartyCodeForLocation,
+                                      activeColor: UIConstants.appOrange,
+                                      checkColor: Colors.white,
+                                      onChanged: (value) {
+                                        setState(() {
+                                          _useFixedPartyCodeForLocation = value ?? false;
+                                        });
+                                      },
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
+                      // Zeige ausgewählte Location aus Dialog an
+                      if (_locationSelectionMode == 'dropdown' && _selectedLocationModel != null) ...[
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8.0),
+                          child: Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade900,
+                              border: Border.all(color: UIConstants.appOrange, width: 2),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.check_circle, color: Colors.green, size: 20),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        _selectedLocationModel!.locationName,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                      if (_selectedLocationModel!.address != null && _selectedLocationModel!.address!.isNotEmpty) ...[
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          _selectedLocationModel!.address!,
+                                          style: TextStyle(
+                                            color: Colors.grey.shade400,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ],
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        'Zeitzone: ${_selectedLocationModel!.timezoneId}',
+                                        style: TextStyle(
+                                          color: Colors.grey.shade400,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                      if (_selectedLocationModel!.fixedPartyCode != null) ...[
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          _useOneTimeEventCode 
+                                              ? 'Code: Wird beim Speichern generiert'
+                                              : 'Fester Code: ${_selectedLocationModel!.fixedPartyCode}',
+                                          style: TextStyle(
+                                            color: UIConstants.appOrange,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.clear, color: Colors.grey),
+                                  onPressed: () {
+                                    setState(() {
+                                      _selectedLocationId = null;
+                                      _selectedLocationModel = null;
+                                      _locationSelectionMode = _partyType == 'public' ? 'search' : 'current';
+                                      locationId = null;
+                                      _useOneTimeEventCode = false;
+                                    });
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        // Code-Option für öffentliche Partys mit festem Code
+                        if (_partyType == 'public' && _selectedLocationModel!.fixedPartyCode != null) ...[
+                          const SizedBox(height: 12),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade900,
+                              border: Border.all(color: UIConstants.appOrange, width: 2),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: SwitchListTile(
+                              title: const Text(
+                                'Einmaligen Event-Code nutzen',
+                                style: TextStyle(color: Colors.white),
+                              ),
+                              subtitle: Text(
+                                _useOneTimeEventCode
+                                    ? 'Dynamischer Code wird generiert (100.000 - 899.999)'
+                                    : 'Fester Code wird verwendet: ${_selectedLocationModel!.fixedPartyCode}',
+                                style: TextStyle(
+                                  color: Colors.grey.shade400,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              value: _useOneTimeEventCode,
+                              activeColor: UIConstants.appOrange,
+                              onChanged: (value) {
+                                setState(() {
+                                  _useOneTimeEventCode = value;
+                                });
+                              },
+                            ),
+                          ),
+                        ],
+                      ],
+                      // Hinweistext
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8.0),
+                        child: Text(
+                          'Die Zeitzone wird automatisch an den Ort der Party angepasst, damit Start- und Endzeit vor Ort korrekt sind.',
+                          style: TextStyle(
+                            color: Colors.grey.shade400,
+                            fontSize: 12,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      // Privatsphäre-Switch (immer sichtbar wenn Location feststeht)
+                      if ((_selectedGooglePlace != null || _selectedLocationModel != null) && 
+                          (_locationSelectionMode == 'search' || _locationSelectionMode == 'dropdown'))
+                        Container(
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade900,
+                            border: Border.all(color: UIConstants.appOrange, width: 2),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: SwitchListTile(
+                            title: const Text(
+                              'Location-Details auf QR-Code & Übersicht anzeigen',
+                              style: TextStyle(color: Colors.white),
+                            ),
+                            subtitle: Text(
+                              _showLocationPublicly 
+                                  ? 'Standort wird öffentlich angezeigt'
+                                  : 'Standort bleibt privat',
+                              style: TextStyle(
+                                color: Colors.grey.shade400,
+                                fontSize: 12,
+                              ),
+                            ),
+                            value: _showLocationPublicly,
+                            activeColor: UIConstants.appOrange,
+                            onChanged: (value) {
+                              setState(() {
+                                _showLocationPublicly = value;
+                              });
+                            },
+                          ),
+                        ),
+                      const SizedBox(height: 16),
+                      // Beginn
+                      Text(
+                        AppLocalizations.of(context)?.start_label_new ?? 'Beginn:',
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        AppLocalizations.of(context)?.party_start_label ?? 'Start:',
+                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(AppLocalizations.of(context)?.party_date_label ?? 'Datum:', style: const TextStyle(fontSize: 12)),
+                                const SizedBox(height: 4),
+                                InkWell(
+                                  onTap: _selectStartDate,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: Colors.grey),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        const Icon(Icons.calendar_today, size: 18),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            _formatDate(_startDate, context),
+                                            style: const TextStyle(fontSize: 14),
+                                          ),
+                                        ),
+                                        Transform.flip(
+                                          flipX: isRtl,
+                                          child: const Icon(Icons.arrow_forward_ios, size: 14),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(AppLocalizations.of(context)?.party_time_label ?? 'Zeit:', style: const TextStyle(fontSize: 12)),
+                                const SizedBox(height: 4),
+                                InkWell(
+                                  onTap: (_startDate != null) 
+                                      ? _selectStartTime 
+                                      : null,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(
+                                        color: (_startDate != null) 
+                                            ? Colors.grey 
+                                            : Colors.grey.shade600,
+                                      ),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.access_time, 
+                                          size: 18,
+                                          color: (_startDate != null) 
+                                              ? null 
+                                              : Colors.grey.shade600,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            _formatStartTime(context),
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              color: (_startDate != null) 
+                                                  ? null 
+                                                  : Colors.grey.shade600,
+                                            ),
+                                          ),
+                                        ),
+                                        Transform.flip(
+                                          flipX: isRtl,
+                                          child: Icon(
+                                            Icons.arrow_forward_ios, 
+                                            size: 14,
+                                            color: (_startDate != null) 
+                                                ? null 
+                                                : Colors.grey.shade600,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    const SizedBox(height: 16),
+                    // Ende
+                    Text(
+                      AppLocalizations.of(context)?.end_label_new ?? 'Ende:',
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(AppLocalizations.of(context)?.party_date_label ?? 'Datum:', style: const TextStyle(fontSize: 12)),
+                              const SizedBox(height: 4),
+                              InkWell(
+                                onTap: (_startDate != null && _startHour != null && _startMinute != null) 
+                                    ? _selectEndDate 
+                                    : null,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                  decoration: BoxDecoration(
+                                    border: Border.all(
+                                      color: (_startDate != null && _startHour != null && _startMinute != null) 
+                                          ? Colors.grey 
+                                          : Colors.grey.shade600,
+                                    ),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.calendar_today, 
+                                        size: 18,
+                                        color: (_startDate != null && _startHour != null && _startMinute != null) 
+                                            ? null 
+                                            : Colors.grey.shade600,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          _formatDate(_endDate, context),
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            color: (_startDate != null && _startHour != null && _startMinute != null) 
+                                                ? null 
+                                                : Colors.grey.shade600,
+                                          ),
+                                        ),
+                                      ),
+                                      Transform.flip(
+                                        flipX: isRtl,
+                                        child: Icon(
+                                          Icons.arrow_forward_ios, 
+                                          size: 14,
+                                          color: (_startDate != null && _startHour != null && _startMinute != null) 
+                                              ? null 
+                                              : Colors.grey.shade600,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(AppLocalizations.of(context)?.party_time_label ?? 'Zeit:', style: const TextStyle(fontSize: 12)),
+                              const SizedBox(height: 4),
+                              InkWell(
+                                onTap: (_endDate != null) 
+                                    ? _selectEndTime 
+                                    : null,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                  decoration: BoxDecoration(
+                                    border: Border.all(
+                                      color: (_endDate != null) 
+                                          ? Colors.grey 
+                                          : Colors.grey.shade600,
+                                    ),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.access_time, 
+                                        size: 18,
+                                        color: (_endDate != null) 
+                                            ? null 
+                                            : Colors.grey.shade600,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          _formatEndTime(context),
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            color: (_endDate != null) 
+                                                ? null 
+                                                : Colors.grey.shade600,
+                                          ),
+                                        ),
+                                      ),
+                                      Transform.flip(
+                                        flipX: isRtl,
+                                        child: Icon(
+                                          Icons.arrow_forward_ios, 
+                                          size: 14,
+                                          color: (_endDate != null) 
+                                              ? null 
+                                              : Colors.grey.shade600,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+                    // Wunsch-Limits
+                    Text(
+                      AppLocalizations.of(context)?.party_wish_limits ?? 'Wunsch-Limits (pro Stunde):',
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: DropdownButtonFormField<int>(
+                            value: _selectedGuestLimit,
+                            decoration: InputDecoration(
+                              labelText: AppLocalizations.of(context)?.party_guest_limit ?? 'Gast',
+                              border: const OutlineInputBorder(),
+                              prefixIcon: const Icon(Icons.person_outline),
+                            ),
+                            items: _guestLimitOptions.map((int value) {
+                              return DropdownMenuItem<int>(
+                                value: value,
+                                child: Text(value.toString()),
+                              );
+                            }).toList(),
+                            onChanged: (int? newValue) {
+                              setState(() {
+                                _selectedGuestLimit = newValue;
+                              });
+                            },
+                            validator: (value) {
+                              if (value == null) {
+                                return 'Bitte wähle ein Limit aus.';
+                              }
+                              return null;
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: DropdownButtonFormField<int>(
+                            value: _selectedUserLimit,
+                            decoration: InputDecoration(
+                              labelText: AppLocalizations.of(context)?.party_user_limit ?? 'User',
+                              border: const OutlineInputBorder(),
+                              prefixIcon: const Icon(Icons.person),
+                            ),
+                            items: _userLimitOptions.map((int value) {
+                              return DropdownMenuItem<int>(
+                                value: value,
+                                child: Text(value.toString()),
+                              );
+                            }).toList(),
+                            onChanged: (int? newValue) {
+                              setState(() {
+                                _selectedUserLimit = newValue;
+                              });
+                            },
+                            validator: (value) {
+                              if (value == null) {
+                                return 'Bitte wähle ein Limit aus.';
+                              }
+                              return null;
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+                    // Speichern-Button
+                    ElevatedButton(
+                      onPressed: _isLoading ? null : _saveParty,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: UIConstants.appOrange,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        disabledBackgroundColor: Colors.grey.shade800,
+                        disabledForegroundColor: Colors.grey.shade600,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      child: _isLoading
+                          ? Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                SizedBox(
+                                  height: 20,
+                                  width: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                const Text(
+                                  'Speichere...',
+                                  style: TextStyle(color: Colors.white),
+                                ),
+                              ],
+                            )
+                          : Text(
+                              AppLocalizations.of(context)?.save_party_data ?? 'Party-Daten speichern',
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                    ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+

@@ -1,0 +1,235 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+import 'main.dart' show incrementDeletedCount, buildFirebaseErrorWidget;
+import '../services/history_pagination_service.dart';
+import '../utils/footer_helper.dart';
+import '../utils/ui_constants.dart';
+import '../l10n/app_localizations.dart';
+import '../services/active_party_service.dart';
+import '../models/song_request.dart';
+import '../widgets/empty_list_message.dart';
+import '../widgets/pagination_control.dart';
+import '../widgets/sticky_pagination_layout.dart';
+import '../widgets/custom_page_header.dart';
+import '../widgets/wish_card.dart';
+import '../utils/wish_grouping_helper.dart';
+import '../services/wish_management_service.dart';
+
+class AbgelehntPage extends StatefulWidget {
+  final List<SongRequest> requests;
+  
+  const AbgelehntPage({super.key, required this.requests});
+
+  @override
+  State<AbgelehntPage> createState() => _AbgelehntPageState();
+}
+
+class _AbgelehntPageState extends State<AbgelehntPage> {
+  int _currentPage = 1;
+
+  /// Navigiert zur vorherigen Seite
+  void _goToPreviousPage() {
+    if (_currentPage > 1) {
+      setState(() {
+        _currentPage--;
+      });
+    }
+  }
+
+  /// Navigiert zur nächsten Seite
+  void _goToNextPage(int totalPages) {
+    if (_currentPage < totalPages) {
+      setState(() {
+        _currentPage++;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+    final l = AppLocalizations.of(context);
+    
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: SafeArea(
+        child: Column(
+          children: [
+            // Titelleiste mit CustomPageHeader (erstes Kind)
+            CustomPageHeader(
+              icon: Icons.cancel,
+              title: l?.rejected ?? 'Abgelehnt',
+            ),
+            // Content-Bereich (zweites Kind)
+            Expanded(
+              child: StickyPaginationLayout(
+                currentPage: _currentPage > 0 ? _currentPage : 1,
+                totalPages: 1,
+                onPrevious: null,
+                onNext: null,
+                child: StreamBuilder<ActivePartyInfo?>(
+                  stream: ActivePartyService.getActivePartyInfoStream(user?.uid),
+                  builder: (context, partyInfoSnapshot) {
+                    final partyCode = partyInfoSnapshot.data?.partyCode ?? '';
+                    
+                    // Wenn kein partyCode vorhanden, leere Liste anzeigen
+                    if (partyCode.isEmpty) {
+                      return SingleChildScrollView(
+                        padding: EdgeInsets.only(
+                          left: 16,
+                          right: 16,
+                          top: 16,
+                          bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const SizedBox(height: 24),
+                            EmptyListMessage(),
+                            SizedBox(height: UIConstants.kFooterPadding * 2),
+                          ],
+                        ),
+                      );
+                    }
+                    
+                    // StreamBuilder für Wünsche (nur nach party_id gefiltert)
+                    return StreamBuilder<QuerySnapshot>(
+                      stream: FirebaseFirestore.instance
+                          .collection('requests')
+                          .where('party_id', isEqualTo: partyCode)
+                          .where('status', isEqualTo: 'rejected')
+                          .orderBy('created_at', descending: true)
+                          .snapshots(),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState == ConnectionState.waiting) {
+                          return const Center(child: CircularProgressIndicator());
+                        }
+
+                        if (snapshot.hasError) {
+                          return buildFirebaseErrorWidget(snapshot.error!);
+                        }
+
+                        final wishesDocs = snapshot.data?.docs ?? [];
+
+                        // Filtere Duplikate
+                        final filteredDocs = wishesDocs.where((doc) {
+                          final data = doc.data() as Map<String, dynamic>;
+                          return (data['is_duplicate'] as bool?) != true;
+                        }).toList();
+
+                        // Konvertiere zu SongRequest Objekten
+                        final rejectedWishes = filteredDocs.map((doc) {
+                          return SongRequest.fromDocument(doc);
+                        }).toList();
+
+                        // Wenn Liste leer -> EmptyListMessage
+                        if (rejectedWishes.isEmpty) {
+                          return SingleChildScrollView(
+                            padding: EdgeInsets.only(
+                              left: 16,
+                              right: 16,
+                              top: 16,
+                              bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const SizedBox(height: 24),
+                                EmptyListMessage(),
+                                SizedBox(height: UIConstants.kFooterPadding * 2),
+                              ],
+                            ),
+                          );
+                        }
+
+                        // Sortiere nach createdAt (neueste zuerst)
+                        final sortedWishes = rejectedWishes.toList()
+                          ..sort((a, b) {
+                            final dateA = a.createdAt?.toDate() ?? DateTime.fromMillisecondsSinceEpoch(0);
+                            final dateB = b.createdAt?.toDate() ?? DateTime.fromMillisecondsSinceEpoch(0);
+                            return dateB.compareTo(dateA);
+                          });
+
+                        // Gruppiere Wünsche
+                        final groupedResult = WishGroupingHelper.groupWishes(sortedWishes);
+                        final allGroupedList = groupedResult['groups'] as List<Map<String, dynamic>>;
+                        final groupedFirstRequests = groupedResult['firstRequests'] as Map<String, SongRequest>;
+                        final groupedDocIds = groupedResult['docIds'] as Map<String, List<String>>;
+
+                        // Paginierung: Berechne Seiten
+                        final totalPages = HistoryPaginationService.calculateTotalPages(allGroupedList.length);
+                        if (_currentPage > totalPages && totalPages > 0) {
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            setState(() {
+                              _currentPage = totalPages;
+                            });
+                          });
+                        }
+                        
+                        // Hole paginierte Liste
+                        final paginatedGroupedList = HistoryPaginationService.getItemsForPage(
+                          allGroupedList,
+                          _currentPage > 0 ? _currentPage : 1,
+                        );
+
+                        // Variable Logik für bottomPadding
+                        final bottomPadding = totalPages > 1 ? 220.0 : 150.0;
+
+                        return SingleChildScrollView(
+                          padding: EdgeInsets.only(
+                            left: 16,
+                            right: 16,
+                            top: 16,
+                            bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const SizedBox(height: 24),
+                              RepaintBoundary(
+                                child: ListView.separated(
+                                  shrinkWrap: true,
+                                  physics: const NeverScrollableScrollPhysics(),
+                                  padding: EdgeInsets.only(
+                                    top: 8.0,
+                                    bottom: bottomPadding,
+                                  ),
+                                  itemCount: paginatedGroupedList.length,
+                                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                                  itemBuilder: (context, index) {
+                                    final groupedItem = paginatedGroupedList[index];
+                                    final groupKey = groupedItem['key'] as String;
+                                    final data = groupedItem['data'] as Map<String, dynamic>;
+                                    final firstRequest = groupedFirstRequests[groupKey];
+                                    final docIds = groupedDocIds[groupKey] ?? [];
+                                    
+                                    final number = allGroupedList.length - (HistoryPaginationService.calculateStartIndex(_currentPage > 0 ? _currentPage : 1) + index);
+
+                                    return WishCard(
+                                      key: ValueKey(groupKey),
+                                      groupedData: data,
+                                      docIds: docIds,
+                                      type: WishCardType.abgelehnt,
+                                      number: number,
+                                      isNew: false,
+                                    );
+                                  },
+                                ),
+                              ),
+                              SizedBox(height: UIConstants.kFooterPadding * 2),
+                            ],
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

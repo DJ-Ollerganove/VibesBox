@@ -1,0 +1,214 @@
+// ============================================
+// FIREBASE FIRESTORE COMPOSITE INDEXES
+// ============================================
+// Für die Firebase Console: Firestore Database > Indexes
+// 
+// Diese Indexes sind für die Party-Statistiken und Autostart-Funktionalität erforderlich
+// ============================================
+
+// ============================================
+// INDEX 1: Wishes - Party-Statistiken (mit djId)
+// ============================================
+// Collection: wishes
+// Fields:
+//   - party_id (Ascending)
+//   - djId (Ascending)
+//   - status (Ascending)
+// Query Scope: Collection
+// 
+// Verwendung: PartyStatisticsService.loadForPartyStream()
+// Query: wishes.where('party_id', isEqualTo: partyId).where('djId', isEqualTo: djId)
+// 
+// JSON für Firebase Console:
+{
+  "collectionGroup": "wishes",
+  "queryScope": "COLLECTION",
+  "fields": [
+    {
+      "fieldPath": "party_id",
+      "order": "ASCENDING"
+    },
+    {
+      "fieldPath": "djId",
+      "order": "ASCENDING"
+    },
+    {
+      "fieldPath": "status",
+      "order": "ASCENDING"
+    }
+  ]
+}
+
+// ============================================
+// INDEX 2: Wishes - Party-Statistiken (ohne djId)
+// ============================================
+// Collection: wishes
+// Fields:
+//   - party_id (Ascending)
+//   - status (Ascending)
+// Query Scope: Collection
+// 
+// Verwendung: PartyStatisticsService.loadForPartyStream() (wenn djId optional)
+// Query: wishes.where('party_id', isEqualTo: partyId)
+// 
+// JSON für Firebase Console:
+{
+  "collectionGroup": "wishes",
+  "queryScope": "COLLECTION",
+  "fields": [
+    {
+      "fieldPath": "party_id",
+      "order": "ASCENDING"
+    },
+    {
+      "fieldPath": "status",
+      "order": "ASCENDING"
+    }
+  ]
+}
+
+// ============================================
+// INDEX 3: Wishes - Session-Bereinigung
+// ============================================
+// Collection: wishes
+// Fields:
+//   - party_id (Ascending)
+//   - status (Ascending)
+// Query Scope: Collection
+// 
+// Verwendung: PartyStatisticsService._cleanupPendingWishesForEndedParty()
+// Query: wishes.where('status', isEqualTo: 'pending').where('party_id', isEqualTo: partyId)
+// 
+// JSON für Firebase Console:
+{
+  "collectionGroup": "wishes",
+  "queryScope": "COLLECTION",
+  "fields": [
+    {
+      "fieldPath": "status",
+      "order": "ASCENDING"
+    },
+    {
+      "fieldPath": "party_id",
+      "order": "ASCENDING"
+    }
+  ]
+}
+
+// ============================================
+// INDEX 4: Music History - Letzte Session
+// ============================================
+// Collection: music_history
+// Fields:
+//   - djId (Ascending)
+//   - isActive (Ascending)
+//   - endTime (Descending)
+// Query Scope: Collection
+// 
+// Verwendung: PartyStatisticsService.getLastCompletedPartyId()
+// Query: music_history.where('djId', isEqualTo: djId).where('isActive', isEqualTo: false).orderBy('endTime', descending: true)
+// 
+// JSON für Firebase Console:
+{
+  "collectionGroup": "music_history",
+  "queryScope": "COLLECTION",
+  "fields": [
+    {
+      "fieldPath": "djId",
+      "order": "ASCENDING"
+    },
+    {
+      "fieldPath": "isActive",
+      "order": "ASCENDING"
+    },
+    {
+      "fieldPath": "endTime",
+      "order": "DESCENDING"
+    }
+  ]
+}
+
+// ============================================
+// INDEX 5: Music History - Aktive Session
+// ============================================
+// Collection: music_history
+// Fields:
+//   - djId (Ascending)
+//   - isActive (Ascending)
+// Query Scope: Collection
+// 
+// Verwendung: PartyStatisticsService.getActivePartyId()
+// Query: music_history.where('djId', isEqualTo: djId).where('isActive', isEqualTo: true)
+// 
+// JSON für Firebase Console:
+{
+  "collectionGroup": "music_history",
+  "queryScope": "COLLECTION",
+  "fields": [
+    {
+      "fieldPath": "djId",
+      "order": "ASCENDING"
+    },
+    {
+      "fieldPath": "isActive",
+      "order": "ASCENDING"
+    }
+  ]
+}
+
+// ============================================
+// INDEX 6: Parties - Autostart-Listener
+// ============================================
+// Collection: parties
+// Fields:
+//   - created_by (Ascending)
+//   - start_date (Ascending)
+//   - end_date (Ascending)
+// Query Scope: Collection
+// 
+// Verwendung: PartyAutostartService._checkPartyStatus()
+// Query: parties.where('created_by', isEqualTo: djId)
+// 
+// HINWEIS: Dieser Index ist möglicherweise bereits vorhanden.
+// Prüfe zuerst, ob er existiert, bevor du ihn erstellst.
+// 
+// JSON für Firebase Console:
+{
+  "collectionGroup": "parties",
+  "queryScope": "COLLECTION",
+  "fields": [
+    {
+      "fieldPath": "created_by",
+      "order": "ASCENDING"
+    },
+    {
+      "fieldPath": "start_date",
+      "order": "ASCENDING"
+    },
+    {
+      "fieldPath": "end_date",
+      "order": "ASCENDING"
+    }
+  ]
+}
+
+// ============================================
+// HINWEISE ZUR ERSTELLUNG:
+// ============================================
+// 1. Gehe zur Firebase Console: Firestore Database > Indexes
+// 2. Klicke auf "Create Index"
+// 3. Wähle die Collection Group aus
+// 4. Füge die Felder in der angegebenen Reihenfolge hinzu
+// 5. Wähle die Sortierrichtung (ASCENDING/DESCENDING)
+// 6. Klicke auf "Create"
+// 
+// ALTERNATIV: Firebase erstellt die Indexes automatisch, wenn du die Queries ausführst
+// und zeigt dir einen Link zur Index-Erstellung an.
+// 
+// WICHTIG: 
+// - Indexes können einige Minuten zum Erstellen benötigen
+// - Prüfe den Status in der Firebase Console
+// - Queries funktionieren erst, wenn der Index erstellt wurde
+// ============================================
+
+

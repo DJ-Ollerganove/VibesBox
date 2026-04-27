@@ -1,0 +1,2440 @@
+﻿// Home-Seite
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  int _loginCount = 0;
+  DateTime? _previousLogin; // Vorheriger Login (nicht der aktuelle)
+  int _totalWishes = 0; // Anzahl aller gesendeten WÃ¼nsche (fÃ¼r normale User)
+  int _playedWishes = 0; // Anzahl der gespielten WÃ¼nsche (fÃ¼r normale User)
+  // Admin-Statistiken
+  int _totalWishesAdmin = 0; // Alle WÃ¼nsche insgesamt
+  int _pendingWishesAdmin = 0; // Noch offene WÃ¼nsche
+  int _playedWishesAdmin = 0; // Gespielte WÃ¼nsche
+  int _rejectedWishesAdmin = 0; // Abgelehnte WÃ¼nsche
+  int _deletedWishesAdmin = 0; // GelÃ¶schte WÃ¼nsche (aus Firestore deleted_count)
+  // Daten fÃ¼r Kreisdiagramm (ohne pending)
+  int _chartPlayed = 0; // Gespielte fÃ¼r Diagramm
+  int _chartRejected = 0; // Abgelehnte fÃ¼r Diagramm
+  int _chartNotPlayed = 0; // Nicht gespielte (andere Status) fÃ¼r Diagramm
+  int _chartDeleted = 0; // GelÃ¶schte fÃ¼r Diagramm
+  bool _wishboxManuallyEnabled = false; // Manueller Schalter fÃ¼r Wunschbox
+  bool _hasActiveParty = false; // Ob eine aktive Party lÃ¤uft
+  bool _isLoading = true;
+  // Aktive oder nÃ¤chste bevorstehende Party fÃ¼r Admin-Anzeige
+  Map<String, dynamic>? _currentOrNextParty;
+  StreamSubscription<User?>? _authSubscription;
+  StreamSubscription<DocumentSnapshot>? _userDocSubscription;
+  StreamSubscription<QuerySnapshot>? _partiesSubscription;
+  StreamSubscription<DocumentSnapshot>? _partySettingsSubscription;
+  Timer? _wishboxStatusTimer; // Timer fÃ¼r periodische Status-Updates
+  StreamController<DateTime>? _timeController;
+  Timer? _timeTimer;
+  
+  // Stream fÃ¼r periodische Zeit-Updates (fÃ¼r Countdowns)
+  Stream<DateTime> get _timeStream {
+    _timeController ??= StreamController<DateTime>.broadcast();
+    _timeController!.add(DateTime.now());
+    _timeTimer?.cancel();
+    _timeTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
+      if (!_timeController!.isClosed) {
+        _timeController!.add(DateTime.now());
+      } else {
+        timer.cancel();
+      }
+    });
+    return _timeController!.stream;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUserData();
+    
+    // HÃ¶re auf Auth-Ã„nderungen, damit die Daten neu geladen werden
+    _authSubscription = FirebaseAuth.instance.authStateChanges().listen((user) {
+      if (mounted) {
+        // LÃ¤ngeres Delay, damit Firestore-Update abgeschlossen ist
+        Future.delayed(const Duration(milliseconds: 1000), () {
+          if (mounted) {
+            _loadUserData();
+            _setupUserDocListener();
+            _setupPartiesListener();
+            _setupWishboxStatusTimer();
+          }
+        });
+      }
+    });
+    
+    _setupUserDocListener();
+    _setupPartiesListener();
+    _setupWishboxStatusTimer();
+  }
+
+  void _setupWishboxStatusTimer() {
+    // Timer entfernt - verwende jetzt Streams fÃ¼r Echtzeit-Updates
+    _wishboxStatusTimer?.cancel();
+    _wishboxStatusTimer = null;
+  }
+
+  void _setupPartiesListener() {
+    final user = FirebaseAuth.instance.currentUser;
+    final isAdmin = user != null && user.email == 'info@dj-ollerganove.de';
+    
+    _partiesSubscription?.cancel();
+    
+    if (isAdmin) {
+      _partiesSubscription = FirebaseFirestore.instance
+          .collection('parties')
+          .snapshots()
+          .listen((snapshot) {
+        if (mounted) {
+          _loadWishboxStatus();
+        }
+      });
+      
+      // Stream fÃ¼r party_settings
+      _partySettingsSubscription = FirebaseFirestore.instance
+          .collection('party_settings')
+          .doc('current')
+          .snapshots()
+          .listen((snapshot) {
+        if (mounted) {
+          _loadWishboxStatus();
+        }
+      });
+    } else {
+      _partiesSubscription = null;
+      _partySettingsSubscription = null;
+    }
+  }
+  
+  void _setupUserDocListener() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      _userDocSubscription?.cancel();
+      print('Setup UserDocListener fÃ¼r UID: ${user.uid}');
+      _userDocSubscription = FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .snapshots()
+          .listen((snapshot) {
+        print('StreamListener: Snapshot empfangen. Exists: ${snapshot.exists}');
+        if (mounted && snapshot.exists) {
+          final data = snapshot.data();
+          print('StreamListener: Daten: $data');
+          setState(() {
+            // PrÃ¼fe verschiedene mÃ¶gliche Typen fÃ¼r loginCount
+            final loginCountValue = data?['loginCount'];
+            print('StreamListener: loginCountValue: $loginCountValue (Typ: ${loginCountValue.runtimeType})');
+            if (loginCountValue is int) {
+              _loginCount = loginCountValue;
+            } else if (loginCountValue is num) {
+              _loginCount = loginCountValue.toInt();
+            } else {
+              _loginCount = 0;
+            }
+            print('StreamListener: Gesetzter _loginCount: $_loginCount');
+            
+            // PrÃ¼fe previousLogin (vorheriger Login, nicht der aktuelle)
+            final previousLoginValue = data?['previousLogin'];
+            print('StreamListener: previousLoginValue: $previousLoginValue (Typ: ${previousLoginValue.runtimeType})');
+            if (previousLoginValue is Timestamp) {
+              _previousLogin = previousLoginValue.toDate();
+            } else if (previousLoginValue != null) {
+              try {
+                _previousLogin = (previousLoginValue as Timestamp).toDate();
+              } catch (e) {
+                _previousLogin = null;
+              }
+            } else {
+              _previousLogin = null;
+            }
+            print('StreamListener: Gesetzter _previousLogin: $_previousLogin');
+            
+            _isLoading = false;
+          });
+        } else if (mounted && !snapshot.exists) {
+          print('StreamListener: Dokument existiert nicht');
+        }
+      }, onError: (error) {
+        print('StreamListener Fehler: $error');
+      });
+    }
+  }
+  
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Refresh entfernt - Streams aktualisieren automatisch
+  }
+
+
+  @override
+  void dispose() {
+    _authSubscription?.cancel();
+    _userDocSubscription?.cancel();
+    _partiesSubscription?.cancel();
+    _wishboxStatusTimer?.cancel();
+    _timeTimer?.cancel();
+    _timeController?.close();
+    super.dispose();
+  }
+
+  Future<void> _loadUserData() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      try {
+        print('Lade User-Daten fÃ¼r UID: ${user.uid}');
+        final userDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .get();
+
+        if (userDoc.exists) {
+          final data = userDoc.data();
+          print('User-Dokument gefunden. Daten: $data');
+          setState(() {
+            // PrÃ¼fe verschiedene mÃ¶gliche Typen fÃ¼r loginCount
+            final loginCountValue = data?['loginCount'];
+            print('loginCountValue aus Firestore: $loginCountValue (Typ: ${loginCountValue.runtimeType})');
+            if (loginCountValue is int) {
+              _loginCount = loginCountValue;
+            } else if (loginCountValue is num) {
+              _loginCount = loginCountValue.toInt();
+            } else {
+              _loginCount = 0;
+            }
+            print('Gesetzter _loginCount: $_loginCount');
+            
+            // PrÃ¼fe previousLogin (vorheriger Login, nicht der aktuelle)
+            final previousLoginValue = data?['previousLogin'];
+            print('previousLoginValue aus Firestore: $previousLoginValue (Typ: ${previousLoginValue.runtimeType})');
+            if (previousLoginValue is Timestamp) {
+              _previousLogin = previousLoginValue.toDate();
+            } else if (previousLoginValue != null) {
+              // Versuche zu konvertieren falls es ein anderes Format ist
+              try {
+                _previousLogin = (previousLoginValue as Timestamp).toDate();
+              } catch (e) {
+                _previousLogin = null;
+              }
+            } else {
+              _previousLogin = null;
+            }
+            print('Gesetzter _previousLogin: $_previousLogin');
+            
+            _isLoading = false;
+          });
+          
+          // Lade WÃ¼nsche-Statistiken
+          final isAdmin = user.email == 'info@dj-ollerganove.de';
+          if (isAdmin) {
+            _loadAdminStatistics();
+            _loadWishboxStatus();
+          } else {
+            _loadWishesStatistics();
+          }
+        } else {
+          // Dokument existiert nicht - setze auf 0
+          print('User-Dokument existiert nicht in Firestore');
+          setState(() {
+            _loginCount = 0;
+            _previousLogin = null;
+            _isLoading = false;
+          });
+          final isAdmin = user.email == 'info@dj-ollerganove.de';
+          if (isAdmin) {
+            _loadAdminStatistics();
+            _loadWishboxStatus();
+          } else {
+            _loadWishesStatistics();
+          }
+        }
+      } catch (e, stackTrace) {
+        print('Fehler beim Laden der User-Daten: $e');
+        print('Stack trace: $stackTrace');
+        setState(() {
+          _isLoading = false;
+        });
+        final isAdmin = user.email == 'info@dj-ollerganove.de';
+        if (isAdmin) {
+          _loadAdminStatistics();
+        } else {
+          _loadWishesStatistics();
+        }
+      }
+    } else {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _loadWishesStatistics() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      setState(() {
+        _totalWishes = 0;
+        _playedWishes = 0;
+      });
+      return;
+    }
+
+    try {
+      // Lade alle WÃ¼nsche des Users (nach aktuellem Namen)
+      final currentName = user.displayName ?? user.email?.split('@')[0] ?? '';
+      final wishesQuery = await FirebaseFirestore.instance
+          .collection('wishes')
+          .where('name', isEqualTo: currentName)
+          .get();
+
+      int total = 0;
+      int played = 0;
+
+      for (final doc in wishesQuery.docs) {
+        final data = doc.data();
+        total++;
+        if (data['status'] == 'played') {
+          played++;
+        }
+      }
+
+      setState(() {
+        _totalWishes = total;
+        _playedWishes = played;
+      });
+    } catch (e) {
+      print('Fehler beim Laden der WÃ¼nsche-Statistiken: $e');
+      setState(() {
+        _totalWishes = 0;
+        _playedWishes = 0;
+      });
+    }
+  }
+
+  Future<void> _loadAdminStatistics() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final isAdmin = user.email == 'info@dj-ollerganove.de';
+    if (!isAdmin) return;
+
+    try {
+      // Lade alle WÃ¼nsche (ohne Filter)
+      final wishesQuery = await FirebaseFirestore.instance
+          .collection('wishes')
+          .get();
+
+      int total = 0;
+      int pending = 0;
+      int played = 0;
+      int rejected = 0;
+      int notPlayed = 0; // FÃ¼r Diagramm: WÃ¼nsche mit anderen Status (auÃŸer pending, played, rejected)
+
+      for (final doc in wishesQuery.docs) {
+        final data = doc.data();
+        total++;
+        final status = data['status'] as String?;
+        if (status == 'played') {
+          played++;
+        } else if (status == 'rejected') {
+          rejected++;
+        } else if (status == 'pending' || status == null) {
+          pending++;
+        } else {
+          // Alle anderen Status (z.B. 'not_played', 'skipped' oder andere) zÃ¤hlen als "nicht gespielt"
+          notPlayed++;
+        }
+      }
+      
+      // Debug-Ausgabe um zu sehen, welche Status-Werte existieren
+      print('=== Status-Verteilung ===');
+      print('Total: $total');
+      print('Pending: $pending');
+      print('Played: $played');
+      print('Rejected: $rejected');
+      print('Not Played (andere Status): $notPlayed');
+
+      // Lade deleted_count aus Firestore (falls vorhanden)
+      int deletedCount = 0;
+      try {
+        final statsDoc = await FirebaseFirestore.instance
+            .collection('admin_stats')
+            .doc('wishes')
+            .get();
+        if (statsDoc.exists) {
+          final data = statsDoc.data();
+          deletedCount = data?['deleted_count'] as int? ?? 0;
+        }
+      } catch (e) {
+        print('Fehler beim Laden der deleted_count: $e');
+      }
+
+      // FÃ¼r Diagramm:
+      // "Nicht gespielt" = alle bearbeiteten WÃ¼nsche (nicht pending), die nicht gespielt oder abgelehnt sind.
+      // Deleted werden separat gezÃ¤hlt (kommen nicht mehr in der Collection vor).
+      final chartNotPlayed = total - pending - played - rejected;
+      final clampedNotPlayed = chartNotPlayed > 0 ? chartNotPlayed : 0;
+
+      // FÃ¼r Diagramm: GelÃ¶schte separat behandeln
+      setState(() {
+        _totalWishesAdmin = total;
+        _pendingWishesAdmin = pending;
+        _playedWishesAdmin = played;
+        _rejectedWishesAdmin = rejected;
+        _deletedWishesAdmin = deletedCount;
+        // Diagramm-Daten (ohne pending)
+        _chartPlayed = played;
+        _chartRejected = rejected;
+        _chartNotPlayed = clampedNotPlayed;
+        _chartDeleted = deletedCount;
+      });
+      
+      print('=== Diagramm-Daten ===');
+      print('Total WÃ¼nsche (ohne gelÃ¶schte): $total');
+      print('Pending (OFFEN - nicht im Diagramm): $pending');
+      print('Gespielt (GRÃœN): $_chartPlayed');
+      print('Abgelehnt (ROT): $_chartRejected');
+      print('Nicht gespielt (BLAU): $_chartNotPlayed');
+      print('GelÃ¶scht (SCHWARZ): $_chartDeleted');
+      print('Summe im Diagramm: ${_chartPlayed + _chartRejected + _chartNotPlayed + _chartDeleted}');
+    } catch (e) {
+      print('Fehler beim Laden der Admin-Statistiken: $e');
+      setState(() {
+        _totalWishesAdmin = 0;
+        _pendingWishesAdmin = 0;
+        _playedWishesAdmin = 0;
+        _rejectedWishesAdmin = 0;
+        _deletedWishesAdmin = 0;
+        // Diagramm-Daten zurÃ¼cksetzen
+        _chartPlayed = 0;
+        _chartRejected = 0;
+        _chartNotPlayed = 0;
+        _chartDeleted = 0;
+      });
+    }
+  }
+
+  Future<void> _loadWishboxStatus() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final isAdmin = user.email == 'info@dj-ollerganove.de';
+    if (!isAdmin) return;
+
+    try {
+      // Lade manuellen Schalter-Status
+      final doc = await FirebaseFirestore.instance
+          .collection('party_settings')
+          .doc('current')
+          .get();
+      
+      bool manuallyEnabled = false;
+      if (doc.exists) {
+        final data = doc.data()!;
+        manuallyEnabled = data['wishbox_manually_enabled'] as bool? ?? false;
+      }
+
+      // PrÃ¼fe, ob eine aktive Party lÃ¤uft
+      final now = DateTime.now();
+      // Lade nur Partys, die nicht Ã¤lter als 7 Tage sind (fÃ¼r Performance)
+      final sevenDaysAgo = now.subtract(const Duration(days: 7));
+      print('=== _loadWishboxStatus: PrÃ¼fe aktive Partys ===');
+      print('Aktuelle Zeit: $now');
+      print('Lade nur Partys mit end_date >= $sevenDaysAgo');
+      final partiesQuery = await FirebaseFirestore.instance
+          .collection('parties')
+          .where('end_date', isGreaterThanOrEqualTo: Timestamp.fromDate(sevenDaysAgo))
+          .get();
+      
+      print('Gefundene Partys: ${partiesQuery.docs.length}');
+      bool hasActiveParty = false;
+      for (final partyDoc in partiesQuery.docs) {
+        final data = partyDoc.data();
+        final partyName = data['party_name'] as String? ?? 'Unbenannte Party';
+        final startTimestamp = data['start_date'] as Timestamp?;
+        final endTimestamp = data['end_date'] as Timestamp?;
+        
+        print('\n--- Party: $partyName ---');
+        if (startTimestamp != null && endTimestamp != null) {
+          final startDate = startTimestamp.toDate();
+          final endDate = endTimestamp.toDate();
+          
+          print('Start: $startDate');
+          print('Ende: $endDate');
+          print('Vergleich Start: ${now.compareTo(startDate)} (>= 0: ${now.compareTo(startDate) >= 0})');
+          print('Vergleich Ende: ${now.compareTo(endDate)} (< 0: ${now.compareTo(endDate) < 0})');
+          
+          // Party ist aktiv, wenn jetzt >= Start UND jetzt < Ende (Endzeit ist exklusiv)
+          if (now.compareTo(startDate) >= 0 && now.compareTo(endDate) < 0) {
+            print('âœ“ Party ist AKTIV!');
+            hasActiveParty = true;
+            break;
+          } else {
+            print('âœ— Party ist nicht aktiv');
+          }
+        } else {
+          print('FEHLER: Start oder End Timestamp fehlt!');
+        }
+      }
+      print('hasActiveParty: $hasActiveParty');
+
+      // Wenn eine Party lÃ¤uft, setze wishbox_manually_enabled standardmÃ¤ÃŸig auf true
+      // (es sei denn, es wurde explizit auf false gesetzt)
+      if (hasActiveParty) {
+        print('Party ist aktiv, prÃ¼fe manuellen Schalter...');
+        if (!doc.exists) {
+          // Dokument existiert nicht, setze es auf true
+          print('Dokument existiert nicht, setze wishbox_manually_enabled auf true');
+          await FirebaseFirestore.instance
+              .collection('party_settings')
+              .doc('current')
+              .set({
+            'wishbox_manually_enabled': true,
+          }, SetOptions(merge: true));
+          manuallyEnabled = true;
+        } else {
+          // Dokument existiert, prÃ¼fe ob es explizit auf false gesetzt wurde
+          final data = doc.data()!;
+          final currentValue = data['wishbox_manually_enabled'];
+          print('Aktueller Wert von wishbox_manually_enabled: $currentValue');
+          // Wenn eine Party aktiv ist, setze wishbox_manually_enabled auf true
+          // (es sei denn, es wurde gerade vom Admin auf false gesetzt)
+          // FÃ¼r jetzt: Wenn Party aktiv ist, setze es immer auf true beim Laden
+          // Der Admin kann es dann auf false setzen, wenn er will
+          if (currentValue != true) {
+            print('Setze wishbox_manually_enabled auf true (Party ist aktiv)');
+            await FirebaseFirestore.instance
+                .collection('party_settings')
+                .doc('current')
+                .set({
+              'wishbox_manually_enabled': true,
+            }, SetOptions(merge: true));
+          }
+          manuallyEnabled = true;
+          print('manuallyEnabled gesetzt auf: $manuallyEnabled (Party ist aktiv)');
+        }
+        print('manuallyEnabled nach Party-PrÃ¼fung: $manuallyEnabled');
+      } else {
+        // Keine aktive Party lÃ¤uft
+        // Respektiere den manuell gesetzten Wert - Ã¼berschreibe ihn nicht
+        // Wenn das Dokument nicht existiert, setze es auf false
+        if (!doc.exists) {
+          manuallyEnabled = false;
+        }
+        // Wenn doc.exists ist, behalte den aktuellen Wert (manuallyEnabled wurde bereits aus doc gelesen)
+      }
+
+      // Finde aktive oder nÃ¤chste bevorstehende Party fÃ¼r Anzeige
+      await _loadCurrentOrNextParty();
+
+      setState(() {
+        _wishboxManuallyEnabled = manuallyEnabled;
+        _hasActiveParty = hasActiveParty;
+      });
+    } catch (e) {
+      print('Fehler beim Laden des Wunschbox-Status: $e');
+    }
+  }
+
+  // LÃ¤dt die aktive Party oder die nÃ¤chste bevorstehende Party
+  Future<void> _loadCurrentOrNextParty() async {
+    try {
+      final now = DateTime.now();
+      final sevenDaysAgo = now.subtract(const Duration(days: 7));
+      
+      final partiesQuery = await FirebaseFirestore.instance
+          .collection('parties')
+          .where('end_date', isGreaterThanOrEqualTo: Timestamp.fromDate(sevenDaysAgo))
+          .get();
+      
+      Map<String, dynamic>? activeParty;
+      Map<String, dynamic>? nextUpcomingParty;
+      DateTime? nextUpcomingStart;
+      
+      for (final partyDoc in partiesQuery.docs) {
+        final data = partyDoc.data();
+        final startTimestamp = data['start_date'] as Timestamp?;
+        final endTimestamp = data['end_date'] as Timestamp?;
+        
+        if (startTimestamp != null && endTimestamp != null) {
+          final startDate = startTimestamp.toDate();
+          final endDate = endTimestamp.toDate();
+          
+          // PrÃ¼fe ob Party aktiv ist
+          if (now.compareTo(startDate) >= 0 && now.compareTo(endDate) < 0) {
+            activeParty = {
+              'id': partyDoc.id,
+              'party_name': data['party_name'] as String? ?? 'Unbenannte Party',
+              'start_date': startDate,
+              'end_date': endDate,
+              'party_code': data['party_code'] as String?,
+            };
+            break; // Aktive Party hat PrioritÃ¤t
+          }
+          
+          // PrÃ¼fe ob Party bevorstehend ist
+          if (now.compareTo(startDate) < 0) {
+            if (nextUpcomingParty == null || startDate.isBefore(nextUpcomingStart!)) {
+              nextUpcomingStart = startDate;
+              nextUpcomingParty = {
+                'id': partyDoc.id,
+                'party_name': data['party_name'] as String? ?? 'Unbenannte Party',
+                'start_date': startDate,
+                'end_date': endDate,
+                'party_code': data['party_code'] as String?,
+              };
+            }
+          }
+        }
+      }
+      
+      setState(() {
+        _currentOrNextParty = activeParty ?? nextUpcomingParty;
+      });
+    } catch (e) {
+      print('Fehler beim Laden der aktuellen/nÃ¤chsten Party: $e');
+      setState(() {
+        _currentOrNextParty = null;
+      });
+    }
+  }
+
+  // PrÃ¼ft ob eine Party aktiv ist
+  bool _isPartyActive(Map<String, dynamic> party) {
+    final now = DateTime.now();
+    final startDate = party['start_date'] as DateTime;
+    final endDate = party['end_date'] as DateTime;
+    return now.compareTo(startDate) >= 0 && now.compareTo(endDate) < 0;
+  }
+
+  // Formatiert DateTime fÃ¼r Bild (kompakt)
+  String _formatDateTimeForImage(DateTime date) {
+    final day = date.day.toString().padLeft(2, '0');
+    final month = date.month.toString().padLeft(2, '0');
+    final year = date.year;
+    final hour = date.hour.toString().padLeft(2, '0');
+    final minute = date.minute.toString().padLeft(2, '0');
+    return '$day.$month.$year $hour:$minute Uhr';
+  }
+
+  // Formatiert DateTime fÃ¼r Anzeige
+  String _formatDateTimeForDisplay(DateTime date) {
+    final day = date.day.toString().padLeft(2, '0');
+    final month = date.month.toString().padLeft(2, '0');
+    final year = date.year;
+    final hour = date.hour.toString().padLeft(2, '0');
+    final minute = date.minute.toString().padLeft(2, '0');
+    return '$day.$month.$year um $hour:$minute Uhr';
+  }
+
+  // Formatiert Datum fÃ¼r Party Extra Dialog
+  String _formatDateForPartyExtra(DateTime date) {
+    final day = date.day.toString().padLeft(2, '0');
+    final month = date.month.toString().padLeft(2, '0');
+    final year = date.year;
+    return '$day.$month.$year';
+  }
+
+  // Formatiert Uhrzeit fÃ¼r Party Extra Dialog
+  String _formatTimeForPartyExtra(DateTime date) {
+    final hour = date.hour.toString().padLeft(2, '0');
+    final minute = date.minute.toString().padLeft(2, '0');
+    return '$hour:$minute Uhr';
+  }
+
+  // Speichert QR-Code mit Party-Code als Bild
+  Future<void> _saveQRCodeAsImage(
+    BuildContext context,
+    String pwaUrl,
+    String partyCode,
+    String partyName,
+    DateTime startDate,
+  ) async {
+    try {
+      // Erstelle ein Bild mit QR-Code und Party-Code
+      const qrSize = 500.0;
+      const padding = 40.0;
+      const textHeight = 60.0;
+      const titleHeight = 80.0;
+      const dateHeight = 50.0;
+      const spacing = 20.0;
+      const totalHeight = titleHeight + spacing + dateHeight + spacing + qrSize + spacing + textHeight;
+      const totalWidth = qrSize + (padding * 2);
+
+      // Erstelle ein PictureRecorder
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      
+      // WeiÃŸer Hintergrund
+      final whitePaint = Paint()..color = Colors.white;
+      canvas.drawRect(
+        Rect.fromLTWH(0, 0, totalWidth, totalHeight),
+        whitePaint,
+      );
+
+      double currentY = padding;
+
+      // Zeichne Party-Titel Ã¼ber dem QR-Code
+      final titleStyle = TextStyle(
+        fontSize: 36,
+        fontWeight: FontWeight.bold,
+        color: Colors.black,
+      );
+      final titleSpan = TextSpan(
+        text: partyName,
+        style: titleStyle,
+      );
+      final titlePainter = TextPainter(
+        text: titleSpan,
+        textAlign: TextAlign.center,
+        textDirection: TextDirection.ltr,
+        maxLines: 2,
+      );
+      titlePainter.layout(maxWidth: qrSize);
+      final titleX = (totalWidth - titlePainter.width) / 2;
+      titlePainter.paint(canvas, Offset(titleX, currentY));
+      currentY += titlePainter.height + spacing;
+
+      // Zeichne Party-Datum
+      final dateText = _formatDateTimeForImage(startDate);
+      final dateStyle = TextStyle(
+        fontSize: 24,
+        fontWeight: FontWeight.normal,
+        color: Colors.black,
+      );
+      final dateSpan = TextSpan(
+        text: dateText,
+        style: dateStyle,
+      );
+      final datePainter = TextPainter(
+        text: dateSpan,
+        textAlign: TextAlign.center,
+        textDirection: TextDirection.ltr,
+      );
+      datePainter.layout(maxWidth: qrSize);
+      final dateX = (totalWidth - datePainter.width) / 2;
+      datePainter.paint(canvas, Offset(dateX, currentY));
+      currentY += datePainter.height + spacing;
+
+      // Zeichne QR-Code
+      final qrPainter = QrPainter(
+        data: pwaUrl,
+        version: QrVersions.auto,
+        color: Colors.black,
+        emptyColor: Colors.white,
+      );
+      
+      // Verschiebe Canvas fÃ¼r QR-Code (zentriert)
+      canvas.save();
+      canvas.translate(padding, currentY);
+      qrPainter.paint(canvas, Size(qrSize, qrSize));
+      canvas.restore();
+      currentY += qrSize + spacing;
+
+      // Zeichne Party-Code Text unter dem QR-Code
+      final textStyle = TextStyle(
+        fontSize: 32,
+        fontWeight: FontWeight.bold,
+        letterSpacing: 4,
+        color: Colors.black,
+      );
+      final textSpan = TextSpan(
+        text: partyCode,
+        style: textStyle,
+      );
+      final textPainter = TextPainter(
+        text: textSpan,
+        textAlign: TextAlign.center,
+        textDirection: TextDirection.ltr,
+      );
+      textPainter.layout();
+      
+      // Zentriere den Text
+      final textX = (totalWidth - textPainter.width) / 2;
+      textPainter.paint(canvas, Offset(textX, currentY));
+
+      // Konvertiere zu Bild
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(totalWidth.toInt(), totalHeight.toInt());
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      final pngBytes = byteData!.buffer.asUint8List();
+
+      // Speichere das Bild direkt in der Galerie
+      final result = await ImageGallerySaver.saveImage(
+        pngBytes,
+        quality: 100,
+        name: 'QR_Code_$partyCode',
+      );
+
+      if (context.mounted) {
+        if (result['isSuccess'] == true) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('QR-Code wurde in der Galerie gespeichert'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Fehler beim Speichern in der Galerie'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      print('Fehler beim Speichern des QR-Codes: $e');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Fehler beim Speichern: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  // Zeigt QR-Code-Dialog fÃ¼r Party
+  void _showPartyQRCodeDialog(
+    BuildContext context,
+    String partyName,
+    DateTime startDate,
+    DateTime endDate,
+    String? partyCode,
+    {String? partyId, String? djCode}
+  ) async {
+    if (partyCode == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Kein Party-Code verfÃ¼gbar.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    final pwaUrl = 'https://dj-ollerganove.web.app/?code=$partyCode';
+    
+    // Lade DJ-Code, falls noch nicht vorhanden
+    String? finalDjCode = djCode;
+    if (finalDjCode == null && partyId != null) {
+      try {
+        final partyDoc = await FirebaseFirestore.instance
+            .collection('parties')
+            .doc(partyId)
+            .get();
+        
+        if (partyDoc.exists) {
+          final partyData = partyDoc.data() as Map<String, dynamic>?;
+          if (partyData != null) {
+            finalDjCode = partyData['created_by'] as String?;
+          }
+        }
+        
+        // Fallback: Versuche party_status
+        if ((finalDjCode == null || finalDjCode.isEmpty) && partyCode.isNotEmpty) {
+          final partyStatusQuery = await FirebaseFirestore.instance
+              .collection('party_status')
+              .where('party_code', isEqualTo: partyCode)
+              .limit(1)
+              .get();
+          
+          if (partyStatusQuery.docs.isNotEmpty) {
+            final statusData = partyStatusQuery.docs.first.data();
+            finalDjCode = statusData['dj_code'] as String?;
+          }
+        }
+      } catch (e) {
+        print('Fehler beim Laden des DJ-Codes: $e');
+      }
+    }
+    
+    if (!context.mounted) return;
+    
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return Dialog(
+          child: Container(
+            padding: const EdgeInsets.all(24),
+            constraints: const BoxConstraints(maxWidth: 400),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Text(
+                    partyName,
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 16),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                  Row(
+                    children: [
+                      Icon(Icons.calendar_today, size: 16, color: Colors.grey[600]),
+                      const SizedBox(width: 8),
+                            Text(
+                              'Beginn: ${_formatDateForPartyExtra(startDate)} - ${_formatTimeForPartyExtra(startDate)}',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                              textAlign: TextAlign.left,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Icon(Icons.calendar_today, size: 16, color: Colors.grey[600]),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Ende: ${_formatDateForPartyExtra(endDate)} - ${_formatTimeForPartyExtra(endDate)}',
+                              style: Theme.of(context).textTheme.bodyMedium,
+                              textAlign: TextAlign.left,
+                        ),
+                          ],
+                      ),
+                    ],
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.grey.shade300),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        QrImageView(
+                          data: pwaUrl,
+                          version: QrVersions.auto,
+                          size: 250,
+                          backgroundColor: Colors.white,
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.baseline,
+                          textBaseline: TextBaseline.alphabetic,
+                          children: [
+                            Text(
+                              partyCode,
+                              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: 4,
+                                  ),
+                            ),
+                            if (finalDjCode != null && finalDjCode.isNotEmpty) ...[
+                              const SizedBox(width: 4),
+                              Text(
+                                finalDjCode,
+                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      fontSize: 10,
+                                      color: Colors.grey[600],
+                                    ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  // Buttons nebeneinander
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      // 3-tlg Button
+                      SizedBox(
+                        width: 60,
+                        height: 60,
+                        child: ElevatedButton(
+                          onPressed: () async {
+                            Navigator.of(context).pop();
+                            await _generatePartyPDFForHomePage(
+                              partyName,
+                              startDate,
+                              endDate,
+                              partyCode,
+                            );
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red,
+                            foregroundColor: Colors.white,
+                            padding: EdgeInsets.zero,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(Icons.picture_as_pdf, size: 20),
+                              const SizedBox(height: 2),
+                              const Text(
+                                '3-tlg',
+                                style: TextStyle(fontSize: 10),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // Einzel Button
+                      SizedBox(
+                        width: 60,
+                        height: 60,
+                        child: ElevatedButton(
+                          onPressed: () async {
+                            Navigator.of(context).pop();
+                            await _generateSinglePartyPDFForHomePage(
+                              partyName,
+                              startDate,
+                              endDate,
+                              partyCode,
+                            );
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blue,
+                            foregroundColor: Colors.white,
+                            padding: EdgeInsets.zero,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(Icons.picture_as_pdf, size: 20),
+                              const SizedBox(height: 2),
+                              const Text(
+                                'Einzel',
+                                style: TextStyle(fontSize: 10),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // QR-Code speichern Button
+                      SizedBox(
+                        width: 60,
+                        height: 60,
+                        child: ElevatedButton(
+                          onPressed: () async {
+                            await _saveQRCodeAsImage(context, pwaUrl, partyCode, partyName, startDate);
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.green,
+                            foregroundColor: Colors.white,
+                            padding: EdgeInsets.zero,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(Icons.image, size: 20),
+                              const SizedBox(height: 2),
+                              const Text(
+                                'Speichern',
+                                style: TextStyle(fontSize: 10),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // Erstellt eine Spalte fÃ¼r die Party-Informationen (fÃ¼r HomePage)
+  pw.Widget _buildPartyColumnForHomePage(
+    String partyName,
+    DateTime startDate,
+    String pwaUrl,
+    String partyCode,
+    pw.ImageProvider? logoImage,
+    pw.ImageProvider? djWbLogoImage,
+  ) {
+    return pw.Expanded(
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.center,
+        mainAxisAlignment: pw.MainAxisAlignment.start,
+        children: [
+          // Ãœberschrift oben in jeder Spalte
+          pw.Text(
+            'Hier kannst Du dem DJ Deine MusikwÃ¼nsche mitteilen',
+            style: pw.TextStyle(
+              fontSize: 14,
+              fontWeight: pw.FontWeight.bold,
+            ),
+            textAlign: pw.TextAlign.center,
+          ),
+          pw.SizedBox(height: 16),
+          // Partyname
+          pw.Text(
+            partyName,
+            style: pw.TextStyle(
+              fontSize: 16,
+              fontWeight: pw.FontWeight.bold,
+            ),
+            textAlign: pw.TextAlign.center,
+          ),
+          pw.SizedBox(height: 12),
+          // Beginndatum
+          pw.Text(
+            _formatDateTimeForPDF(startDate),
+            style: const pw.TextStyle(fontSize: 12),
+            textAlign: pw.TextAlign.center,
+          ),
+          pw.SizedBox(height: 20),
+          // QR-Code
+          pw.BarcodeWidget(
+            barcode: pw.Barcode.qrCode(),
+            data: pwaUrl,
+            width: 180,
+            height: 180,
+          ),
+          pw.SizedBox(height: 12),
+          // Code unter dem QR-Code (kleiner)
+          pw.Text(
+            partyCode,
+            style: pw.TextStyle(
+              fontSize: 14,
+              fontWeight: pw.FontWeight.bold,
+              letterSpacing: 3,
+            ),
+            textAlign: pw.TextAlign.center,
+          ),
+          // Logo (falls vorhanden)
+          if (logoImage != null) ...[
+            pw.SizedBox(height: 16),
+            pw.Image(logoImage, width: 180, fit: pw.BoxFit.contain),
+          ],
+          // Website-Adresse
+          pw.SizedBox(height: 8),
+          pw.Text(
+            'www.dj-ollerganove.de',
+            style: pw.TextStyle(
+              fontSize: 10,
+              color: PdfColors.grey700,
+            ),
+            textAlign: pw.TextAlign.center,
+          ),
+          // FuÃŸzeile mit DJ-WB Logo und Text
+          pw.Spacer(),
+          pw.SizedBox(height: 16),
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.center,
+            crossAxisAlignment: pw.CrossAxisAlignment.center,
+            children: [
+              if (djWbLogoImage != null) ...[
+                pw.Image(djWbLogoImage, width: 40, fit: pw.BoxFit.contain),
+                pw.SizedBox(width: 8),
+              ],
+              pw.Text(
+                'a creation by DJ Ollerganove',
+                style: pw.TextStyle(
+                  fontSize: 9,
+                  color: PdfColors.grey700,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Generiert PDF fÃ¼r Party (fÃ¼r HomePage)
+  Future<void> _generatePartyPDFForHomePage(
+    String partyName,
+    DateTime startDate,
+    DateTime endDate,
+    String partyCode,
+  ) async {
+    try {
+      final pwaUrl = 'https://dj-ollerganove.web.app/?code=$partyCode';
+      
+      // Lade Logo (logo.png fÃ¼r oben)
+      pw.ImageProvider? logoImage;
+      try {
+        final logoBytes = await rootBundle.load('assets/logo.png');
+        final logoUint8List = logoBytes.buffer.asUint8List();
+        logoImage = pw.MemoryImage(logoUint8List);
+        print('âœ… logo.png Logo erfolgreich geladen');
+      } catch (e) {
+        print('âŒ Fehler beim Laden des logo.png Logos: $e');
+        // Kein Fallback - Logo bleibt null wenn es nicht geladen werden kann
+      }
+      
+      // Lade DJ-WB.png Logo fÃ¼r die FuÃŸzeile
+      pw.ImageProvider? djWbLogoImage;
+      try {
+        final djWbLogoBytes = await rootBundle.load('assets/DJ-WB.png');
+        final djWbLogoUint8List = djWbLogoBytes.buffer.asUint8List();
+        djWbLogoImage = pw.MemoryImage(djWbLogoUint8List);
+        print('âœ… DJ-WB.png Logo erfolgreich geladen');
+      } catch (e) {
+        print('âŒ Fehler beim Laden des DJ-WB.png Logos: $e');
+      }
+      
+      final pdf = pw.Document();
+      
+      pdf.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4.landscape,
+          margin: const pw.EdgeInsets.all(20),
+          build: (pw.Context context) {
+            return pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                // Spalte 1
+                _buildPartyColumnForHomePage(partyName, startDate, pwaUrl, partyCode, logoImage, djWbLogoImage),
+                // Spalte 2
+                _buildPartyColumnForHomePage(partyName, startDate, pwaUrl, partyCode, logoImage, djWbLogoImage),
+                // Spalte 3
+                _buildPartyColumnForHomePage(partyName, startDate, pwaUrl, partyCode, logoImage, djWbLogoImage),
+              ],
+            );
+          },
+        ),
+      );
+      
+      await Printing.layoutPdf(
+        onLayout: (PdfPageFormat format) async => pdf.save(),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Fehler beim Generieren der PDF: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  // Generiert eine einzelne Spalte PDF im Hochformat
+  Future<void> _generateSinglePartyPDFForHomePage(
+    String partyName,
+    DateTime startDate,
+    DateTime endDate,
+    String partyCode,
+  ) async {
+    try {
+      final pwaUrl = 'https://dj-ollerganove.web.app/?code=$partyCode';
+      
+      // Lade Logo (logo.png fÃ¼r oben)
+      pw.ImageProvider? logoImage;
+      try {
+        final logoBytes = await rootBundle.load('assets/logo.png');
+        final logoUint8List = logoBytes.buffer.asUint8List();
+        logoImage = pw.MemoryImage(logoUint8List);
+      } catch (e) {
+        print('âŒ Fehler beim Laden des logo.png Logos: $e');
+      }
+      
+      // Lade DJ-WB.png Logo fÃ¼r die FuÃŸzeile
+      pw.ImageProvider? djWbLogoImage;
+      try {
+        final djWbLogoBytes = await rootBundle.load('assets/DJ-WB.png');
+        final djWbLogoUint8List = djWbLogoBytes.buffer.asUint8List();
+        djWbLogoImage = pw.MemoryImage(djWbLogoUint8List);
+      } catch (e) {
+        print('âŒ Fehler beim Laden des DJ-WB.png Logos: $e');
+      }
+      
+      final pdf = pw.Document();
+      
+      pdf.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.all(40),
+          build: (pw.Context context) {
+            return _buildPartyColumnForHomePage(partyName, startDate, pwaUrl, partyCode, logoImage, djWbLogoImage);
+          },
+        ),
+      );
+      
+      await Printing.layoutPdf(
+        onLayout: (PdfPageFormat format) async => pdf.save(),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Fehler beim Generieren der PDF: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  // Formatiert DateTime fÃ¼r PDF
+  String _formatDateTimeForPDF(DateTime date) {
+    final day = date.day.toString().padLeft(2, '0');
+    final month = date.month.toString().padLeft(2, '0');
+    final year = date.year;
+    final hour = date.hour.toString().padLeft(2, '0');
+    final minute = date.minute.toString().padLeft(2, '0');
+    return '$day.$month.$year $hour:$minute Uhr';
+  }
+
+  Future<void> _toggleWishbox(bool enabled) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final isAdmin = user.email == 'info@dj-ollerganove.de';
+    if (!isAdmin) return;
+
+    try {
+      final now = DateTime.now();
+      
+      if (enabled) {
+        // PrÃ¼fe, ob bereits eine aktive Party existiert
+        final sevenDaysAgo = now.subtract(const Duration(days: 7));
+        final partiesQuery = await FirebaseFirestore.instance
+            .collection('parties')
+            .where('end_date', isGreaterThanOrEqualTo: Timestamp.fromDate(sevenDaysAgo))
+            .get();
+        
+        bool hasActiveParty = false;
+        for (final partyDoc in partiesQuery.docs) {
+          final data = partyDoc.data();
+          final startTimestamp = data['start_date'] as Timestamp?;
+          final endTimestamp = data['end_date'] as Timestamp?;
+          
+          if (startTimestamp != null && endTimestamp != null) {
+            final startDate = startTimestamp.toDate();
+            final endDate = endTimestamp.toDate();
+            
+            // Party ist aktiv, wenn jetzt >= Start UND jetzt < Ende
+            if (now.compareTo(startDate) >= 0 && now.compareTo(endDate) < 0) {
+              hasActiveParty = true;
+              break;
+            }
+          }
+        }
+        
+        // Wenn keine aktive Party existiert, erstelle eine neue Party
+        if (!hasActiveParty) {
+          print('ðŸ”§ Erstelle neue Party "Wunschbox manuell"');
+          
+          // Generiere einen zufÃ¤lligen 4-stelligen Code
+          final random = Random();
+          final partyCode = (1000 + random.nextInt(9000)).toString(); // 1000-9999
+          
+          final createdBy = user.uid;
+          final createdByEmail = user.email ?? '';
+          
+          // Erstelle Party mit Startzeit = jetzt und Endzeit = jetzt + 24 Stunden (als Standard)
+          final startDateTime = now;
+          final endDateTime = now.add(const Duration(hours: 24));
+          
+          final docRef = await FirebaseFirestore.instance
+              .collection('parties')
+              .add({
+            'party_name': 'Wunschbox manuell',
+            'start_date': Timestamp.fromDate(startDateTime),
+            'end_date': Timestamp.fromDate(endDateTime),
+            'created_at': Timestamp.now(),
+            'party_code': partyCode,
+            'party_type': 'private',
+            'created_by': createdBy,
+            'created_by_email': createdByEmail,
+          });
+          
+          print('âœ… Party "Wunschbox manuell" erstellt mit ID: ${docRef.id}, Party-Code: $partyCode');
+          
+          // Erstelle Eintrag in party_status Collection
+          await FirebaseFirestore.instance
+              .collection('party_status')
+              .add({
+            'party_code': partyCode,
+            'dj_code': createdBy,
+            'status': true,
+            'created_at': Timestamp.now(),
+            'party_id': docRef.id,
+          });
+        }
+        
+        // Speichere den DJ-Code (User-ID), der den Schalter aktiviert hat
+        final updateData = <String, dynamic>{
+          'wishbox_manually_enabled': enabled,
+          'wishbox_activated_by_dj_code': user.uid,
+          'wishbox_activated_at': FieldValue.serverTimestamp(),
+        };
+        
+        await FirebaseFirestore.instance
+            .collection('party_settings')
+            .doc('current')
+            .set(updateData, SetOptions(merge: true));
+      } else {
+        // Beim Deaktivieren: PrÃ¼fe, ob eine aktive Party existiert und beende sie
+        final sevenDaysAgo = now.subtract(const Duration(days: 7));
+        final partiesQuery = await FirebaseFirestore.instance
+            .collection('parties')
+            .where('end_date', isGreaterThanOrEqualTo: Timestamp.fromDate(sevenDaysAgo))
+            .get();
+        
+        for (final partyDoc in partiesQuery.docs) {
+          final data = partyDoc.data();
+          final startTimestamp = data['start_date'] as Timestamp?;
+          final endTimestamp = data['end_date'] as Timestamp?;
+          
+          if (startTimestamp != null && endTimestamp != null) {
+            final startDate = startTimestamp.toDate();
+            final endDate = endTimestamp.toDate();
+            
+            // Party ist aktiv, wenn jetzt >= Start UND jetzt < Ende
+            if (now.compareTo(startDate) >= 0 && now.compareTo(endDate) < 0) {
+              // Setze Endzeit auf die aktuelle Zeit
+              print('ðŸ”§ Beende aktive Party ${partyDoc.id} - setze Endzeit auf jetzt');
+              await FirebaseFirestore.instance
+                  .collection('parties')
+                  .doc(partyDoc.id)
+                  .update({
+                'end_date': Timestamp.fromDate(now),
+              });
+              print('âœ… Party ${partyDoc.id} wurde beendet');
+              break;
+            }
+          }
+        }
+        
+        // Beim Deaktivieren: DJ-Code entfernen
+        final updateData = <String, dynamic>{
+          'wishbox_manually_enabled': enabled,
+          'wishbox_activated_by_dj_code': FieldValue.delete(),
+          'wishbox_activated_at': FieldValue.delete(),
+        };
+        
+        await FirebaseFirestore.instance
+            .collection('party_settings')
+            .doc('current')
+            .set(updateData, SetOptions(merge: true));
+      }
+
+      setState(() {
+        _wishboxManuallyEnabled = enabled;
+      });
+      
+      // Lade den Status neu, um _hasActiveParty zu aktualisieren
+      await _loadWishboxStatus();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(enabled 
+                ? 'Wunschbox wurde manuell aktiviert. Party "Wunschbox manuell" wurde erstellt.' 
+                : 'Wunschbox wurde manuell deaktiviert. Party wurde beendet.'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Fehler beim Ã„ndern des Status: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  String _getGreeting() {
+    final hour = DateTime.now().hour;
+    if (hour >= 5 && hour < 12) {
+      return 'Guten Morgen';
+    } else if (hour >= 12 && hour < 17) {
+      return 'Guten Tag';
+    } else if (hour >= 17 && hour < 22) {
+      return 'Guten Abend';
+    } else {
+      return 'SchÃ¶ne Nacht';
+    }
+  }
+
+  String _formatDateTime(DateTime? dateTime) {
+    if (dateTime == null) return 'Noch nie';
+    final day = dateTime.day.toString().padLeft(2, '0');
+    final month = dateTime.month.toString().padLeft(2, '0');
+    final year = dateTime.year;
+    final hour = dateTime.hour.toString().padLeft(2, '0');
+    final minute = dateTime.minute.toString().padLeft(2, '0');
+    return '$day.$month.$year um $hour:$minute Uhr';
+  }
+
+  // Formatiere Countdown fÃ¼r bevorstehende Partys
+  String _formatCountdown(DateTime startDate) {
+    final now = DateTime.now();
+    final difference = startDate.difference(now);
+    
+    if (difference.isNegative) {
+      return 'Gestartet';
+    }
+    
+    final totalMinutes = difference.inMinutes;
+    final totalHours = difference.inHours;
+    final days = difference.inDays;
+    
+    // Wenn mehr als 24 Stunden: Tage, Stunden, Minuten
+    if (totalHours >= 24) {
+      final hours = totalHours % 24;
+      final minutes = totalMinutes % 60;
+      
+      if (hours == 0 && minutes == 0) {
+        return '$days Tag${days != 1 ? 'e' : ''}';
+      } else if (hours == 0) {
+        return '$days Tag${days != 1 ? 'e' : ''}, $minutes Minute${minutes != 1 ? 'n' : ''}';
+      } else if (minutes == 0) {
+        return '$days Tag${days != 1 ? 'e' : ''}, $hours Stunde${hours != 1 ? 'n' : ''}';
+      } else {
+        return '$days Tag${days != 1 ? 'e' : ''}, $hours Stunde${hours != 1 ? 'n' : ''}, $minutes Minute${minutes != 1 ? 'n' : ''}';
+      }
+    } else {
+      // Weniger als 24 Stunden: Stunden und Minuten
+      final hours = totalHours;
+      final minutes = totalMinutes % 60;
+      
+      if (hours == 0 && minutes == 0) {
+        return 'Startet jetzt';
+      } else if (hours == 0) {
+        return '$minutes Minute${minutes != 1 ? 'n' : ''}';
+      } else if (minutes == 0) {
+        return '$hours Stunde${hours != 1 ? 'n' : ''}';
+      } else {
+        return '$hours Stunde${hours != 1 ? 'n' : ''}, $minutes Minute${minutes != 1 ? 'n' : ''}';
+      }
+    }
+  }
+
+  // Formatiere Countdown fÃ¼r laufende Partys (bis zum Ende)
+  String _formatCountdownToEnd(DateTime endDate) {
+    final now = DateTime.now();
+    final difference = endDate.difference(now);
+    
+    if (difference.isNegative) {
+      return 'Beendet';
+    }
+    
+    final totalSeconds = difference.inSeconds;
+    final totalMinutes = difference.inMinutes;
+    final totalHours = difference.inHours;
+    final days = difference.inDays;
+    
+    // Wenn weniger als 1 Minute (60 Sekunden) Ã¼brig ist
+    if (totalSeconds < 60) {
+      return 'noch weniger als 1 Minute';
+    }
+    
+    // Wenn mehr als 24 Stunden: Tage, Stunden, Minuten
+    if (totalHours >= 24) {
+      final hours = totalHours % 24;
+      final minutes = totalMinutes % 60;
+      
+      if (hours == 0 && minutes == 0) {
+        return '$days Tag${days != 1 ? 'e' : ''}';
+      } else if (hours == 0) {
+        return '$days Tag${days != 1 ? 'e' : ''}, $minutes Minute${minutes != 1 ? 'n' : ''}';
+      } else if (minutes == 0) {
+        return '$days Tag${days != 1 ? 'e' : ''}, $hours Stunde${hours != 1 ? 'n' : ''}';
+      } else {
+        return '$days Tag${days != 1 ? 'e' : ''}, $hours Stunde${hours != 1 ? 'n' : ''}, $minutes Minute${minutes != 1 ? 'n' : ''}';
+      }
+    } else {
+      // Weniger als 24 Stunden: Stunden und Minuten
+      final hours = totalHours;
+      final minutes = totalMinutes % 60;
+      
+      if (hours == 0 && minutes == 0) {
+        return 'noch weniger als 1 Minute';
+      } else if (hours == 0) {
+        return '$minutes Minute${minutes != 1 ? 'n' : ''}';
+      } else if (minutes == 0) {
+        return '$hours Stunde${hours != 1 ? 'n' : ''}';
+      } else {
+        return '$hours Stunde${hours != 1 ? 'n' : ''}, $minutes Minute${minutes != 1 ? 'n' : ''}';
+      }
+    }
+  }
+
+  // Erstellt das Kreisdiagramm
+  Widget _buildPieChart() {
+    final total = _chartPlayed + _chartRejected + _chartNotPlayed + _chartDeleted;
+    if (total == 0) {
+      return const Center(
+        child: Text('Keine Daten verfÃ¼gbar'),
+      );
+    }
+
+    final playedPercent = (_chartPlayed / total * 100);
+    final rejectedPercent = (_chartRejected / total * 100);
+    final notPlayedPercent = (_chartNotPlayed / total * 100);
+    final deletedPercent = (_chartDeleted / total * 100);
+
+    return PieChart(
+      PieChartData(
+        sectionsSpace: 2,
+        centerSpaceRadius: 40,
+        startDegreeOffset: 270, // startet unten
+        sections: [
+          // GelÃ¶schte (Schwarz) immer zuerst, damit sie unten sind
+          if (_chartDeleted > 0)
+            PieChartSectionData(
+              value: _chartDeleted.toDouble(),
+              title: '${deletedPercent.toStringAsFixed(1)}%',
+              color: Colors.black,
+              radius: 60,
+              titleStyle: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+          // Gespielte (GrÃ¼n)
+          if (_chartPlayed > 0)
+            PieChartSectionData(
+              value: _chartPlayed.toDouble(),
+              title: '${playedPercent.toStringAsFixed(1)}%',
+              color: Colors.green,
+              radius: 60,
+              titleStyle: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+          // Abgelehnte (Rot)
+          if (_chartRejected > 0)
+            PieChartSectionData(
+              value: _chartRejected.toDouble(),
+              title: '${rejectedPercent.toStringAsFixed(1)}%',
+              color: Colors.red,
+              radius: 60,
+              titleStyle: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+          // Nicht gespielt (Blau)
+          if (_chartNotPlayed > 0)
+            PieChartSectionData(
+              value: _chartNotPlayed.toDouble(),
+              title: '${notPlayedPercent.toStringAsFixed(1)}%',
+              color: Colors.blue,
+              radius: 60,
+              titleStyle: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // Erstellt die Legende fÃ¼r das Diagramm
+  Widget _buildChartLegend() {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (_chartPlayed > 0) ...[
+          Row(
+            children: [
+              Container(
+                width: 16,
+                height: 16,
+                decoration: const BoxDecoration(
+                  color: Colors.green,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Gespielt\n($_chartPlayed)',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+        ],
+        if (_chartRejected > 0) ...[
+          Row(
+            children: [
+              Container(
+                width: 16,
+                height: 16,
+                decoration: const BoxDecoration(
+                  color: Colors.red,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Abgelehnt\n($_chartRejected)',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+        ],
+        if (_chartNotPlayed > 0) ...[
+          Row(
+            children: [
+              Container(
+                width: 16,
+                height: 16,
+                decoration: const BoxDecoration(
+                  color: Colors.blue,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Nicht gespielt\n($_chartNotPlayed)',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+        ],
+        if (_chartDeleted > 0) ...[
+          Row(
+            children: [
+              Container(
+                width: 16,
+                height: 16,
+                decoration: const BoxDecoration(
+                  color: Colors.black,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'GelÃ¶scht\n($_chartDeleted)',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+    final isAdmin = user != null && (user.email == 'info@dj-ollerganove.de');
+
+    if (_isLoading) {
+      return Scaffold(
+        body: SafeArea(
+          child: Center(
+            child: CircularProgressIndicator(),
+          ),
+        ),
+      );
+    }
+
+    return Scaffold(
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: EdgeInsets.only(
+            left: 16,
+            right: 16,
+            top: 16,
+            bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // BegrÃ¼ÃŸung - Separates Fenster
+              if (user != null) ...[
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${_getGreeting()} ${user.displayName ?? user.email?.split('@')[0] ?? 'User'}',
+                          style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'SchÃ¶n Dich wieder zu sehen.',
+                          style: Theme.of(context).textTheme.bodyLarge,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
+              ] else ...[
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${_getGreeting()}',
+                          style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Willkommen bei den MusikwÃ¼nschen!',
+                          style: Theme.of(context).textTheme.bodyLarge,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
+              ],
+              // Aktive oder nÃ¤chste bevorstehende Party - Zwischen BegrÃ¼ÃŸung und Statistik
+              if (isAdmin && _currentOrNextParty != null) ...[
+                Card(
+                  color: Colors.blue.shade50,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.event,
+                              color: Colors.blue.shade700,
+                              size: 24,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    _isPartyActive(_currentOrNextParty!)
+                                        ? 'Deine aktuell laufende Party'
+                                        : 'Deine nÃ¤chste geplante Party',
+                                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                                          color: Colors.blue.shade700,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    _currentOrNextParty!['party_name'] as String,
+                                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.blue.shade700,
+                                        ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.qr_code),
+                              onPressed: () {
+                                final startDate = _currentOrNextParty!['start_date'] as DateTime;
+                                final endDate = _currentOrNextParty!['end_date'] as DateTime;
+                                final partyCode = _currentOrNextParty!['party_code'] as String?;
+                                final partyId = _currentOrNextParty!['id'] as String?;
+                                _showPartyQRCodeDialog(
+                                  context,
+                                  _currentOrNextParty!['party_name'] as String,
+                                  startDate,
+                                  endDate,
+                                  partyCode,
+                                  partyId: partyId,
+                                );
+                              },
+                              tooltip: 'QR-Code anzeigen',
+                              color: Colors.blue.shade700,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Icon(Icons.calendar_today, size: 16, color: Colors.grey[600]),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Start: ${_formatDateTimeForDisplay(_currentOrNextParty!['start_date'] as DateTime)}',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
+                            ),
+                          ],
+                        ),
+                        // Countdown fÃ¼r laufende oder bevorstehende Party
+                        if (_isPartyActive(_currentOrNextParty!)) ...[
+                          const SizedBox(height: 8),
+                          StreamBuilder<DateTime>(
+                            stream: _timeStream,
+                            builder: (context, timeSnapshot) {
+                              final endDate = _currentOrNextParty!['end_date'] as DateTime;
+                              return Row(
+                                children: [
+                                  Icon(Icons.timer, size: 16, color: Colors.green.shade700),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'LÃ¤uft noch: ${_formatCountdownToEnd(endDate)}',
+                                      style: TextStyle(
+                                        color: Colors.green.shade700,
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                        ] else ...[
+                          const SizedBox(height: 8),
+                          StreamBuilder<DateTime>(
+                            stream: _timeStream,
+                            builder: (context, timeSnapshot) {
+                              final startDate = _currentOrNextParty!['start_date'] as DateTime;
+                              return Row(
+                                children: [
+                                  Icon(Icons.access_time, size: 16, color: Colors.orange.shade700),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'Startet in: ${_formatCountdown(startDate)}',
+                                      style: TextStyle(
+                                        color: Colors.orange.shade700,
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
+              ],
+              // Statistik-Karten - Nach der nÃ¤chsten Party
+              if (user != null) ...[
+                // Login-Statistiken fÃ¼r normale User
+                if (!isAdmin && (_loginCount > 0 || _previousLogin != null || _totalWishes > 0)) ...[
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Deine Statistiken',
+                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                          ),
+                          const SizedBox(height: 16),
+                          if (_loginCount > 0)
+                            Row(
+                              children: [
+                                Icon(Icons.login, size: 20, color: Theme.of(context).colorScheme.primary),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Du hast Dich schon $_loginCount mal eingeloggt.',
+                                    style: Theme.of(context).textTheme.bodyMedium,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          if (_loginCount > 0 && _previousLogin != null) const SizedBox(height: 12),
+                          if (_previousLogin != null)
+                            Row(
+                              children: [
+                                Icon(Icons.access_time, size: 20, color: Theme.of(context).colorScheme.primary),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Dein letzter Login war am ${_formatDateTime(_previousLogin)}.',
+                                    style: Theme.of(context).textTheme.bodyMedium,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          if (_totalWishes > 0) ...[
+                            if (_loginCount > 0 || _previousLogin != null) const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Icon(Icons.music_note, size: 20, color: Theme.of(context).colorScheme.primary),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Du hast bis jetzt $_totalWishes ${_totalWishes == 1 ? 'Musikwunsch' : 'MusikwÃ¼nsche'} geschickt.',
+                                    style: Theme.of(context).textTheme.bodyMedium,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            if (_playedWishes > 0) ...[
+                              const SizedBox(height: 12),
+                              Row(
+                                children: [
+                                  Icon(Icons.check_circle, size: 20, color: Theme.of(context).colorScheme.primary),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      '$_playedWishes ${_playedWishes == 1 ? 'Lied wurde' : 'Lieder wurden'} davon gespielt.',
+                                      style: Theme.of(context).textTheme.bodyMedium,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                ],
+                // Admin-Statistiken
+                if (isAdmin && _totalWishesAdmin > 0) ...[
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Statistiken',
+                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                          ),
+                          const SizedBox(height: 16),
+                          Row(
+                            children: [
+                              Icon(Icons.music_note, size: 20, color: Theme.of(context).colorScheme.primary),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Es sind bisher $_totalWishesAdmin ${_totalWishesAdmin == 1 ? 'Musikwunsch' : 'MusikwÃ¼nsche'} eingegangen.',
+                                  style: Theme.of(context).textTheme.bodyMedium,
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (_pendingWishesAdmin > 0) ...[
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Icon(Icons.access_time, size: 20, color: Theme.of(context).colorScheme.primary),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    '$_pendingWishesAdmin ${_pendingWishesAdmin == 1 ? 'Wunsch ist' : 'WÃ¼nsche sind'} noch offen.',
+                                    style: Theme.of(context).textTheme.bodyMedium,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                          if (_playedWishesAdmin > 0) ...[
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Icon(Icons.check_circle, size: 20, color: Colors.green),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    '$_playedWishesAdmin ${_playedWishesAdmin == 1 ? 'Wunsch wurde' : 'WÃ¼nsche wurden'} davon gespielt.',
+                                    style: Theme.of(context).textTheme.bodyMedium,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                          if (_rejectedWishesAdmin > 0) ...[
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Icon(Icons.cancel, size: 20, color: Colors.red),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    '$_rejectedWishesAdmin ${_rejectedWishesAdmin == 1 ? 'Wunsch wurde' : 'WÃ¼nsche wurden'} davon abgelehnt.',
+                                    style: Theme.of(context).textTheme.bodyMedium,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                          if (_chartNotPlayed > 0) ...[
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Icon(Icons.music_off, size: 20, color: Colors.blue),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    '$_chartNotPlayed ${_chartNotPlayed == 1 ? 'Wunsch wurde' : 'WÃ¼nsche wurden'} nicht gespielt.',
+                                    style: Theme.of(context).textTheme.bodyMedium,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                          if (_deletedWishesAdmin > 0) ...[
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Icon(Icons.delete, size: 20, color: Colors.black),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    '$_deletedWishesAdmin ${_deletedWishesAdmin == 1 ? 'Wunsch wurde' : 'WÃ¼nsche wurden'} komplett gelÃ¶scht.',
+                                    style: Theme.of(context).textTheme.bodyMedium,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                          // Kreisdiagramm (nur wenn es Daten gibt, die nicht pending sind)
+                          if ((_chartPlayed + _chartRejected + _chartNotPlayed) > 0) ...[
+                            const SizedBox(height: 24),
+                            Divider(),
+                            const SizedBox(height: 16),
+                            Text(
+                              'Verteilung der bearbeiteten WÃ¼nsche',
+                              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                            ),
+                            const SizedBox(height: 16),
+                            SizedBox(
+                              height: 200,
+                              child: Row(
+                                children: [
+                                  // Kreisdiagramm
+                                  Expanded(
+                                    flex: 2,
+                                    child: _buildPieChart(),
+                                  ),
+                                  const SizedBox(width: 16),
+                                  // Legende
+                                  Expanded(
+                                    flex: 1,
+                                    child: _buildChartLegend(),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                          // Schieberegler fÃ¼r manuelle Aktivierung/Deaktivierung
+                          const SizedBox(height: 16),
+                          Divider(),
+                          const SizedBox(height: 16),
+                          Row(
+                            children: [
+                              Icon(Icons.toggle_on, size: 20, color: Theme.of(context).colorScheme.primary),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _hasActiveParty
+                                      ? (_wishboxManuallyEnabled
+                                          ? 'Wunschbox in der laufenden Party deaktivieren'
+                                          : 'Wunschbox bei der laufenden Party einschalten')
+                                      : 'Wunschbox manuell aktivieren',
+                                  style: Theme.of(context).textTheme.bodyMedium,
+                                ),
+                              ),
+                              Switch(
+                                value: _wishboxManuallyEnabled,
+                                onChanged: _toggleWishbox,
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            _hasActiveParty
+                                ? (_wishboxManuallyEnabled
+                                    ? 'Die Wunschbox ist wÃ¤hrend der laufenden Party aktiviert.'
+                                    : 'Die Wunschbox ist wÃ¤hrend der laufenden Party deaktiviert.')
+                                : (_wishboxManuallyEnabled
+                                    ? 'Die Wunschbox ist manuell aktiviert und funktioniert unabhÃ¤ngig von der Party-Zeit.'
+                                    : 'Die Wunschbox ist nur wÃ¤hrend der Party-Zeit aktiv (falls eine Party angelegt wurde).'),
+                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                  fontStyle: FontStyle.italic,
+                                ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                ],
+              ],
+              // Info-Fenster fÃ¼r nicht eingeloggte User
+              if (user == null) ...[
+                Card(
+                  color: Colors.blue.shade50,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.info_outline, size: 20, color: Colors.blue.shade700),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Als angemeldeter User kannst du mehr nutzen:',
+                                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.blue.shade900,
+                                    ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Padding(
+                          padding: const EdgeInsets.only(left: 28),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Icon(Icons.check_circle, size: 16, color: Colors.green.shade700),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'Deine abgegebenen MusikwÃ¼nsche jederzeit einsehen',
+                                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                            color: Colors.blue.shade900,
+                                          ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Icon(Icons.check_circle, size: 16, color: Colors.green.shade700),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'Dein Profil verwalten und bearbeiten',
+                                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                            color: Colors.blue.shade900,
+                                          ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Icon(Icons.check_circle, size: 16, color: Colors.green.shade700),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'Statistiken zu deinen MusikwÃ¼nschen sehen',
+                                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                            color: Colors.blue.shade900,
+                                          ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              Divider(color: Colors.blue.shade300),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Als Gast verfÃ¼gbar:',
+                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.blue.shade900,
+                                    ),
+                              ),
+                              const SizedBox(height: 8),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Icon(Icons.music_note, size: 16, color: Colors.orange.shade700),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'MusikwÃ¼nsche abschicken',
+                                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                            color: Colors.blue.shade900,
+                                          ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Icon(Icons.contact_mail, size: 16, color: Colors.orange.shade700),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'Kontaktformular nutzen',
+                                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                            color: Colors.blue.shade900,
+                                          ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Icon(Icons.share, size: 16, color: Colors.orange.shade700),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'Social Media Links aufrufen',
+                                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                            color: Colors.blue.shade900,
+                                          ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
+              ],
+              
+              // Hinweis fÃ¼r normale User (nicht Admin)
+              if (user != null && !isAdmin) ...[
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.info_outline, size: 20, color: Theme.of(context).colorScheme.primary),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Im NavigationsmenÃ¼ kannst du:',
+                              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Padding(
+                          padding: const EdgeInsets.only(left: 28),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'â€¢ Eine Wunschbox sehen',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'â€¢ Dein Profil einsehen und bearbeiten',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'â€¢ Deine abgegebenen MusikwÃ¼nsche sehen',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'â€¢ Das Kontaktformular nutzen',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'â€¢ Social Media Links aufrufen',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

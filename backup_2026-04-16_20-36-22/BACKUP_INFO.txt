@@ -1,0 +1,9 @@
+﻿DJ-OG-App Backup
+================
+Backup erstellt am: 2026-04-16 20:36:37
+Backup-Verzeichnis: backup_2026-04-16_20-36-22
+
+Enthaltene Komponenten:
+- Flutter App (lib/)
+- PWA (public/)
+- Firebase/Android Konfigurationen

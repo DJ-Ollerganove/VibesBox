@@ -1,0 +1,20 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "ZMJK572375.com.vibesbox.dj",
+        "paths": [
+          "/verify",
+          "/verify/*",
+          "/vb/*",
+          "/vb/p/*",
+          "/vb/party/*",
+          "/p/*",
+          "/party/*",
+          "*"
+        ]
+      }
+    ]
+  }
+}

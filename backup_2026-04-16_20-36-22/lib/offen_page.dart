@@ -1,0 +1,1270 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+import 'dart:async';
+import 'main.dart' show buildFirebaseErrorWidget;
+import 'l10n/app_localizations.dart';
+import '../services/active_party_service.dart';
+import '../services/history_pagination_service.dart';
+import '../services/wish_management_service.dart';
+import '../services/user_blocking_service.dart';
+import '../services/duplicate_check_service.dart';
+import '../services/results_per_page_service.dart';
+import '../helpers/security_helper.dart';
+import '../utils/ui_constants.dart';
+import '../utils/wish_grouping_helper.dart';
+import '../models/song_request.dart';
+import '../spotify_service.dart';
+import '../widgets/empty_list_message.dart';
+import '../widgets/sticky_pagination_layout.dart';
+import '../widgets/wish_card.dart';
+import '../widgets/no_active_party_display.dart';
+import '../widgets/pro_promotion_banner.dart';
+import '../services/user_service.dart';
+import '../config/app_config.dart';
+import 'utils/debug_log.dart';
+
+class OffenPage extends StatefulWidget {
+  final List<SongRequest> requests;
+  final VoidCallback? onPageOpened;
+  final ValueNotifier<bool>? showOnlyFavoritesNotifier;
+
+  const OffenPage({
+    super.key,
+    required this.requests,
+    this.onPageOpened,
+    this.showOnlyFavoritesNotifier,
+  });
+
+  @override
+  State<OffenPage> createState() => _OffenPageState();
+}
+
+// Öffentliche abstrakte Klasse für den State, damit MainPage/DjVibesBoxPage darauf zugreifen kann
+abstract class OffenPageState extends State<OffenPage> {
+  List<String> getCurrentVisibleIds();
+  void openDjWishDialog();
+}
+
+class _OffenPageState extends OffenPageState
+    with AutomaticKeepAliveClientMixin {
+  int _currentPage = 1;
+  int _resultsPerPage = ResultsPerPageService.defaultResultsPerPage;
+  List<String> _currentVisibleIds =
+      []; // Liste der aktuell angezeigten Dokument-IDs
+  final ScrollController _scrollController =
+      ScrollController(); // ✅ Für Scrollen nach oben beim Seitenwechsel
+  bool _hasFavorites = false; // Prüft ob Favoriten vorhanden sind
+
+  @override
+  bool get wantKeepAlive => true; // Tab-State beim Wechsel zu Gespielt/Abgelehnt erhalten – verhindert dispose + Neubau
+
+  @override
+  void initState() {
+    super.initState();
+    _currentVisibleIds = []; // Erstelle leere Liste
+    widget.showOnlyFavoritesNotifier?.addListener(_onFavoritesFilterChanged);
+    // Lade party_settings/current (duplicate_threshold + ignored_keywords) für Duplikat-Gruppierung
+    DuplicateCheckService.ensurePartySettingsLoaded();
+    ResultsPerPageService.load().then((v) {
+      if (mounted) setState(() => _resultsPerPage = v);
+    });
+  }
+
+  /// Prüft ob Favoriten vorhanden sind
+  void _onFavoritesFilterChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _checkFavorites(String partyId) {
+    FirebaseFirestore.instance
+        .collection('wishes')
+        .where('party_id', isEqualTo: partyId)
+        .where('status', isEqualTo: 'pending')
+        .where('is_favorite', isEqualTo: true)
+        .limit(1)
+        .snapshots()
+        .listen((snapshot) {
+          final hasFavorites = snapshot.docs.isNotEmpty;
+          if (_hasFavorites != hasFavorites && mounted) {
+            setState(() {
+              _hasFavorites = hasFavorites;
+            });
+          }
+        });
+  }
+
+  @override
+  void dispose() {
+    // Massen-Update beim Verlassen entfernt: Es führte beim Tab-Wechsel (oder Route-Wechsel) dazu,
+    // dass die Liste neu geladen wurde und Songs scheinbar verschwanden. "Gelesen" wird weiterhin
+    // beim Öffnen der Detailansicht (WishCard._markWishesAsSeen) gesetzt.
+    widget.showOnlyFavoritesNotifier?.removeListener(_onFavoritesFilterChanged);
+    _scrollController.dispose(); // ✅ ScrollController aufräumen
+    super.dispose();
+  }
+
+  /// Navigiert zur vorherigen Seite und scrollt nach oben
+  void _goToPreviousPage() {
+    if (_currentPage > 1) {
+      setState(() {
+        _currentPage--;
+      });
+      // ✅ Scroll nach oben, damit DJ die neuen Titel sofort sieht
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _scrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      });
+    }
+  }
+
+  /// Navigiert zur nächsten Seite und scrollt nach oben
+  void _goToNextPage(int totalPages) {
+    if (_currentPage < totalPages) {
+      setState(() {
+        _currentPage++;
+      });
+      // ✅ Scroll nach oben, damit DJ die neuen Titel sofort sieht
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _scrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      });
+    }
+  }
+
+  /// Baut die Paginierungs-Buttons mit Blau/Schwarz Design (passend zu Offen-Songs)
+  Widget _buildPaginationButtons(
+    int currentPage,
+    int totalPages,
+    BuildContext context,
+  ) {
+    final l = AppLocalizations.of(context)!;
+    final isRtl = [
+      'ar',
+      'he',
+      'fa',
+      'ur',
+    ].contains(Localizations.localeOf(context).languageCode);
+
+    if (totalPages <= 1) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(
+        top: 8,
+        bottom: 16,
+      ), // ✅ Kompakter oberer Abstand (8px statt 16px), unterer Abstand bleibt für Footer
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+      decoration: UIConstants.djChromePanelDecoration,
+      child: Row(
+        textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          // Zurück-Button
+          ElevatedButton.icon(
+            onPressed: HistoryPaginationService.hasPreviousPage(currentPage)
+                ? _goToPreviousPage
+                : null,
+            icon: Icon(
+              isRtl ? Icons.arrow_forward : Icons.arrow_back,
+              size: 18,
+            ),
+            label: Text(l.history_page_previous),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: UIConstants.djShellPageBackground,
+              foregroundColor: Colors.white,
+              disabledBackgroundColor: UIConstants.colorGrey.withValues(alpha: 0.4),
+              disabledForegroundColor: UIConstants.colorGrey,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              side: const BorderSide(color: UIConstants.appOrange, width: 1),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
+          // Seitenanzeige
+          Text(
+            '${l.history_page} $currentPage / $totalPages',
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: Colors.white),
+          ),
+          // Vor-Button
+          ElevatedButton.icon(
+            onPressed:
+                HistoryPaginationService.hasNextPage(currentPage, totalPages)
+                ? () => _goToNextPage(totalPages)
+                : null,
+            icon: Icon(
+              isRtl ? Icons.arrow_back : Icons.arrow_forward,
+              size: 18,
+            ),
+            label: Text(l.history_page_next),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: UIConstants.djShellPageBackground,
+              foregroundColor: Colors.white,
+              disabledBackgroundColor: UIConstants.colorGrey.withValues(alpha: 0.4),
+              disabledForegroundColor: UIConstants.colorGrey,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              side: const BorderSide(color: UIConstants.appOrange, width: 1),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Markiert alle ungelesenen Wünsche (isSeen == false oder Feld fehlt) für die aktuelle Party als gelesen
+  /// Wird beim Verlassen der Seite aufgerufen (Weg 2)
+  Future<void> _markAllUnreadAsSeen(String partyId) async {
+    try {
+      debugLog(
+        '📖 OffenPage: Starte Massen-Update für ungelesene Wünsche (Party: $partyId)',
+      );
+
+      // Query: Alle pending Wünsche für diese Party
+      // Hinweis: Firestore unterstützt keine direkte Abfrage nach "Feld fehlt" oder "isSeen == false"
+      // Daher filtern wir client-seitig
+      const BATCH_SIZE =
+          450; // Firestore Batch-Limit: 500, wir bleiben sicher darunter
+      int totalUpdated = 0;
+
+      Query query = FirebaseFirestore.instance
+          .collection('wishes')
+          .where('party_id', isEqualTo: partyId)
+          .where('status', isEqualTo: 'pending')
+          .limit(BATCH_SIZE);
+
+      while (true) {
+        final snapshot = await query.get();
+
+        if (snapshot.docs.isEmpty) {
+          break; // Keine weiteren Dokumente
+        }
+
+        // Client-seitig filtern: Nur Wünsche mit isSeen == false oder Feld fehlt
+        final unreadDocs = snapshot.docs.where((doc) {
+          final data = doc.data() as Map<String, dynamic>;
+          final isSeen = data['isSeen'];
+          // Ungelesen wenn: Feld fehlt (null) oder explizit false
+          return isSeen == null || isSeen == false;
+        }).toList();
+
+        if (unreadDocs.isEmpty) {
+          // Wenn keine ungelesenen in diesem Batch, prüfe ob es weitere gibt
+          if (snapshot.docs.length < BATCH_SIZE) {
+            break; // Keine weiteren Dokumente
+          }
+          // Nächste Seite für Pagination
+          final lastDoc = snapshot.docs.last;
+          query = FirebaseFirestore.instance
+              .collection('wishes')
+              .where('party_id', isEqualTo: partyId)
+              .where('status', isEqualTo: 'pending')
+              .startAfterDocument(lastDoc)
+              .limit(BATCH_SIZE);
+          continue;
+        }
+
+        // Batch-Update erstellen für ungelesene Wünsche
+        final batch = FirebaseFirestore.instance.batch();
+        for (final doc in unreadDocs) {
+          batch.update(doc.reference, {'isSeen': true});
+        }
+
+        await batch.commit();
+        totalUpdated += unreadDocs.length;
+        debugLog(
+          '   ✅ ${unreadDocs.length} Wünsche als gelesen markiert (Gesamt: $totalUpdated)',
+        );
+
+        // Wenn weniger als BATCH_SIZE Dokumente, sind wir fertig
+        if (snapshot.docs.length < BATCH_SIZE) {
+          break;
+        }
+
+        // Nächste Seite für Pagination
+        final lastDoc = snapshot.docs.last;
+        query = FirebaseFirestore.instance
+            .collection('wishes')
+            .where('party_id', isEqualTo: partyId)
+            .where('status', isEqualTo: 'pending')
+            .startAfterDocument(lastDoc)
+            .limit(BATCH_SIZE);
+      }
+
+      if (totalUpdated > 0) {
+        debugLog(
+          '✅ OffenPage: Massen-Update abgeschlossen - $totalUpdated Wünsche als gelesen markiert',
+        );
+      } else {
+        debugLog('ℹ️ OffenPage: Keine ungelesenen Wünsche gefunden');
+      }
+    } catch (e) {
+      debugLog('⚠️ OffenPage: Fehler beim Massen-Update ungelesener Wünsche: $e');
+      // Fehler wird stillschweigend ignoriert, da die Seite bereits verlassen wird
+    }
+  }
+
+  /// Gibt die aktuell angezeigten Wunsch-IDs zurück (für Navigation-basierte Speicherung)
+  @override
+  List<String> getCurrentVisibleIds() {
+    return List<String>.from(_currentVisibleIds);
+  }
+
+  @override
+  void openDjWishDialog() => _openDjWishDialog();
+
+  /// Öffnet den Dialog zur Spotify-Suche und speichert bei Auswahl einen DJ-Wunsch.
+  Future<void> _openDjWishDialog() async {
+    if (!AppConfig.isMasterAdminFirebaseUid(
+        FirebaseAuth.instance.currentUser?.uid)) {
+      return;
+    }
+    if (ActivePartyService.currentPartyId == null ||
+        ActivePartyService.currentPartyId!.isEmpty) {
+      if (!mounted) return;
+      final l10n = AppLocalizations.of(context)!;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(l10n.offen_no_active_party),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    final track = await _showSpotifySearchDialog();
+    if (track == null || !mounted) return;
+    final title = track.name;
+    final artist = track.artists;
+    final inHistory = await DuplicateCheckService.checkIfSongWasPlayed(
+      title,
+      artist,
+      ActivePartyService.currentPartyId!,
+    );
+    final inOpenWishes = await DuplicateCheckService.checkIfSongInOpenWishes(
+      title,
+      artist,
+      ActivePartyService.currentPartyId!,
+    );
+    if (inHistory || inOpenWishes) {
+      final force = await _showDuplicateInfoDialog(inHistory, inOpenWishes);
+      if (force != true || !mounted) return;
+    }
+    final l10n = AppLocalizations.of(context)!;
+    try {
+      await _saveDjWish(
+        title,
+        artist,
+        l10n: l10n,
+        spotifyId: track.id,
+        durationMs: track.durationMs,
+        genres: track.genres,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${l10n.offen_wish_save_error} $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(l10n.dj_wish_added(track.name)),
+        backgroundColor: Colors.green,
+      ),
+    );
+  }
+
+  /// Zeigt den Spotify-Suchdialog und gibt den ausgewählten Track zurück (oder null bei Abbrechen).
+  Future<SpotifyTrack?> _showSpotifySearchDialog() async {
+    final controller = TextEditingController();
+    List<SpotifyTrack> results = [];
+    return showDialog<SpotifyTrack>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) {
+        final loc = AppLocalizations.of(ctx)!;
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1E1E1E),
+              title: Text(
+                loc.spotify_track_search_title,
+                style: const TextStyle(color: Colors.white),
+              ),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: controller,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        hintText: loc.spotify_search_field_hint,
+                        hintStyle:
+                            const TextStyle(color: Colors.white54),
+                        border: const OutlineInputBorder(),
+                      ),
+                      onSubmitted: (q) async {
+                        if (q.trim().isEmpty) return;
+                        final list = await SpotifyService.searchTracks(
+                          q.trim(),
+                        );
+                        setDialogState(() => results = list);
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      height: 320,
+                      child: results.isEmpty
+                          ? Center(
+                              child: Text(
+                                loc.spotify_search_press_enter,
+                                style: const TextStyle(
+                                  color: Colors.white54,
+                                ),
+                              ),
+                            )
+                          : ListView.builder(
+                              itemCount: results.length,
+                              itemBuilder: (context, i) {
+                                final t = results[i];
+                                return ListTile(
+                                  title: Text(
+                                    t.name,
+                                    style: const TextStyle(color: Colors.white),
+                                  ),
+                                  subtitle: Text(
+                                    t.artists,
+                                    style: const TextStyle(
+                                      color: Colors.white70,
+                                    ),
+                                  ),
+                                  onTap: () => Navigator.of(ctx).pop(t),
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: Text(
+                    loc.cancel,
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () async {
+                    final q = controller.text.trim();
+                    if (q.isEmpty) return;
+                    final list = await SpotifyService.searchTracks(q);
+                    setDialogState(() => results = list);
+                  },
+                  child: Text(
+                    loc.button_search,
+                    style: const TextStyle(color: UIConstants.appOrange),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Zeigt Info-Dialog bei Duplikat; gibt true bei "Absenden", false bei "Abbrechen".
+  Future<bool?> _showDuplicateInfoDialog(
+    bool inHistory,
+    bool inOpenWishes,
+  ) async {
+    final loc = AppLocalizations.of(context)!;
+    final String msg;
+    if (inHistory && inOpenWishes) {
+      msg = loc.manualWishDuplicateHistoryAndOpen;
+    } else if (inHistory) {
+      msg = loc.manualWishDuplicateHistoryOnly;
+    } else {
+      msg = loc.manualWishDuplicateOpenOnly;
+    }
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        final dialogLoc = AppLocalizations.of(ctx)!;
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1E1E1E),
+          title: Text(
+            dialogLoc.dialog_notice_title,
+            style: const TextStyle(color: Colors.white),
+          ),
+          content: Text(
+            msg,
+            style: const TextStyle(color: Colors.white70),
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+            side: const BorderSide(color: UIConstants.appOrange, width: 2),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: Text(
+                dialogLoc.cancel,
+                style: const TextStyle(color: Colors.white70),
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: Text(
+                dialogLoc.dialog_send_anyway,
+                style: const TextStyle(
+                  color: UIConstants.appOrange,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// Speichert einen DJ-Wunsch in Firestore (name leer, is_dj_wish: true, party_id: aktive Party).
+  Future<void> _saveDjWish(
+    String title,
+    String artist, {
+    required AppLocalizations l10n,
+    String? spotifyId,
+    int? durationMs,
+    List<String>? genres,
+  }) async {
+    final safeTitle = SecurityHelper.sanitize(title);
+    final safeArtist = SecurityHelper.sanitize(artist);
+    final partyId = ActivePartyService.currentPartyId!;
+    final partySnap = await FirebaseFirestore.instance
+        .collection('parties')
+        .doc(partyId)
+        .get();
+    final djId = (partySnap.data()?['created_by'] as String?)?.trim();
+    if (djId == null || djId.isEmpty) {
+      throw Exception(l10n.party_dj_id_missing);
+    }
+
+    final wishData = <String, dynamic>{
+      'name': '',
+      'title': safeTitle,
+      'artist': safeArtist,
+      'status': 'pending',
+      'createdAt': FieldValue.serverTimestamp(),
+      'duplicate_count': 0,
+      'requested_by': [],
+      'greetings': [],
+      'is_duplicate': false,
+      'is_registered_user': true,
+      'is_registered_users': {},
+      'client_id': FirebaseAuth.instance.currentUser?.uid ?? 'dj',
+      'party_id': partyId,
+      'dj_id': djId,
+      'djId': djId,
+      'isSeen': false,
+      'is_dj_wish': true,
+    };
+    if (spotifyId != null) wishData['spotify_id'] = spotifyId;
+    if (durationMs != null) wishData['duration_ms'] = durationMs;
+    if (genres != null && genres.isNotEmpty) wishData['genres'] = genres;
+    await FirebaseFirestore.instance
+        .collection('wishes')
+        .add(SecurityHelper.sanitizeMap(wishData));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context); // erforderlich für AutomaticKeepAliveClientMixin
+
+    return StickyPaginationLayout(
+      currentPage: _currentPage > 0 ? _currentPage : 1,
+      totalPages: 1,
+      onPrevious: null,
+      onNext: null,
+      child: ValueListenableBuilder<ActivePartyInfo?>(
+        valueListenable: ActivePartyService.storedSessionNotifier,
+        builder: (context, info, _) {
+          // Zentrale Session: nur storedSessionNotifier – kein Prefs-Fallback (Geister-Partys vermeiden).
+          // Key erzwingt sauberen Rebuild bei Party-Wechsel.
+          final activePartyId = info?.partyId;
+          if (activePartyId != null &&
+              activePartyId.isNotEmpty &&
+              activePartyId != ActivePartyService.currentPartyId) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _checkFavorites(activePartyId);
+            });
+          }
+          return KeyedSubtree(
+            key: ValueKey<String>(activePartyId ?? 'none'),
+            // Kein Prefs-Fallback: nur zentrale Session – sonst „Geister-Party“ bei verzögertem clear.
+            child: activePartyId == null || activePartyId.isEmpty
+                ? const Stack(
+                    children: [
+                      Positioned.fill(
+                        child: Center(child: NoActivePartyDisplay()),
+                      ),
+                    ],
+                  )
+                : StreamBuilder<QuerySnapshot>(
+                    stream: WishManagementService.getWishesStream(
+                      activePartyId,
+                      'pending',
+                    ),
+                    builder: (context, snapshot) => _buildWishesListWithPartyId(
+                      context,
+                      snapshot,
+                      activePartyId,
+                    ),
+                  ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildWishesListWithPartyId(
+    BuildContext context,
+    AsyncSnapshot<QuerySnapshot> snapshot,
+    String partyId,
+  ) {
+    if (snapshot.connectionState == ConnectionState.waiting) {
+      return SingleChildScrollView(
+        padding: EdgeInsets.only(
+          left: 16,
+          right: 16,
+          top: 16,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 24),
+            EmptyListMessage(),
+            const SizedBox(height: UIConstants.kFooterPadding * 2),
+          ],
+        ),
+      );
+    }
+
+    // STREAM-ERROR-LOGGING: Detaillierte Fehlerausgabe
+    if (snapshot.hasError) {
+      debugLog('❌❌❌ STREAM FEHLER in offen_page.dart ❌❌❌');
+      debugLog('   Error: ${snapshot.error}');
+      debugLog('   Error Type: ${snapshot.error.runtimeType}');
+      debugLog('   Party ID: ${ActivePartyService.currentPartyId}');
+      if (snapshot.error is Error) {
+        debugLog('   Stack Trace: ${(snapshot.error as Error).stackTrace}');
+      }
+      return buildFirebaseErrorWidget(snapshot.error!);
+    }
+
+    final wishesDocs = snapshot.data?.docs ?? [];
+
+    // DEBUG: Zeige Party-ID und Anzahl der gefundenen Dokumente
+    debugLog(
+      '🔍 [DEBUG] OffenPage: Party-ID: $partyId, Gefundene Wünsche: ${wishesDocs.length}',
+    );
+    if (wishesDocs.isEmpty) {
+      debugLog('⚠️ [DEBUG] Keine Wünsche gefunden für Party-ID: $partyId');
+    }
+
+    // SICHERHEITS-PRÜFUNG: Filter nach party_id (partyId wie History/Gesperrt)
+    final partyFilteredDocs = wishesDocs.where((doc) {
+      final data = doc.data() as Map<String, dynamic>;
+      final docPartyId = data['party_id'] as String?;
+      final matches = docPartyId == partyId;
+      if (!matches) {
+        debugLog(
+          '🚫 PARTY-FILTER: Dokument ${doc.id} gehört zu Party "$docPartyId", erwartet "$partyId" - wird ausgeschlossen',
+        );
+      }
+      return matches;
+    }).toList();
+
+    debugLog(
+      '🔍 [DEBUG] OffenPage: Nach Party-ID-Filter: ${partyFilteredDocs.length} von ${wishesDocs.length} Dokumenten verbleiben',
+    );
+
+    // Sammle alle docIds der aktuell angezeigten Wünsche
+    _currentVisibleIds.clear();
+    for (final doc in partyFilteredDocs) {
+      _currentVisibleIds.add(doc.id);
+    }
+
+    // Prüfe createdAt-Typ (Debug-Logging)
+    for (final doc in partyFilteredDocs) {
+      final data = doc.data() as Map<String, dynamic>;
+      final createdAtValue = data['createdAt'];
+      if (createdAtValue != null && createdAtValue is! Timestamp) {
+        debugLog(
+          '⚠️ ZEIT-FEHLER: createdAt ist kein Timestamp, sondern ${createdAtValue.runtimeType} (Dokument-ID: ${doc.id})',
+        );
+      }
+    }
+
+    // Verwende partyFilteredDocs direkt (is_duplicate Filter entfernt, da Gruppierung jetzt party-spezifisch ist)
+    final filteredDocs = partyFilteredDocs;
+
+    debugLog(
+      '🔍 [DEBUG] OffenPage: Nach Duplikat-Filter: ${filteredDocs.length} von ${wishesDocs.length} Dokumenten verbleiben',
+    );
+
+    // Konvertiere zu SongRequest Objekten (mit Error-Handling)
+    final openWishes = <SongRequest>[];
+    for (final doc in filteredDocs) {
+      try {
+        final songRequest = SongRequest.fromDocument(doc);
+        openWishes.add(songRequest);
+      } catch (e, stackTrace) {
+        debugLog('❌ Fehler beim Konvertieren von Dokument ${doc.id}: $e');
+        debugLog('   Stack: $stackTrace');
+        debugLog('   Document Data: ${doc.data()}');
+        // Überspringe dieses Dokument, damit die App weiterläuft
+        continue;
+      }
+    }
+
+    debugLog(
+      '🔍 [DEBUG] OffenPage: Nach Mapping: ${openWishes.length} SongRequest-Objekte erstellt',
+    );
+    if (partyId == 'B5wSVwhA67bM5Igp7wj2') {
+      debugLog(
+        '🔍 [DEBUG] OffenPage (Party B5wSVwhA67bM5Igp7wj2): docs=${wishesDocs.length} openWishes=${openWishes.length}',
+      );
+    }
+
+    // Favoriten-Filter: Nur Markierte anzeigen, wenn Filter aktiv
+    final showOnlyFavorites = widget.showOnlyFavoritesNotifier?.value == true;
+    final wishesToShow = showOnlyFavorites
+        ? openWishes.where((r) => r.isFavorite == true).toList()
+        : openWishes;
+    if (partyId == 'B5wSVwhA67bM5Igp7wj2') {
+      debugLog(
+        '🔍 [DEBUG] OffenPage (Party B5wSVwhA67bM5Igp7wj2): showOnlyFavorites=$showOnlyFavorites wishesToShow=${wishesToShow.length}',
+      );
+    }
+
+    // Wenn Liste leer: Hinweis, ob Filter "Nur Favoriten" Wünsche ausblendet (verhindert "Song ist weg"-Eindruck)
+    if (wishesToShow.isEmpty) {
+      final hiddenByFilter = showOnlyFavorites && openWishes.isNotEmpty;
+      final l10n = AppLocalizations.of(context)!;
+      return SingleChildScrollView(
+        padding: EdgeInsets.only(
+          left: 16,
+          right: 16,
+          top: 16,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 24),
+            if (showOnlyFavorites && widget.showOnlyFavoritesNotifier != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: TextButton.icon(
+                    onPressed: () {
+                      widget.showOnlyFavoritesNotifier!.value = false;
+                    },
+                    icon: const Icon(Icons.arrow_back, size: 22),
+                    label: Text(l10n.back),
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 10,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            if (hiddenByFilter)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Text(
+                  l10n.offen_favorites_hidden(openWishes.length),
+                  style: TextStyle(
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.7),
+                    fontSize: 13,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            EmptyListMessage(),
+            const SizedBox(height: UIConstants.kFooterPadding * 2),
+          ],
+        ),
+      );
+    }
+
+    // Sortiere nach createdAt (neueste zuerst)
+    final sortedWishes = wishesToShow.toList()
+      ..sort((a, b) {
+        final tsA =
+            a.createdAt?.toDate() ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final tsB =
+            b.createdAt?.toDate() ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return tsB.compareTo(tsA);
+      });
+
+    // Gruppiere Wünsche
+    final groupedResult = WishGroupingHelper.groupWishes(sortedWishes);
+    final allGroupedList =
+        groupedResult['groups'] as List<Map<String, dynamic>>;
+    final groupedFirstRequests =
+        groupedResult['firstRequests'] as Map<String, SongRequest>;
+    final groupedDocIds = groupedResult['docIds'] as Map<String, List<String>>;
+
+    // Paginierung: Berechne Seiten (Ergebnisse pro Seite aus Einstellungen)
+    final totalPages = HistoryPaginationService.calculateTotalPages(
+      allGroupedList.length,
+      itemsPerPage: _resultsPerPage,
+    );
+
+    // ✅ Stelle sicher, dass _currentPage automatisch korrigiert wird, wenn die Gesamtanzahl der Seiten sinkt
+    if (_currentPage > totalPages && totalPages > 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          setState(() {
+            _currentPage = totalPages;
+          });
+        }
+      });
+    }
+
+    // ✅ Reset auf Seite 1 bei neuem Stream (wenn sich Daten ändern)
+    // Wird automatisch durch Stream-Update getriggert
+
+    // Hole paginierte Liste
+    final paginatedGroupedList = HistoryPaginationService.getItemsForPage(
+      allGroupedList,
+      _currentPage > 0 ? _currentPage : 1,
+      itemsPerPage: _resultsPerPage,
+    );
+
+    // Variable Logik für bottomPadding
+    // ✅ Kompakteres bottomPadding für weniger Abstand zwischen Songs und Paginierungs-Buttons
+    // ✅ Vergleichbar mit history_dj.dart (dort: 8.0)
+    final bottomPadding = totalPages > 1 ? 8.0 : 150.0;
+
+    final l10nList = AppLocalizations.of(context)!;
+    return SingleChildScrollView(
+      controller:
+          _scrollController, // ✅ ScrollController für Scrollen nach oben
+      padding: EdgeInsets.only(
+        left: 16,
+        right: 16,
+        top: 16,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 24),
+          if (showOnlyFavorites && widget.showOnlyFavoritesNotifier != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: TextButton.icon(
+                  onPressed: () {
+                    widget.showOnlyFavoritesNotifier!.value = false;
+                  },
+                  icon: const Icon(Icons.arrow_back, size: 22),
+                  label: Text(l10nList.back),
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 10,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          RepaintBoundary(
+            child: ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              padding: EdgeInsets.only(top: 8.0, bottom: bottomPadding),
+              itemCount: () {
+                final len = paginatedGroupedList.length;
+                final isFree =
+                    UserService().sessionProStatus.value?.isActive != true;
+                return isFree ? len + (len / 5).floor() : len;
+              }(),
+              itemBuilder: (context, index) {
+                final isFree =
+                    UserService().sessionProStatus.value?.isActive != true;
+                if (isFree && index % 6 == 5) {
+                  return const ProPromotionBanner();
+                }
+                final dataIndex = index - (index ~/ 6);
+                final groupEntry = paginatedGroupedList[dataIndex];
+                final groupKey = groupEntry['key'] as String;
+                final data = groupEntry['data'] as Map<String, dynamic>;
+                final docIds = groupedDocIds[groupKey]!;
+
+                final number =
+                    allGroupedList.length -
+                    (HistoryPaginationService.calculateStartIndex(
+                          _currentPage > 0 ? _currentPage : 1,
+                          itemsPerPage: _resultsPerPage,
+                        ) +
+                        dataIndex);
+
+                // Prüfe ob Wunsch als "NEU" markiert werden soll
+                // Ein Wunsch ist neu, wenn mindestens eine seiner docIds NICHT im seenWishIds Set ist
+                final isNew = docIds.any(
+                  (docId) => !ActivePartyService.seenWishIds.contains(docId),
+                );
+
+                // Füge alle docIds dieser Gruppe zu _currentVisibleIds hinzu (falls noch nicht vorhanden)
+                for (final docId in docIds) {
+                  if (!_currentVisibleIds.contains(docId)) {
+                    _currentVisibleIds.add(docId);
+                  }
+                }
+
+                final displayText = (data['title'] ?? '') as String;
+
+                return Stack(
+                  children: [
+                    WishCard(
+                      key: ValueKey(
+                        'offen-wish-${docIds.join('|')}',
+                      ),
+                      request:
+                          groupedFirstRequests[groupKey], // ✅ FIX: Übergib originales SongRequest mit clientId
+                      groupedData: data,
+                      docIds: docIds,
+                      type: WishCardType.offen,
+                      number: number,
+                      isNew: isNew,
+                      // Kein onTap: volle Detailansicht der WishCard (mit Namen & Grüßen) wird geöffnet
+                      onPlay: (ctx, ids) {
+                        debugLog(
+                          '>>> UI: Rufe jetzt den Dialog auf (von WishCard)',
+                        );
+                        if (ActivePartyService.currentPartyId != null &&
+                            ActivePartyService.currentPartyId!.isNotEmpty) {
+                          WishManagementService.showConfirmUpdateGroupedStatusDialog(
+                            ctx,
+                            ids,
+                            'played',
+                            AppLocalizations.of(ctx)!.mark_as_played,
+                            displayText,
+                            ActivePartyService.currentPartyId!,
+                          );
+                        } else {
+                          ScaffoldMessenger.of(ctx).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                AppLocalizations.of(ctx)!.error_no_party_id_found,
+                              ),
+                              backgroundColor: UIConstants.frameNoParty,
+                            ),
+                          );
+                        }
+                      },
+                      onReject: (ctx, ids) {
+                        final title = (data['title'] ?? '') as String;
+                        final artist = (data['artist'] ?? '') as String;
+                        final displayText =
+                            title.isNotEmpty && artist.isNotEmpty
+                            ? '$title - $artist'
+                            : (title.isNotEmpty ? title : artist);
+                        if (ActivePartyService.currentPartyId != null &&
+                            ActivePartyService.currentPartyId!.isNotEmpty) {
+                          WishManagementService.showConfirmUpdateGroupedStatusDialog(
+                            ctx,
+                            ids,
+                            'rejected',
+                            AppLocalizations.of(ctx)!.reject,
+                            displayText,
+                            ActivePartyService.currentPartyId!,
+                          );
+                        } else {
+                          ScaffoldMessenger.of(ctx).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                AppLocalizations.of(ctx)!.error_no_party_id_found,
+                              ),
+                              backgroundColor: UIConstants.frameNoParty,
+                            ),
+                          );
+                        }
+                      },
+                      onDelete: (ctx, ids) {
+                        final title = (data['title'] ?? '') as String;
+                        final artist = (data['artist'] ?? '') as String;
+                        final displayText =
+                            title.isNotEmpty && artist.isNotEmpty
+                            ? '$title - $artist'
+                            : (title.isNotEmpty ? title : artist);
+                        if (ActivePartyService.currentPartyId != null &&
+                            ActivePartyService.currentPartyId!.isNotEmpty) {
+                          WishManagementService.showConfirmDeleteGroupedDialog(
+                            ctx,
+                            ids,
+                            displayText,
+                            ActivePartyService.currentPartyId!,
+                          );
+                        } else {
+                          ScaffoldMessenger.of(ctx).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                AppLocalizations.of(ctx)!.error_no_party_id_found,
+                              ),
+                              backgroundColor: UIConstants.frameNoParty,
+                            ),
+                          );
+                        }
+                      },
+                      onBlockGrouped: (ctx, req, dataMap, ids) =>
+                          UserBlockingService.showGroupedBlockDialog(
+                            ctx,
+                            req,
+                            dataMap,
+                            ids,
+                          ),
+                    ),
+                    // NEU-Badge ENTFERNT (wird jetzt durch Hintergrundfarbe signalisiert)
+                  ],
+                );
+              },
+            ),
+          ),
+          // ✅ Paginierungs-Buttons (nur wenn mehr als 1 Seite) - BLAU statt Orange
+          if (totalPages > 1)
+            _buildPaginationButtons(_currentPage, totalPages, context),
+          const SizedBox(height: UIConstants.kFooterPadding * 2),
+        ],
+      ),
+    );
+  }
+
+  /// Zeigt Detail-Dialog für gruppierte Wünsche
+  void _showGroupedWishDetailDialog(
+    BuildContext context,
+    Map<String, dynamic> data,
+    List<String> docIds,
+  ) {
+    final isRtl = [
+      'ar',
+      'he',
+      'fa',
+      'ur',
+    ].contains(Localizations.localeOf(context).languageCode);
+    final l = AppLocalizations.of(context)!;
+    final title = (data['title'] ?? data['song'] ?? '') as String;
+    final artist = (data['artist'] ?? '') as String;
+    final displayText = title.isNotEmpty && artist.isNotEmpty
+        ? '$title - $artist'
+        : (title.isNotEmpty ? title : artist);
+
+    showDialog(
+      context: context,
+      builder: (context) => Directionality(
+        textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
+        child: AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: UIConstants.frameOffen, width: 2.0),
+          ),
+          title: Text(
+            displayText,
+            textAlign: isRtl ? TextAlign.right : TextAlign.left,
+          ),
+          content: Directionality(
+            textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: isRtl
+                    ? CrossAxisAlignment.end
+                    : CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${l.wish_count_label} ${docIds.length}',
+                    textAlign: isRtl ? TextAlign.right : TextAlign.left,
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      debugLog(
+                        '>>> UI: Rufe jetzt den Dialog auf (von Detail-Dialog)',
+                      );
+                      Navigator.pop(context);
+                      if (ActivePartyService.currentPartyId != null &&
+                          ActivePartyService.currentPartyId!.isNotEmpty) {
+                        WishManagementService.showConfirmUpdateGroupedStatusDialog(
+                          context,
+                          docIds,
+                          'played',
+                          l.mark_as_played,
+                          displayText,
+                          ActivePartyService.currentPartyId!,
+                        );
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              AppLocalizations.of(context)!.error_no_party_id_found,
+                            ),
+                            backgroundColor: UIConstants.frameNoParty,
+                          ),
+                        );
+                      }
+                    },
+                    icon: const Icon(Icons.check, color: Colors.white),
+                    label: Text(
+                      l.played,
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: UIConstants.frameGespielt,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      if (ActivePartyService.currentPartyId != null &&
+                          ActivePartyService.currentPartyId!.isNotEmpty) {
+                        WishManagementService.showConfirmDeleteOrRejectGroupedDialog(
+                          context,
+                          docIds,
+                          displayText,
+                          ActivePartyService.currentPartyId!,
+                        );
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              AppLocalizations.of(context)!.error_no_party_id_found,
+                            ),
+                            backgroundColor: UIConstants.frameNoParty,
+                          ),
+                        );
+                      }
+                    },
+                    icon: const Icon(Icons.delete, color: Colors.white),
+                    label: Text(
+                      l.delete,
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: UIConstants.frameNoParty,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Aktualisiert gruppierte Wünsche auf 'rejected'
+  Future<void> _updateGroupedStatusToRejected(
+    BuildContext context,
+    List<String> docIds,
+  ) async {
+    final locRej = AppLocalizations.of(context)!;
+    try {
+      if (ActivePartyService.currentPartyId != null &&
+          ActivePartyService.currentPartyId!.isNotEmpty) {
+        await WishManagementService.updateGroupedStatus(
+          docIds,
+          'rejected',
+          ActivePartyService.currentPartyId!,
+        );
+      } else {
+        throw Exception(locRej.exception_no_party_id);
+      }
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(locRej.snackbar_wishes_rejected(docIds.length)),
+            backgroundColor: UIConstants.frameGespielt,
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(locRej.snackbar_error_details(e)),
+            backgroundColor: UIConstants.frameNoParty,
+          ),
+        );
+      }
+    }
+  }
+
+  /// Löscht gruppierte Wünsche
+  Future<void> _deleteGroupedWishes(
+    BuildContext context,
+    List<String> docIds,
+  ) async {
+    final locDel = AppLocalizations.of(context)!;
+    try {
+      if (ActivePartyService.currentPartyId != null &&
+          ActivePartyService.currentPartyId!.isNotEmpty) {
+        await WishManagementService.deleteGroupedWishes(
+          docIds,
+          ActivePartyService.currentPartyId!,
+        );
+      } else {
+        throw Exception(locDel.exception_no_party_id);
+      }
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(locDel.snackbar_wishes_deleted(docIds.length)),
+            backgroundColor: UIConstants.frameGespielt,
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(locDel.snackbar_error_details(e)),
+            backgroundColor: UIConstants.frameNoParty,
+          ),
+        );
+      }
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "conditions": [],
+  "parameters": {
+    "enable_app_check": {
+      "defaultValue": { "value": "true" },
+      "description": "Firebase App Check in der Flutter-App (RemoteConfigService.isAppCheckEnabled).",
+      "valueType": "BOOLEAN"
+    },
+    "cooldown_seconds": {
+      "defaultValue": { "value": "30" },
+      "description": "Cooldown in Sekunden (Remote Config).",
+      "valueType": "NUMBER"
+    },
+    "guest_limit_per_hour": {
+      "defaultValue": { "value": "2" },
+      "description": "Limit pro Stunde für Gäste.",
+      "valueType": "NUMBER"
+    },
+    "user_limit_per_hour": {
+      "defaultValue": { "value": "5" },
+      "description": "Limit pro Stunde für eingeloggte Nutzer.",
+      "valueType": "NUMBER"
+    }
+  },
+  "parameterGroups": {}
+}

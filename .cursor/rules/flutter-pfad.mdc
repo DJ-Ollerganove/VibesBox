@@ -1,0 +1,29 @@
+---
+description: Flutter-Installation – Pfad für Terminal-Befehle (IMMER anwenden)
+alwaysApply: true
+---
+
+# Flutter-Pfad (Windows) – verbindlich
+
+Flutter liegt **nicht** im System-PATH. Quelle im Projekt: `build_release_1.0.7.ps1` und `add_flutter_to_path.ps1`.
+
+**Exakter Pfad zur ausführbaren Datei:**
+`C:\Users\Ollerganove\Downloads\flutter_windows_3.38.4-stable\flutter\bin\flutter.bat`
+
+Wichtig: Es gibt einen **Unterordner `flutter`** innerhalb von `flutter_windows_3.38.4-stable` – also `...\flutter_windows_3.38.4-stable\flutter\bin\flutter.bat`.
+
+## Flutter-Befehle (PowerShell) – immer diesen Pfad nutzen
+
+```powershell
+$flutter = "$env:USERPROFILE\Downloads\flutter_windows_3.38.4-stable\flutter\bin\flutter.bat"
+& $flutter clean
+& $flutter pub get
+& $flutter build appbundle --release
+```
+
+Oder direkt:
+```powershell
+& "$env:USERPROFILE\Downloads\flutter_windows_3.38.4-stable\flutter\bin\flutter.bat" --version
+```
+
+Bei Flutter-Befehlen in dieser Codebase **niemals** nur `flutter` aufrufen – immer den vollen Pfad mit `\flutter\bin\flutter.bat` verwenden.

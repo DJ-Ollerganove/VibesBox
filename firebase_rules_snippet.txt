@@ -1,0 +1,127 @@
+// ============================================
+// FIREBASE FIRESTORE RULES - Code-Schnipsel
+// ============================================
+// Für die Firebase Console: Firestore Database > Rules
+// 
+// WICHTIG: Dieser Code-Schnipsel muss in die bestehenden Rules integriert werden!
+// Ersetze NICHT die gesamten Rules, sondern füge nur die neuen Regeln hinzu.
+// ============================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ============================================
+    // USERS COLLECTION - Erweiterte Regeln
+    // ============================================
+    // Erlaubt DJs, ihre eigenen auto_start_recognition Einstellungen zu speichern
+    match /users/{userId} {
+      // Lesen: Jeder authentifizierte User kann sein eigenes Profil lesen
+      allow read: if request.auth != null && request.auth.uid == userId;
+      
+      // Schreiben: User kann nur sein eigenes Profil aktualisieren
+      // Erlaubt explizit das Setzen von auto_start_recognition
+      allow update: if request.auth != null 
+        && request.auth.uid == userId
+        && (
+          // Erlaubt das Setzen/Aktualisieren von auto_start_recognition
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['auto_start_recognition'])
+          || 
+          // Oder andere erlaubte Felder (falls bereits vorhanden)
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'auto_start_recognition',
+            'shazam_scan_interval_seconds',
+            'mic_sensitivity',
+            'recognition_threshold',
+            'smart_threshold_enabled',
+            'displayName',
+            'email'
+          ])
+        );
+      
+      // Erstellen: Nur beim ersten Login (wird normalerweise vom Backend gemacht)
+      allow create: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // ============================================
+    // WISHES COLLECTION - Erweiterte Regeln für Party-Statistiken
+    // ============================================
+    // Sichert die Abfragen für Party-Statistiken ab
+    match /wishes/{wishId} {
+      // Lesen: DJ kann nur Wünsche seiner eigenen Partys sehen
+      allow read: if request.auth != null 
+        && (
+          // Wunsch gehört zu einer Party des DJs
+          resource.data.get('djId') == request.auth.uid
+          ||
+          // Oder Wunsch gehört zu einer Party, die vom DJ erstellt wurde
+          exists(/databases/$(database)/documents/parties/$(resource.data.get('party_id')))
+          && get(/databases/$(database)/documents/parties/$(resource.data.get('party_id'))).data.get('created_by') == request.auth.uid
+        );
+      
+      // Schreiben: Nur DJ kann Status seiner Wünsche ändern
+      allow update: if request.auth != null 
+        && resource.data.get('djId') == request.auth.uid
+        && (
+          // Erlaubt Status-Änderungen (z.B. bei Session-Bereinigung)
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status',
+            'status_changed_at',
+            'status_reason'
+          ])
+          ||
+          // Oder andere erlaubte Updates
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status',
+            'status_changed_at',
+            'status_reason',
+            'deleted'
+          ])
+        );
+    }
+    
+    // ============================================
+    // MUSIC_HISTORY COLLECTION - Session-Zugriff
+    // ============================================
+    match /music_history/{sessionId} {
+      // Lesen: DJ kann nur seine eigenen Sessions sehen
+      allow read: if request.auth != null 
+        && resource.data.get('djId') == request.auth.uid;
+      
+      // Schreiben: Nur der DJ kann seine eigenen Sessions erstellen/aktualisieren
+      allow create, update: if request.auth != null 
+        && request.resource.data.get('djId') == request.auth.uid;
+    }
+    
+    // ============================================
+    // PARTIES COLLECTION - Party-Zugriff
+    // ============================================
+    match /parties/{partyId} {
+      // Lesen: DJ kann nur seine eigenen Partys sehen
+      allow read: if request.auth != null 
+        && resource.data.get('created_by') == request.auth.uid;
+      
+      // Schreiben: Nur der DJ kann seine eigenen Partys erstellen/aktualisieren
+      allow create, update: if request.auth != null 
+        && request.resource.data.get('created_by') == request.auth.uid;
+    }
+    
+    // ============================================
+    // WEITERE COLLECTIONS (falls vorhanden)
+    // ============================================
+    // Füge hier weitere Collections hinzu, falls nötig
+    
+  }
+}
+
+// ============================================
+// HINWEISE:
+// ============================================
+// 1. Diese Rules müssen in die bestehenden Rules integriert werden
+// 2. Teste die Rules in der Firebase Console mit dem Rules Playground
+// 3. Stelle sicher, dass alle bestehenden Regeln erhalten bleiben
+// 4. Die Rules verwenden request.auth.uid für die Authentifizierung
+// 5. Alle Abfragen sind strikt an die djId/created_by gebunden
+// ============================================
+
+

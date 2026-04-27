@@ -1,0 +1,19 @@
+AAB (App Bundle) erstellen
+==========================
+
+Wegen eines bekannten Flutter-Bugs unter Windows ("failed to strip debug symbols")
+muss beim Bauen die Umgebungsvariable FLUTTER_SKIP_AAB_STRIP_CHECK gesetzt werden.
+
+PowerShell (einmal pro Session):
+  $env:FLUTTER_SKIP_AAB_STRIP_CHECK='1'
+  flutter build appbundle --release
+
+Oder in einer Zeile:
+  $env:FLUTTER_SKIP_AAB_STRIP_CHECK='1'; flutter build appbundle --release
+
+Die AAB-Datei liegt danach unter:
+  build\app\outputs\bundle\release\app-release.aab
+
+Hinweis: Die Variable wurde in deiner Flutter-Installation (gradle.dart) ergänzt,
+damit der Check übersprungen wird. Die App ist normal nutzbar; sie kann minimal
+größer sein als mit gestrippten Debug-Symbolen.

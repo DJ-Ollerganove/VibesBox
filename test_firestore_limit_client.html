@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Firestore Rules Test - Cooldown Limit</title>
+  <style>
+    body {
+      font-family: monospace;
+      padding: 20px;
+      background: #1a1a1a;
+      color: #fff;
+    }
+    .test-section {
+      margin: 20px 0;
+      padding: 15px;
+      background: #2a2a2a;
+      border-radius: 8px;
+    }
+    button {
+      padding: 10px 20px;
+      background: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      margin: 5px;
+    }
+    button:hover {
+      background: #45a049;
+    }
+    .error {
+      color: #f44336;
+    }
+    .success {
+      color: #4CAF50;
+    }
+    .log {
+      margin-top: 10px;
+      padding: 10px;
+      background: #1a1a1a;
+      border-left: 3px solid #4CAF50;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h1>🧪 Firestore Rules Test - Cooldown Limit</h1>
+  
+  <div class="test-section">
+    <h2>Test 1: Erster Wunsch (sollte erfolgreich sein)</h2>
+    <button onclick="testFirstWish()">Ersten Wunsch erstellen</button>
+    <div id="log1" class="log"></div>
+  </div>
+  
+  <div class="test-section">
+    <h2>Test 2: Zweiter Wunsch sofort (sollte permission-denied)</h2>
+    <button onclick="testSecondWish()">Zweiten Wunsch erstellen</button>
+    <div id="log2" class="log"></div>
+  </div>
+  
+  <div class="test-section">
+    <h2>Test 3: Dritter Wunsch nach 31 Sekunden (sollte erfolgreich sein)</h2>
+    <button onclick="testThirdWish()">Nach Cooldown testen</button>
+    <div id="log3" class="log"></div>
+  </div>
+
+  <!-- Firebase SDK -->
+  <script type="module">
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+    import { getFirestore, collection, addDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+    
+    // ⚠️ WICHTIG: Ersetze mit deinen Firebase Config-Werten
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_AUTH_DOMAIN",
+      projectId: "YOUR_PROJECT_ID",
+      storageBucket: "YOUR_STORAGE_BUCKET",
+      messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+      appId: "YOUR_APP_ID"
+    };
+    
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    
+    const testClientId = 'test_client_' + Date.now();
+    const testPartyId = 'test_party_123';
+    
+    window.testFirstWish = async function() {
+      const log = document.getElementById('log1');
+      log.textContent = '📝 Erstelle ersten Wunsch...\n';
+      
+      try {
+        const docRef = await addDoc(collection(db, 'wishes'), {
+          name: 'Test Gast',
+          title: 'Test Song 1',
+          artist: 'Test Artist',
+          status: 'pending',
+          client_id: testClientId,
+          party_id: testPartyId,
+          createdAt: serverTimestamp()
+        });
+        log.textContent += '✅ ERFOLG: Erster Wunsch erstellt\n';
+        log.textContent += '   Dokument-ID: ' + docRef.id + '\n';
+        log.className = 'log success';
+      } catch (error) {
+        log.textContent += '❌ FEHLER: ' + error.code + '\n';
+        log.textContent += '   Meldung: ' + error.message + '\n';
+        log.className = 'log error';
+      }
+    };
+    
+    window.testSecondWish = async function() {
+      const log = document.getElementById('log2');
+      log.textContent = '📝 Versuche sofort zweiten Wunsch...\n';
+      
+      try {
+        const docRef = await addDoc(collection(db, 'wishes'), {
+          name: 'Test Gast',
+          title: 'Test Song 2',
+          artist: 'Test Artist',
+          status: 'pending',
+          client_id: testClientId,
+          party_id: testPartyId,
+          createdAt: serverTimestamp()
+        });
+        log.textContent += '❌ FEHLER: Zweiter Wunsch wurde erstellt!\n';
+        log.textContent += '   Dokument-ID: ' + docRef.id + '\n';
+        log.textContent += '   ⚠️ Cooldown-Regel funktioniert nicht!\n';
+        log.className = 'log error';
+      } catch (error) {
+        if (error.code === 'permission-denied') {
+          log.textContent += '✅ ERFOLG: permission-denied erhalten (wie erwartet)\n';
+          log.textContent += '   Fehlercode: ' + error.code + '\n';
+          log.textContent += '   Meldung: ' + error.message + '\n';
+          log.className = 'log success';
+        } else {
+          log.textContent += '⚠️ UNERWARTETER FEHLER: ' + error.code + '\n';
+          log.textContent += '   Meldung: ' + error.message + '\n';
+          log.className = 'log error';
+        }
+      }
+    };
+    
+    window.testThirdWish = async function() {
+      const log = document.getElementById('log3');
+      log.textContent = '📝 Warte 31 Sekunden und versuche dritten Wunsch...\n';
+      log.textContent += '   (Bitte warten...)\n';
+      
+      setTimeout(async () => {
+        try {
+          const docRef = await addDoc(collection(db, 'wishes'), {
+            name: 'Test Gast',
+            title: 'Test Song 3',
+            artist: 'Test Artist',
+            status: 'pending',
+            client_id: testClientId,
+            party_id: testPartyId,
+            createdAt: serverTimestamp()
+          });
+          log.textContent += '✅ ERFOLG: Dritter Wunsch nach Cooldown erstellt\n';
+          log.textContent += '   Dokument-ID: ' + docRef.id + '\n';
+          log.className = 'log success';
+        } catch (error) {
+          log.textContent += '❌ FEHLER: Dritter Wunsch wurde nicht erstellt\n';
+          log.textContent += '   Fehlercode: ' + error.code + '\n';
+          log.textContent += '   Meldung: ' + error.message + '\n';
+          log.className = 'log error';
+        }
+      }, 31000);
+    };
+  </script>
+</body>
+</html>

@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base href="/vb/">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VibesBox – Join the Party</title>
+  <meta name="description" content="Musikwünsche, Live-History und Interaktion für dein Event. Mit VibesBox steuern Gäste die Stimmung direkt vom Smartphone.">
+  <meta name="theme-color" content="#050505">
+  <meta property="og:title" content="VibesBox – Dein interaktives Event-Erlebnis">
+  <meta property="og:description" content="Musikwünsche, Live-History und Interaktion für dein Event. Mit VibesBox steuern Gäste die Stimmung direkt vom Smartphone.">
+  <meta property="og:image" content="https://vibesbox.app/assets/logo_og.png">
+  <meta property="og:type" content="website">
+  <link rel="manifest" href="/vb/manifest.json">
+  <link rel="icon" type="image/png" href="/vb/favicon.png">
+  <!-- Font Awesome: nicht render-blockierend (LCP); noscript-Fallback -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" media="print" onload="this.media='all'">
+  <noscript><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"></noscript>
+  <!-- Google reCAPTCHA v3 (defer: läuft nach DOM, verhindert appendChild-null beim Auto-Login) -->
+  <script defer src="https://www.google.com/recaptcha/enterprise.js?render=6LdoeDcsAAAAAIORb90GjRovm2tW5qE4v9q5J-u5"></script>
+  <script>
+    (function() {
+      window.addEventListener('error', function(e) {
+        if (e.message && (e.message.indexOf('appendChild') !== -1 || e.message.indexOf('grecaptcha') !== -1 || e.message.indexOf('recaptcha') !== -1 || (e.filename && e.filename.indexOf('recaptcha') !== -1))) {
+          console.warn('DEBUG [reCAPTCHA]: Fehler abgefangen, Ablauf wird nicht unterbrochen:', e.message);
+          e.preventDefault();
+          e.stopPropagation();
+          return true;
+        }
+      }, true);
+    })();
+  </script>
+  <!-- Sprachen: nur ?lang= aus URL (kein Browser-/Device-Locale in /vb/). Liste für Sprach-Modal. -->
+  <script src="scripts/default-pwa-languages.js"></script>
+  <script src="scripts/vb-url-lang.js"></script>
+  <!-- Theme (Farbvariablen) -->
+  <script src="styles/theme.js"></script>
+  <!-- Firebase SDK (ausgelagert) — nach Sprach-UI -->
+  <script type="module" src="scripts/firebase-init.js"></script>
+  <script src="/party_shared.js"></script>
+  <link rel="stylesheet" href="styles/main.css">
+  </head>
+  <body>
+  <main>
+  <div class="container">
+    <!-- ✅ Statischer App-Header (immer sichtbar, außerhalb der Pages) -->
+    <div class="app-header" id="appHeader">
+      <!-- ✅ Logo links (fixiert, klickbar für Lightbox) -->
+      <img src="icon/vibesbox-logo.png" alt="VibesBox Logo" class="header-logo" id="appHeaderLogo" onclick="openLogoLightbox()" onerror="this.style.display='none';">
+      
+      <!-- ✅ Dynamischer Bereich neben Logo (VibesBox Text oder Party-Name + DJ-Info) -->
+      <div class="header-branding" id="headerBranding" style="flex: 1; min-width: 0;">
+        <!-- ✅ VibesBox Text (wenn nicht eingeloggt) oder Party-Name (wenn eingeloggt) -->
+        <span class="header-vibesbox-text" id="headerVibesboxText">VibesBox</span>
+        <span class="header-party-name" id="headerPartyName" style="display: none;"></span>
+        <!-- ✅ DJ-Info Container (unten, nur wenn eingeloggt) -->
+        <div class="header-dj-info" id="headerDjInfo" style="display: none;">
+          <span class="header-by-text" id="headerByText"></span>
+          <span class="header-dj-name" id="headerDjName"></span>
+        </div>
+        <!-- ✅ Party-Info-Zeile (unter "von DJ-Name"), grün, Party-Name fett -->
+        <div class="header-party-info" id="headerPartyInfo" style="display: none;">
+          <span class="header-party-info-text" id="headerPartyInfoText"></span>
+          <span class="header-party-info-name" id="headerPartyInfoName"></span>
+        </div>
+      </div>
+      
+      <!-- ✅ Container für Titel und Hamburger-Icon (rechts im Header, vertikal gestapelt) -->
+      <div class="header-title-menu-container">
+        <!-- ✅ Aktueller Seitentitel (über Hamburger-Icon) -->
+        <span id="current-page-title" class="current-page-title"></span>
+        
+        <button class="hamburger-menu" id="hamburgerMenuBtn" onclick="toggleDrawer()">
+          <span></span>
+          <span></span>
+          <span></span>
+        </button>
+      </div>
+    </div>
+    
+    <!-- ✅ Lightbox-Overlay für VibesBox Logo -->
+    <div class="logo-lightbox-overlay" id="logoLightboxOverlay" onclick="closeLogoLightbox()">
+      <div class="logo-lightbox-content" onclick="event.stopPropagation();">
+        <img src="icon/vibesbox-logo.png" alt="VibesBox Logo" class="logo-lightbox-image" id="logoLightboxImage">
+      </div>
+    </div>
+    
+    <!-- ✅ Blaue Trennzeile (reines Design-Element, 25px, kein Text) -->
+    <div class="party-info-line" id="partyInfoLine" style="display: block;" aria-hidden="true"></div>
+    
+    <!-- ✅ Loading-Overlay (festes DOM-Element, damit reCAPTCHA/andere Scripts keine null-Referenz bekommen) -->
+    <div id="loading-overlay" class="loading-overlay" style="display: flex;" role="status" aria-live="polite">
+      <div class="loading-spinner"></div>
+      <span id="loading-overlay-text" data-i18n="loading_data">Loading data...</span>
+    </div>
+    <!-- Stabile Container für reCAPTCHA (verhindert appendChild-null wenn Script vor DOM läuft) -->
+    <div id="recaptcha-container" style="position:absolute;left:0;top:0;width:1px;height:1px;overflow:hidden;pointer-events:none;" aria-hidden="true"></div>
+    
+    <!-- ✅ Drawer Overlay (für Klick außerhalb des Menüs) -->
+    <div class="drawer-overlay" id="drawerOverlay" onclick="closeDrawer()"></div>
+
+    <!-- ✅ Floating Menu (verankert an Header-Box) -->
+    <div class="drawer-menu" id="drawerMenu">
+      <div class="drawer-menu-header">
+        <!-- ✅ DJ-Logo Container (über VIBESBOX Text) -->
+        <div class="drawer-logo-container" id="drawerLogoContainer" style="display: none;">
+          <img src="" alt="DJ Logo" class="drawer-dj-logo" id="drawerDjLogo" onerror="this.style.display='none';">
+        </div>
+        <h2 id="drawerMenuTitle">VibesBox</h2>
+        <div class="drawer-dj-name" id="drawerDjName" style="display: none;"></div>
+      </div>
+      
+      <a href="#" onclick="showPage('wunschbox'); closeDrawer(); return false;" class="drawer-menu-item active" id="drawer-nav-wunschbox" data-i18n="nav_vibesbox">VibesBox</a>
+      <a href="#" onclick="showPage('history'); closeDrawer(); return false;" class="drawer-menu-item" id="drawer-nav-history" data-i18n="nav_history">History</a>
+      <a href="#" onclick="showPage('social-media'); closeDrawer(); return false;" class="drawer-menu-item" id="drawer-nav-social-media" data-i18n="nav_social_media">Social Media</a>
+      <a href="#" onclick="showPage('kontakt'); closeDrawer(); return false;" class="drawer-menu-item" id="drawer-nav-kontakt" data-i18n="nav_contact">Contact</a>
+      <a href="#" onclick="showPage('ueber'); closeDrawer(); return false;" class="drawer-menu-item" id="drawer-nav-ueber" data-i18n="nav_about">About VibesBox</a>
+      
+      <!-- ✅ Logout-Menüpunkt (nur sichtbar wenn Party aktiv) -->
+      <a href="#" class="drawer-menu-item drawer-logout-item" id="drawerLogoutItem" onclick="logoutFromParty(); return false;" style="display: none;" data-i18n="logout_party">
+        <span>🚪</span>
+        <span>Leave Party</span>
+      </a>
+      
+      <div class="drawer-language-section">
+        <button class="drawer-language-menu-item" id="drawerLanguageToggle" onclick="openLanguageModal(); return false;">
+          <span id="drawerCurrentLanguage">
+            <span class="language-icon">🌐</span>
+            <span id="drawerCurrentLanguageName">English</span>
+          </span>
+        </button>
+      </div>
+    </div>
+
+    <!-- WunschBox Seite (nur mit gültiger Party-ID erreichbar – Gatekeeper leitet sonst zur Main-PWA um) -->
+    <div id="page-wunschbox" class="page">
+      <!-- ✅ Header entfernt, da jetzt statischer App-Header verwendet wird -->
+
+      <div class="form-container">
+        <!-- Pre-Party Wartemodus -->
+        <div class="pre-party-wait-mode" id="prePartyWaitMode" style="display: none; padding: 32px; margin: 24px 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 16px; text-align: center; color: white; box-shadow: 0 8px 24px rgba(102, 126, 234, 0.3);">
+          <div style="font-size: 64px; margin-bottom: 16px;">⏰</div>
+          <h2 style="margin: 0 0 12px 0; font-size: 24px; font-weight: bold;" id="prePartyTitle" data-i18n="pre_party_title">Party starting soon!</h2>
+          <p style="margin: 0 0 24px 0; font-size: 16px; opacity: 0.9;" id="prePartySubtitle" data-i18n="pre_party_subtitle">Music requests will be unlocked automatically</p>
+          <div style="background: rgba(255, 255, 255, 0.2); border-radius: 12px; padding: 24px; margin-bottom: 16px;">
+            <div id="prePartyCountdown" style="font-size: 32px; font-weight: bold; font-family: 'Courier New', monospace; letter-spacing: 2px;">
+              --:--:--:--
+            </div>
+            <div style="display: flex; justify-content: center; gap: 24px; margin-top: 12px; font-size: 12px; opacity: 0.8;">
+              <span data-i18n="pre_party_days">Days</span>
+              <span data-i18n="pre_party_hours">Hours</span>
+              <span data-i18n="pre_party_minutes">Minutes</span>
+              <span data-i18n="pre_party_seconds">Seconds</span>
+            </div>
+          </div>
+        </div>
+        
+        <div class="wishbox-inactive-message" id="wishboxInactiveMessage" style="display: none;">
+          <div class="icon">🎉</div>
+          <h2 data-i18n="wishbox_inactive">Music requests are currently inactive.</h2>
+          <p data-i18n="wishbox_inactive_info">If you want to submit a music request at the party, please log in with the party code or scan the QR code on site.</p>
+        </div>
+
+        <div class="wishbox-inactive-message" id="bodyLoadError" style="display: none; border: 2px solid rgba(255,165,0,0.6); background: rgba(255,165,0,0.08); border-radius: 12px;">
+          <div class="icon">⚠️</div>
+          <h2 data-i18n="error_load_failed_title">Data could not be loaded</h2>
+          <p data-i18n="error_load_failed_message">Please reload the page or enter the party code again.</p>
+        </div>
+        
+        <div class="error-message" id="errorMessage"></div>
+
+        <!-- ✅ Branding-Zeile (ganz oben in Zelle 2, vor allen Eingabefeldern) -->
+        <div class="branding-line" id="brandingLine" style="display: none;">
+          <!-- Oben: Header-Text -->
+          <div class="branding-header-text" data-i18n="pwa_request_header_text">Send your song request to</div>
+          
+          <!-- Mitte: DJ-Name (Überschrift), optional Logo darunter -->
+          <div class="branding-content">
+            <span class="branding-dj-name" id="brandingDjName" style="display: none;"></span>
+            <img src="" alt="" class="branding-dj-logo" id="brandingDjLogo" style="display: none;" onerror="this.style.display='none';">
+          </div>
+        </div>
+
+        <!-- Block-Nachricht für gesperrte Gäste -->
+        <div class="wishbox-blocked-message" id="wishboxBlockedMessage" style="display: none; padding: 24px; margin: 16px 0; background-color: #fff3e0; border: 2px solid #ff9800; border-radius: 12px; text-align: center;">
+          <div style="font-size: 48px; margin-bottom: 16px;">🚫</div>
+          <h2 style="margin: 0 0 12px 0; color: #e65100; font-size: 20px; font-weight: bold;" data-i18n="wishbox_blocked_title">Pause for your wishes!</h2>
+          <p style="margin: 0; color: #bf360c; font-size: 14px; line-height: 1.5;" data-i18n="wishbox_blocked_message">
+            Since the last messages didn't quite match the vibe of the party, music requests are currently closed for you. See you on the dancefloor!
+          </p>
+        </div>
+
+        <!-- ✅ Inline Pause-Overlay (nur im Content-Bereich) -->
+        <div id="partyPausedOverlay" class="party-paused-overlay" style="display: none;">
+          <div class="party-paused-container">
+            <div class="party-paused-icon">
+              <svg width="64" height="64" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="6" y="4" width="4" height="16" rx="1" fill="#FF6B35"/>
+                <rect x="14" y="4" width="4" height="16" rx="1" fill="#FF6B35"/>
+              </svg>
+            </div>
+            <p class="party-paused-text" id="partyPausedText" data-i18n="party_paused_msg">Brief program break: Vibesbox will be back soon for your music requests!</p>
+          </div>
+        </div>
+
+        <form id="wishForm" style="display: none; visibility: hidden;">
+          <input type="hidden" id="partyCodeInput" name="partyCode" value="">
+          
+          <p class="wishbox-intro-disclaimer" data-i18n="wish_sent_disclaimer">Please understand that the DJ can only play the songs they currently have in their collection. Whether a track gets played is up to the DJ, to match the vibes – not every request fits the moment of the party. Thanks for your understanding!</p>
+          
+          <!-- ✅ NEUE REIHENFOLGE: 1. Branding (oben), 2. Interpret, 3. Titel, 4. Name & Gruß (am Ende) -->
+          
+          <!-- ✅ 2. Interpret (vollbreit) -->
+          <div class="form-group">
+            <label for="artist" data-i18n="label_artist">Artist *</label>
+            <div class="input-wrapper" style="position: relative;">
+              <span class="icon">🎤</span>
+              <input type="text" id="artist" name="artist" placeholder="" maxlength="120">
+              <div class="loading" id="artistLoading"></div>
+              <span class="char-counter" id="artistCharCount" style="position: absolute; bottom: 4px; right: 8px; font-size: 11px; color: #888;">0 / 120</span>
+            </div>
+            <div class="suggestions" id="artistSuggestions"></div>
+          </div>
+
+          <!-- ✅ 3. Titel (vollbreit) -->
+          <div class="form-group">
+            <label for="title" data-i18n="label_title">Title *</label>
+            <div class="input-wrapper" style="position: relative;">
+              <span class="icon">🎵</span>
+              <input type="text" id="title" name="title" placeholder="" maxlength="120">
+              <div class="loading" id="titleLoading"></div>
+              <span class="char-counter" id="titleCharCount" style="position: absolute; bottom: 4px; right: 8px; font-size: 11px; color: #888;">0 / 120</span>
+            </div>
+            <div class="suggestions" id="titleSuggestions"></div>
+          </div>
+
+          <!-- ✅ 4. Name und Gruß nebeneinander (50% jeweils, 10px Abstand) - ohne Status unter den Feldern -->
+          <div class="form-row-name-greeting">
+            <div class="form-group form-group-half">
+              <label for="name" data-i18n="label_name">Your Name *</label>
+              <div class="input-wrapper" style="position: relative;">
+                <span class="icon">👤</span>
+                <input type="text" id="name" name="name" required data-i18n="label_name_placeholder" placeholder="Your Name" maxlength="120">
+                <span class="char-counter" id="nameCharCount" style="position: absolute; bottom: 4px; right: 8px; font-size: 11px; color: #888;">0 / 120</span>
+              </div>
+            </div>
+
+            <div class="form-group form-group-half">
+              <label for="greeting" data-i18n="label_greeting">Greeting (optional)</label>
+              <div class="input-wrapper" style="position: relative;">
+                <span class="icon">💬</span>
+                <textarea id="greeting" name="greeting" data-i18n="greeting_placeholder" placeholder="Max. 200 characters" maxlength="200"></textarea>
+                <span class="char-counter" id="charCount" style="position: absolute; bottom: 4px; right: 8px; font-size: 11px; color: #888;">0 / 200</span>
+              </div>
+            </div>
+          </div>
+
+        <!-- ✅ Absende-Button -->
+        <div class="wish-form-footer" style="margin-top: 20px;">
+          <button type="submit" class="submit-btn submit-btn-compact" id="submitBtn">
+            <span>📤</span>
+            <span data-i18n="submit_wish">Send request</span>
+          </button>
+        </div>
+        
+        <!-- ✅ Wunsch-Kontingent (direkt unter dem Absende-Button) -->
+        <div id="wishLimitInfo" class="wish-limit-info" style="display: none; text-align: center; width: 100%; margin-top: 15px;">
+          <span id="wishLimitText" data-i18n="wish_limit_loading" style="font-size: 12px; color: rgba(255, 255, 255, 0.7);">Loading limit information...</span>
+        </div>
+        <!-- ✅ Pflichtfeld-Hinweis: exakt linksbündig direkt unter dem Absende-Button (gleiche Spaltenaufteilung) -->
+        <div class="wish-form-pflichtfeld-row" style="margin-top: 8px;">
+          <div class="wish-form-pflichtfeld" style="font-size: 12px; color: rgba(255, 255, 255, 0.6);">
+            <span data-i18n="required_field">* Required field</span>
+          </div>
+          <div class="wish-form-pflichtfeld-spacer"></div>
+        </div>
+      </form>
+      
+
+      <div class="success-message" id="successMessage">
+        <!-- ✅ Animiertes Checkmark-Icon -->
+        <div class="success-checkmark" id="successCheckmark">
+          <svg viewBox="0 0 100 100">
+            <circle class="circle" cx="50" cy="50" r="45"></circle>
+            <path class="check" d="M 30 50 L 45 65 L 70 35"></path>
+          </svg>
+          <!-- Konfetti-Partikel -->
+          <div class="confetti"></div>
+          <div class="confetti"></div>
+          <div class="confetti"></div>
+          <div class="confetti"></div>
+          <div class="confetti"></div>
+        </div>
+        
+        <p class="wish-sent-headline" data-i18n="wish_sent_received">Your request has been received</p>
+        <p class="wish-sent-disclaimer" data-i18n="wish_sent_disclaimer">Please understand that the DJ can only play the songs they currently have in their collection. Whether a track gets played is up to the DJ, to match the vibes – not every request fits the moment of the party. Thanks for your understanding!</p>
+        
+        <!-- ✅ Button-Bereich mit Lade-Status -->
+        <div id="successActionArea" style="margin-top: 32px; min-height: 60px; padding-top: 16px;">
+          <!-- Lade-Status (wird angezeigt, während checkWishLimit läuft) -->
+          <div id="successLoading" style="display: flex; align-items: center; justify-content: center; gap: 12px; color: #90caf9;">
+            <div class="loading-spinner" style="width: 20px; height: 20px; border: 3px solid #e3f2fd; border-top-color: #90caf9; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+            <span style="font-size: 14px;" data-i18n="checking_limit">Checking limit...</span>
+      </div>
+          
+          <!-- Button "Weiteren Wunsch senden" (nur wenn Limit nicht erreicht) -->
+          <div id="successButtonContainer" style="display: none; margin-top: 16px; text-align: center;">
+            <button type="button" class="submit-btn" id="sendAnotherBtn" style="width: auto; margin: 0 auto; padding: 8px 16px; background: #28a745; border: 2px solid #28a745; color: #FFFFFF; font-weight: 600; border-radius: 6px; cursor: pointer; transition: background-color 0.2s ease, border-color 0.2s ease;" onmouseover="this.style.background='#218838'; this.style.borderColor='#218838';" onmouseout="this.style.background='#28a745'; this.style.borderColor='#28a745';">
+              <span>📤</span>
+              <span data-i18n="send_another_wish">Send another wish</span>
+            </button>
+          </div>
+          
+          <!-- Limit-Erreicht-Text (nur wenn Limit erreicht) -->
+          <div id="successLimitReached" style="display: none; padding: 20px; background-color: rgba(255, 165, 0, 0.1); border: 2px solid #FFA500; border-radius: 8px; text-align: center; margin-top: 16px;">
+            <p style="margin: 0; color: #FFA500; font-size: 15px; font-weight: 600;" data-i18n="limit_reached_message"></p>
+          </div>
+        </div>
+      </div>
+      </div>
+    </div>
+
+    <!-- Social Media Seite -->
+    <div id="page-social-media" class="page" style="display: none;">
+      <!-- ✅ Header entfernt, da jetzt statischer App-Header verwendet wird -->
+      <div class="form-container">
+        <!-- ✅ DJ-Logo Container (ganz oben) -->
+        <div class="social-media-logo-container" id="socialMediaLogoContainer" style="display: none;">
+          <img src="" alt="DJ Logo" class="social-media-dj-logo" id="socialMediaDjLogo" onerror="this.style.display='none';">
+        </div>
+        <div id="socialMediaIntroduction" class="social-media-introduction" style="display: none;">
+          <!-- ✅ Wird dynamisch mit DJ-Namen gefüllt -->
+        </div>
+        <div class="social-links" id="socialLinksContainer">
+          <!-- ✅ Wird dynamisch gerendert -->
+        </div>
+        <div id="socialLinksEmpty" class="social-links-empty" style="display: none;">
+          <div class="icon">🔗</div>
+          <h2 data-i18n="no_social_links_provided">No social media links provided</h2>
+        </div>
+      </div>
+    </div>
+
+    <!-- History Seite -->
+    <div id="page-history" class="page" style="display: none;">
+      <div class="history-container">
+        <div class="history-header" style="margin-top: 0;">
+          <h1 data-i18n="history_title">History</h1>
+          <p data-i18n="history_subtitle">Here you can see all songs that have already been played.</p>
+        </div>
+        
+        <div id="historyLoading" class="history-loading" style="display: none;">
+          <div style="font-size: 24px; margin-bottom: 8px;">⏳</div>
+          <div data-i18n="history_loading">Loading history...</div>
+        </div>
+        
+        <div id="historyError" class="history-error" style="display: none;">
+          <div style="font-size: 24px; margin-bottom: 8px;">❌</div>
+          <div id="historyErrorText" data-i18n="history_error">Error loading history</div>
+        </div>
+        
+        <div id="historyEmpty" class="history-empty" style="display: none;">
+          <div class="history-empty-icon">🎵</div>
+          <div class="history-empty-text" data-i18n="history_empty">No songs in history yet</div>
+          <div class="history-empty-subtext" data-i18n="history_empty_subtitle">As soon as songs are recognized, they will appear here.</div>
+        </div>
+        
+        <div id="historyList" class="history-list"></div>
+        
+        <!-- Paginierung Navigation -->
+        <div id="historyPagination" class="history-pagination" style="display: none;"></div>
+      </div>
+    </div>
+
+    <!-- Kontakt Seite -->
+    <div id="page-kontakt" class="page" style="display: none;">
+      <div class="header" style="display: none;">
+        <!-- ✅ Header entfernt, da jetzt statischer App-Header verwendet wird -->
+      </div>
+      <div class="form-container">
+        <div class="error-message" id="contactErrorMessage"></div>
+
+        <form id="contactForm">
+          <div class="form-group form-group-inline">
+            <label for="contactName" class="form-label-inline" data-i18n="label_contact_name">First and Last Name *</label>
+            <div class="input-wrapper" style="position: relative;">
+              <span class="icon">👤</span>
+              <input type="text" id="contactName" name="contactName" required data-i18n="label_contact_name_placeholder" placeholder="First and Last Name" maxlength="100">
+              <span class="char-counter" id="contactNameCharCount" style="position: absolute; bottom: 4px; right: 8px; font-size: 11px; color: #888;">0 / 100</span>
+            </div>
+          </div>
+
+          <div class="form-group form-group-inline">
+            <label for="contactEmail" class="form-label-inline" data-i18n="label_contact_email">Email</label>
+            <div class="input-wrapper" style="position: relative;">
+              <span class="icon">✉️</span>
+              <input type="email" id="contactEmail" name="contactEmail" data-i18n="label_contact_email_placeholder" placeholder="Email address" maxlength="200">
+              <span class="char-counter" id="contactEmailCharCount" style="position: absolute; bottom: 4px; right: 8px; font-size: 11px; color: #888;">0 / 200</span>
+            </div>
+          </div>
+
+          <!-- ✅ Zentraler Hinweis zwischen Email und Telefon -->
+          <div class="contact-info-hint" data-i18n="contact_email_or_phone_required">Please provide at least one contact method (email or phone).</div>
+
+          <div class="form-group form-group-inline">
+            <label for="contactPhone" class="form-label-inline" data-i18n="label_contact_phone">Phone</label>
+            <div class="input-wrapper" style="position: relative;">
+              <span class="icon">📞</span>
+              <input type="text" id="contactPhone" name="contactPhone" data-i18n="label_contact_phone_placeholder" placeholder="Phone number" maxlength="50">
+              <span class="char-counter" id="contactPhoneCharCount" style="position: absolute; bottom: 4px; right: 8px; font-size: 11px; color: #888;">0 / 50</span>
+            </div>
+          </div>
+
+          <div class="form-group form-group-inline">
+            <label for="contactSubject" class="form-label-inline" data-i18n="label_contact_subject">Subject</label>
+            <div class="input-wrapper" style="position: relative;">
+              <span class="icon">📋</span>
+              <input type="text" id="contactSubject" name="contactSubject" data-i18n="label_contact_subject_placeholder" placeholder="Subject (optional)" maxlength="100">
+              <span class="char-counter" id="contactSubjectCharCount" style="position: absolute; bottom: 4px; right: 8px; font-size: 11px; color: #888;">0 / 100</span>
+            </div>
+          </div>
+
+          <div class="form-group form-group-inline">
+            <label for="contactMessage" class="form-label-inline" data-i18n="label_contact_message">Message *</label>
+            <div class="input-wrapper" style="position: relative;">
+              <span class="icon">💬</span>
+              <textarea id="contactMessage" name="contactMessage" data-i18n="label_contact_message_placeholder" placeholder="Your message" maxlength="1500" rows="6"></textarea>
+              <span class="char-counter" id="contactCharCount" style="position: absolute; bottom: 4px; right: 8px; font-size: 11px; color: #888;">0 / 1500</span>
+            </div>
+          </div>
+
+          <div class="contact-form-footer">
+            <button type="submit" class="submit-btn submit-btn-compact" id="contactSubmitBtn">
+              <span>📤</span>
+              <span data-i18n="send_message">Send message</span>
+            </button>
+          </div>
+          
+          <!-- ✅ Pflichtfeld-Hinweis ganz unten -->
+          <div class="contact-required-hint" data-i18n="required_field_info">Fields marked with * are required</div>
+          <p class="recaptcha-legal">This site is protected by reCAPTCHA and the Google <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a> and <a href="https://policies.google.com/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a> apply.</p>
+        </form>
+
+        <div class="success-message" id="contactSuccessMessage">
+          <button type="button" class="close-btn" onclick="closeContactSuccessMessage()" data-i18n-aria-label="button_close" aria-label="Close">×</button>
+          <div class="icon">✓</div>
+          <h2 data-i18n="message_sent_title">Message was sent successfully!</h2>
+          <p data-i18n="message_sent_message">Thank you for your message. I will get back to you as soon as possible.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Über VibesBox Seite -->
+    <div id="page-ueber" class="page" style="display: none;">
+      <div class="header" style="display: none;">
+        <!-- ✅ Header entfernt, da jetzt statischer App-Header verwendet wird -->
+      </div>
+      <div class="form-container">
+        <div class="about-content">
+          <!-- VibesBox Logo zentriert oben -->
+          <div style="text-align: center; margin-bottom: 24px;">
+            <img src="icon/vibesbox-logo.png" alt="VibesBox Logo" style="height: 100px; width: auto; object-fit: contain;" onerror="this.style.display='none';">
+          </div>
+          <!-- Gast-Text -->
+          <p data-i18n="about_subtitle" style="text-align: center; line-height: 1.6; color: rgba(255, 255, 255, 0.9); margin: 0;">Your request matters! With VibesBox you send your favorite songs straight to the DJ's display – no crowding at the deck or paperwork. Send greetings with your song and enjoy the party. Have fun!</p>
+        </div>
+        <div class="about-buttons">
+          <button class="about-btn" onclick="showPage('impressum'); return false;">
+            <span data-i18n="button_imprint">Legal Notice</span>
+          </button>
+          <button class="about-btn" onclick="showPage('dsgvo'); return false;">
+            <span data-i18n="button_privacy">Privacy</span>
+          </button>
+          <button class="about-btn" onclick="showPage('agb'); return false;">
+            <span data-i18n="button_terms">Terms</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Impressum Seite -->
+    <div id="page-impressum" class="page" style="display: none;">
+      <div style="padding: 20px;">
+        <button class="back-btn" onclick="showPage('ueber'); return false;" data-i18n="back_button">← Back</button>
+      </div>
+      <div class="form-container">
+        <div class="legal-content info-card-style" id="imprint-content">
+          <!-- Content wird durch JavaScript eingefügt -->
+        </div>
+      </div>
+    </div>
+
+    <!-- DSGVO / Datenschutz Seite (Struktur = Impressum/AGB, gleiche Klasse .info-card-style) -->
+    <div id="page-dsgvo" class="page" style="display: none;">
+      <div style="padding: 20px;">
+        <button class="back-btn" onclick="showPage('ueber'); return false;" data-i18n="back_button">← Back</button>
+      </div>
+      <div class="form-container">
+        <div class="legal-content info-card-style" id="privacy-content">
+          <!-- Content wird durch JavaScript eingefügt -->
+        </div>
+      </div>
+    </div>
+
+    <!-- AGB Seite -->
+    <div id="page-agb" class="page" style="display: none;">
+      <div style="padding: 20px;">
+        <button class="back-btn" onclick="showPage('ueber'); return false;" data-i18n="back_button">← Back</button>
+      </div>
+      <div class="form-container">
+        <div class="legal-content info-card-style">
+          <h2 data-i18n="terms_title">Terms</h2>
+          <div id="terms-content"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Cookie Banner (Texte über data-i18n / updateMainContent lokalisiert) -->
+    <div id="cookieBanner" class="cookie-banner">
+      <div class="cookie-content">
+        <p id="cookieNoticeText" data-i18n="cookie_notice_text">This website uses cookies to provide essential functions. The corresponding cookie is technically necessary.</p>
+        <div class="cookie-buttons">
+          <button class="cookie-btn cookie-accept" id="cookieAcceptBtn" data-i18n="cookie_accept_button" onclick="acceptCookies()">Accept</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  </main>
+
+  <script src="app.js" defer></script>
+</body>
+</html>

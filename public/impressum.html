@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Impressum – VibesBox</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root { --bg: #1a1a1a; --accent: #d4834d; --accent-hover: #e0945a; --text: #f5f5f5; --text-muted: #b0b0b0; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; min-height: 100vh; }
+    a { color: var(--accent); }
+    a:hover { color: var(--accent-hover); }
+    .header { position: fixed; top: 0; left: 0; right: 0; padding: 1rem 2rem; display: flex; align-items: center; justify-content: space-between; background: rgba(26,26,26,0.95); backdrop-filter: blur(8px); z-index: 100; }
+    .header-logo { height: 44px; width: auto; }
+    .header-nav { display: flex; gap: 1.5rem; }
+    .header-nav a { color: var(--text-muted); font-weight: 500; }
+    main { padding: 5rem 1.5rem 4rem; max-width: 720px; margin: 0 auto; }
+    main h1 { font-size: 1.75rem; margin-bottom: 1.5rem; }
+    main h2 { font-size: 1.2rem; margin: 1.5rem 0 0.5rem; color: var(--text-muted); }
+    main p, main address { color: var(--text-muted); margin-bottom: 0.75rem; }
+    main address { font-style: normal; }
+    .footer { margin-top: 4rem; padding: 2rem 1.5rem; border-top: 1px solid rgba(255,255,255,0.08); text-align: center; }
+    .footer-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 1rem 1.5rem; margin-bottom: 1rem; }
+    .footer-links a { color: var(--text-muted); }
+    .footer-copy { font-size: 0.9rem; color: var(--text-muted); }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <a href="/"><img src="/icon/vibesbox-logo.png" alt="VibesBox" class="header-logo"></a>
+    <nav class="header-nav">
+      <a href="/impressum.html">Impressum</a>
+      <a href="/datenschutz.html">Datenschutz</a>
+      <a href="/agb.html">AGB</a>
+    </nav>
+  </header>
+  <main>
+    <h1>Impressum</h1>
+    <h2>Angaben gemäß § 5 TMG</h2>
+    <p><strong>VibesBox</strong></p>
+    <address>[Name / Firma], [Straße], [PLZ Ort]</address>
+    <h2>Kontakt</h2>
+    <p>E-Mail: [Ihre E-Mail-Adresse]</p>
+    <h2>Verantwortlich § 55 Abs. 2 RStV</h2>
+    <address>[Name], [Anschrift]</address>
+    <h2>EU-Streitschlichtung</h2>
+    <p>OS-Plattform: <a href="https://ec.europa.eu/consumers/odr/" target="_blank" rel="noopener">ec.europa.eu/consumers/odr/</a>. Wir sind nicht verpflichtet, an Streitbeilegungsverfahren teilzunehmen.</p>
+    <h2>Haftung für Inhalte</h2>
+    <p>Gemäß § 7 Abs. 1 TMG sind wir für eigene Inhalte verantwortlich. Haftung besteht ab Kenntnis einer konkreten Rechtsverletzung; bei Bekanntwerden entfernen wir betroffene Inhalte umgehend.</p>
+    <h2>Haftung für Links</h2>
+    <p>Für verlinkte externe Seiten sind die jeweiligen Anbieter verantwortlich. Bei Rechtsverletzungen werden wir Links umgehend entfernen.</p>
+  </main>
+  <footer class="footer">
+    <div class="footer-links">
+      <a href="/impressum.html">Impressum</a>
+      <a href="/datenschutz.html">Datenschutz</a>
+      <a href="/agb.html">AGB</a>
+      <a href="/">Startseite</a>
+    </div>
+    <p class="footer-copy">© VibesBox 2026</p>
+  </footer>
+</body>
+</html>

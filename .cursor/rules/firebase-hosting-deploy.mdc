@@ -1,0 +1,15 @@
+---
+description: Nach Änderungen an public/ Firebase Hosting deployen (dj-og-app).
+alwaysApply: true
+---
+
+# Firebase Hosting – Deploy
+
+Wenn Aufgaben **öffentliche Web-Assets** in `public/` betreffen (z. B. `public/vb/app.js`, `public/index.html`, `public/party_shared.js`, statische HTML/CSS/JS der PWA oder Root-Landingpage), **am Ende der Session** aus dem Projektroot ausführen:
+
+```bash
+firebase deploy --only hosting
+```
+
+- Nicht nur „du kannst deployen“ schreiben – **befehl ausführen**, sofern Firebase CLI verfügbar und nicht durch fehlende Anmeldung blockiert.
+- Bei fehlendem Login: Nutzer auf `firebase login` hinweisen, danach Deploy erneut.

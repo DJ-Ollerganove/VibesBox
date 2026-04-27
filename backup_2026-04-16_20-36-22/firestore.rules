@@ -1,0 +1,899 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Zentrale XSS/Payload-Pruefung fuer Texteingaben.
+    // Erlaubt normale Sonderzeichen (', &, -, !, ?, ., @, ...),
+    // blockiert nur gezielte Hacker-Muster.
+    function isSafeText(text, maxLen) {
+      return text is string
+        && text.size() <= maxLen
+        && !text.matches('.*<[sS][cC][rR][iI][pP][tT].*')
+        && !text.matches('.*[jJ][aA][vV][aA][sS][cC][rR][iI][pP][tT][[:space:]]*:.*')
+        && !text.matches('.*<[iI][fF][rR][aA][mM][eE].*');
+    }
+
+    function isSafeOptionalText(data, field, maxLen) {
+      return !(field in data) || data[field] == null || isSafeText(data[field], maxLen);
+    }
+
+    function isSafeUserData(data) {
+      return isSafeOptionalText(data, 'displayName', 50)
+        && isSafeOptionalText(data, 'realName', 80)
+        && isSafeOptionalText(data, 'phoneNumber', 40)
+        && isSafeOptionalText(data, 'email', 100)
+        && isSafeOptionalText(data, 'pendingEmail', 100)
+        && isSafeOptionalText(data, 'status', 40)
+        && isSafeOptionalText(data, 'country', 80)
+        && isSafeOptionalText(data, 'alternativeEmail', 100)
+        && isSafeOptionalText(data, 'djLogoUrl', 300)
+        && isSafeOptionalText(data, 'dj_logo_url', 300)
+        && isSafeOptionalText(data, 'planType', 40)
+        && isSafeOptionalText(data, 'role_id', 60);
+    }
+
+    // Geräte-Sperr-Fusion (Cloud Function): Nutzer dürfen device_block_fusion / Sperre nicht selbst aufheben.
+    function userPreservesDeviceBlockFusion() {
+      return !resource.exists
+        || !('device_block_fusion' in resource.data)
+        || resource.data.device_block_fusion != true
+        || (
+          request.resource.data.device_block_fusion == true
+          && request.resource.data.is_blocked == true
+          && (
+            request.resource.data.status == 'gesperrt'
+            || request.resource.data.status == 'blocked'
+          )
+        );
+    }
+
+    function isSafeSocialLinksData(data) {
+      return isSafeOptionalText(data, 'website', 300)
+        && isSafeOptionalText(data, 'instagram', 300)
+        && isSafeOptionalText(data, 'facebook', 300)
+        && isSafeOptionalText(data, 'tiktok', 300)
+        && isSafeOptionalText(data, 'youtube', 300)
+        && isSafeOptionalText(data, 'spotify', 300)
+        && isSafeOptionalText(data, 'soundcloud', 300)
+        && isSafeOptionalText(data, 'whatsapp', 300);
+    }
+
+    function isSafeContactInfoData(data) {
+      return isSafeOptionalText(data, 'name', 50)
+        && isSafeOptionalText(data, 'displayName', 50)
+        && isSafeOptionalText(data, 'email', 100)
+        && isSafeOptionalText(data, 'phone', 40)
+        && isSafeOptionalText(data, 'phoneNumber', 40)
+        && isSafeOptionalText(data, 'message', 1500);
+    }
+
+    function isSafeHistoryData(data) {
+      return isSafeOptionalText(data, 'description', 500)
+        && isSafeOptionalText(data, 'type', 80)
+        && isSafeOptionalText(data, 'source', 80)
+        && isSafeOptionalText(data, 'status', 40)
+        && isSafeOptionalText(data, 'old_email', 100)
+        && isSafeOptionalText(data, 'new_email', 100)
+        && isSafeOptionalText(data, 'request_id', 120);
+    }
+
+    function isSafeSettingsData(data) {
+      return isSafeOptionalText(data, 'announcement', 500)
+        && isSafeOptionalText(data, 'subject', 120)
+        && isSafeOptionalText(data, 'message', 500)
+        && isSafeOptionalText(data, 'pdf_footer_text', 120);
+    }
+
+    function isSafeWishData(data) {
+      return isSafeOptionalText(data, 'songName', 100)
+        && isSafeOptionalText(data, 'title', 100)
+        && isSafeOptionalText(data, 'artist', 100)
+        && isSafeOptionalText(data, 'name', 50)
+        && isSafeOptionalText(data, 'displayName', 50)
+        && isSafeOptionalText(data, 'greeting', 500)
+        && isSafeOptionalText(data, 'message', 500)
+        && isSafeOptionalText(data, 'text', 500)
+        && isSafeOptionalText(data, 'status', 40)
+        && isSafeOptionalText(data, 'spotify_id', 120)
+        && isSafeOptionalText(data, 'browser_language', 20);
+    }
+
+    // parties/{id}/guestStats: Wünsche-Liste begrenzt (client_id prüft canGuestWriteOwnClientDoc)
+    function isSafeGuestStatsData(data) {
+      return data != null
+        && (!('wishes' in data) || (
+          data.wishes is list
+          && data.wishes.size() <= 500
+        ))
+        && (!('last_updated' in data) || data.last_updated is timestamp);
+    }
+
+    function isSafePartyData(data) {
+      // Align mit Flutter neue_party_page: party_name maxLength 100 (nicht 60, sonst Permission Denied).
+      return isSafeOptionalText(data, 'partyName', 100)
+        && isSafeOptionalText(data, 'party_name', 100)
+        && isSafeOptionalText(data, 'announcement', 500)
+        && isSafeOptionalText(data, 'description', 500)
+        && isSafeOptionalText(data, 'location_name', 120)
+        && isSafeOptionalText(data, 'location_address', 200)
+        && isSafeOptionalText(data, 'location_city', 80)
+        && isSafeOptionalText(data, 'location_street', 120)
+        && isSafeOptionalText(data, 'location_zip', 20)
+        && isSafeOptionalText(data, 'timezone_id', 80)
+        && isSafeOptionalText(data, 'party_code', 32)
+        && isSafeOptionalText(data, 'dj_code', 64)
+        && isSafeOptionalText(data, 'created_by_email', 100)
+        && isSafeOptionalText(data, 'dj_plan_type', 40)
+        && isSafeOptionalText(data, 'status', 40)
+        && isSafeOptionalText(data, 'lifecycle_status', 40);
+    }
+
+    function isSafePartyStatusData(data) {
+      return isSafeOptionalText(data, 'party_code', 32)
+        && isSafeOptionalText(data, 'dj_code', 64)
+        && isSafeOptionalText(data, 'party_id', 120)
+        && (!('status' in data) || data.status is bool);
+    }
+
+    function isSafeAnnouncementData(data) {
+      return isSafeOptionalText(data, 'subject', 120)
+        && isSafeOptionalText(data, 'message', 500)
+        && isSafeOptionalText(data, 'announcement', 500)
+        && isSafeOptionalText(data, 'status', 40);
+    }
+
+    function isSafeAppConfigData(data) {
+      return isSafeOptionalText(data, 'announcement', 500)
+        && isSafeOptionalText(data, 'subject', 120)
+        && isSafeOptionalText(data, 'message', 500)
+        && isSafeOptionalText(data, 'pdf_footer_text', 120)
+        && isSafeOptionalText(data, 'min_version_dj_android', 20)
+        && isSafeOptionalText(data, 'min_version_dj_ios', 20)
+        && isSafeOptionalText(data, 'min_version_guest_android', 20)
+        && isSafeOptionalText(data, 'min_version_guest_ios', 20);
+    }
+
+    function isSafeTodoData(data) {
+      return isSafeOptionalText(data, 'text', 500)
+        && isSafeOptionalText(data, 'status', 40);
+    }
+
+    // Nur title/artist/timestamp (wie TrackEntry.toFirestore im DJ-App)
+    function isSafeMusicHistoryTrackData(data) {
+      return data.keys().hasOnly(['title', 'artist', 'timestamp'])
+        && 'title' in data && isSafeText(data.title, 100)
+        && 'artist' in data && isSafeText(data.artist, 100)
+        && data.timestamp is timestamp;
+    }
+
+    function canWriteMusicHistoryTracks(sessionId) {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/music_history/$(sessionId))
+        && (
+          isAdmin()
+          || (
+            'djId' in get(/databases/$(database)/documents/music_history/$(sessionId)).data
+            && get(/databases/$(database)/documents/music_history/$(sessionId)).data.djId == request.auth.uid
+          )
+          || canManagePartyByData(get(/databases/$(database)/documents/music_history/$(sessionId)).data)
+        );
+    }
+
+    function isSafeCollectionData(collection, data) {
+      return collection == 'wishes' ? isSafeWishData(data)
+        : collection == 'parties' ? isSafePartyData(data)
+        : collection == 'users' ? isSafeUserData(data)
+        : collection == 'app_config' ? isSafeAppConfigData(data)
+        : collection == 'admin_stats' ? isSafeCommonData(data)
+        : collection == 'artists' ? isSafeWishData(data)
+        : collection == 'block_history' ? isSafeHistoryData(data)
+        : collection == 'blocked_guests' ? isSafeCommonData(data)
+        : collection == 'contact_messages' ? isSafeContactInfoData(data)
+        : collection == 'contact_rate_limit' ? isSafeCommonData(data)
+        : collection == 'contacts' ? isSafeContactInfoData(data)
+        : collection == 'countries' ? isSafeCommonData(data)
+        : collection == 'genres' ? isSafeCommonData(data)
+        : collection == 'guest_fingerprints' ? isSafeCommonData(data)
+        : collection == 'impressum' ? isSafeSettingsData(data)
+        : collection == 'language_stats' ? isSafeCommonData(data)
+        : collection == 'last_actions' ? isSafeCommonData(data)
+        : collection == 'locations' ? isSafePartyData(data)
+        : collection == 'music_history' ? isSafeCommonData(data)
+        : collection == 'global_announcements' ? isSafeAnnouncementData(data)
+        : collection == 'party_sessions' ? isSafePartyData(data)
+        : collection == 'party_settings' ? isSafeSettingsData(data)
+        : collection == 'party_status' ? isSafePartyStatusData(data)
+        : collection == 'public_support_tickets' ? isSafeContactInfoData(data)
+        : collection == 'referral_codes' ? isSafeCommonData(data)
+        : collection == 'roles' ? isSafeCommonData(data)
+        : collection == 'settings' ? isSafeSettingsData(data)
+        : collection == 'shazam_history' ? isSafeCommonData(data)
+        : collection == 'social_media_links' ? isSafeSocialLinksData(data)
+        : collection == 'titles' ? isSafeWishData(data)
+        : collection == 'contact_info' ? isSafeContactInfoData(data)
+        : collection == 'todos' ? isSafeTodoData(data)
+        : collection == 'wunschbox_artist' ? isSafeWishData(data)
+        : collection == 'wunschbox_genres' ? isSafeCommonData(data)
+        : collection == 'wunschbox_titel' ? isSafeWishData(data)
+        : false;
+    }
+
+    // Fallback fuer Subdokumente ohne direkten Collection-Kontext.
+    function isSafeCommonData(data) {
+      return isSafeUserData(data)
+        && isSafeWishData(data)
+        && isSafePartyData(data)
+        && isSafeAnnouncementData(data)
+        && isSafeAppConfigData(data)
+        && isSafeTodoData(data);
+    }
+
+    function isUserOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return request.auth != null
+        && (
+          request.auth.token.admin == true
+          || (
+            exists(/databases/$(database)/documents/users/$(request.auth.uid))
+            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.admin == true
+          )
+        );
+    }
+
+    // DJ-Rolle: users.role_id zeigt auf roles/{id} mit name == "DJ"
+    function isDjRoleUser() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && 'role_id' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data
+        && exists(/databases/$(database)/documents/roles/$(get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role_id))
+        && get(/databases/$(database)/documents/roles/$(get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role_id)).data.name == 'DJ';
+    }
+
+    function isSafeSpotifySettingsData(data) {
+      return data != null
+        && data.keys().hasOnly(['search_blacklist', 'max_song_duration_ms'])
+        && data.search_blacklist is list
+        && data.search_blacklist.size() <= 120
+        && data.max_song_duration_ms is int
+        && data.max_song_duration_ms >= 60000
+        && data.max_song_duration_ms <= 3600000;
+    }
+
+    function isCollectionWhitelisted(collection) {
+      return collection in [
+        'admin_stats',
+        'artists',
+        'block_history',
+        'blocked_guests',
+        'contact_messages',
+        'contact_rate_limit',
+        'contacts',
+        'countries',
+        'genres',
+        'guest_fingerprints',
+        'impressum',
+        'language_stats',
+        'last_actions',
+        'locations',
+        'music_history',
+        'parties',
+        'party_sessions',
+        'party_settings',
+        'party_status',
+        'public_support_tickets',
+        'referral_codes',
+        'roles',
+        'settings',
+        'shazam_history',
+        'social_media_links',
+        'titles',
+        'todos',
+        'users',
+        'wishes',
+        'wunschbox_artist',
+        'wunschbox_genres',
+        'wunschbox_titel',
+        'app_config',
+        'global_announcements',
+        'contact_info'
+      ];
+    }
+
+    function isResourceOwnerByCommonFields(data) {
+      return request.auth != null
+        && (
+          ('created_by' in data && data.created_by == request.auth.uid)
+          || ('createdBy' in data && data.createdBy == request.auth.uid)
+          || ('user_id' in data && data.user_id == request.auth.uid)
+          || ('userId' in data && data.userId == request.auth.uid)
+          || ('uid' in data && data.uid == request.auth.uid)
+          || ('owner_id' in data && data.owner_id == request.auth.uid)
+          || ('ownerId' in data && data.ownerId == request.auth.uid)
+        );
+    }
+
+    function isTopLevelDocOwner() {
+      return resource != null
+        && resource.data != null
+        && isResourceOwnerByCommonFields(resource.data);
+    }
+
+    function isParentDocOwner(collection, docId) {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/$(collection)/$(docId))
+        && isResourceOwnerByCommonFields(
+          get(/databases/$(database)/documents/$(collection)/$(docId)).data
+        );
+    }
+
+    function isPartyActiveForGuestWish(data) {
+      return ('party_id' in data)
+        && data.party_id is string
+        && data.party_id.size() > 0
+        && exists(/databases/$(database)/documents/parties/$(data.party_id))
+        && get(/databases/$(database)/documents/parties/$(data.party_id)).data.lifecycle_status == 'active'
+        && (
+          !('wishbox_enabled' in get(/databases/$(database)/documents/parties/$(data.party_id)).data)
+          || get(/databases/$(database)/documents/parties/$(data.party_id)).data.wishbox_enabled == true
+        );
+    }
+
+    function isPartyOwnedByCurrentUser(partyId) {
+      return request.auth != null
+        && partyId is string
+        && partyId.size() > 0
+        && exists(/databases/$(database)/documents/parties/$(partyId))
+        && (
+          get(/databases/$(database)/documents/parties/$(partyId)).data.created_by == request.auth.uid
+          || get(/databases/$(database)/documents/parties/$(partyId)).data.djId == request.auth.uid
+          || get(/databases/$(database)/documents/parties/$(partyId)).data.uid == request.auth.uid
+        );
+    }
+
+    function partyExists(partyId) {
+      return partyId is string
+        && partyId.size() > 0
+        && exists(/databases/$(database)/documents/parties/$(partyId));
+    }
+
+    function canGuestWriteOwnClientDoc(docId, data) {
+      return request.auth == null
+        && docId is string
+        && data != null
+        && ('client_id' in data)
+        && data.client_id is string
+        && data.client_id == docId;
+    }
+
+    // Wunschbox/PWA/Flutter: Gast erhöht nur total_guest_count genau um 1 (kein weiteres Party-Feld ändern).
+    // Eingeloggte Gäste (Flutter) nutzen dieselbe Logik wie anonyme PWA-Gäste.
+    function guestIncrementsOnlyTotalGuestCount(partyId) {
+      // total_guest_count kann als int oder float (z. B. 1.0) vorliegen — is int allein verweigert sonst gültige +1-Updates
+      return partyExists(partyId)
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['total_guest_count'])
+        && request.resource.data.total_guest_count is number
+        && (
+          (
+            (!('total_guest_count' in resource.data) || resource.data.total_guest_count == null)
+            && request.resource.data.total_guest_count == 1
+          )
+          || (
+            'total_guest_count' in resource.data
+            && resource.data.total_guest_count is number
+            && request.resource.data.total_guest_count == resource.data.total_guest_count + 1
+          )
+        );
+    }
+
+    // Öffentliches users/{uid}-Dokument: ausschließlich diese Schlüssel (keine E-Mails, Pläne, Einstellungen).
+    // Hinweis: Firestore liefert beim get immer das ganze Dokument — daher striktes keys().hasOnly(...).
+    function isPublicUserProfileKeysOnly(data) {
+      return data != null
+        && data.keys().hasOnly(['displayName', 'djName', 'photoUrl', 'photoURL', 'publicProfile']);
+    }
+
+    function canManagePartyByData(data) {
+      return request.auth != null
+        && (
+          ('party_id' in data && isPartyOwnedByCurrentUser(data.party_id))
+          || ('partyId' in data && isPartyOwnedByCurrentUser(data.partyId))
+        );
+    }
+
+    function isWishOwnerByData(data) {
+      return request.auth != null
+        && (
+          ('uid' in data && data.uid == request.auth.uid)
+          || ('user_id' in data && data.user_id == request.auth.uid)
+          || ('userId' in data && data.userId == request.auth.uid)
+          || ('created_by' in data && data.created_by == request.auth.uid)
+          || ('dj_id' in data && data.dj_id == request.auth.uid)
+          || ('djId' in data && data.djId == request.auth.uid)
+        );
+    }
+
+    function canManageWishData(data) {
+      return request.auth != null
+        && (isWishOwnerByData(data) || canManagePartyByData(data));
+    }
+
+    function canGuestUpdateWishData() {
+      return request.auth == null
+        && resource.data.client_id is string
+        && request.resource.data.client_id is string
+        && request.resource.data.client_id == resource.data.client_id
+        && request.resource.data.party_id == resource.data.party_id
+        && isPartyActiveForGuestWish(resource.data);
+    }
+
+    // Lesen einzelner Wunsch-Dokumente: keine anonyme Voll-Collection mehr (list/get nur mit Regel-Pass).
+    // Admin/DJ: wie zuvor über canManageWishData / Owner; anonyme Gäste (PWA): nur mit gültiger party_id + existierender Party.
+    function wishDocumentReadable() {
+      return request.auth != null && (
+          isAdmin()
+          || canManageWishData(resource.data)
+          || isWishOwnerByData(resource.data)
+        )
+        || (
+          request.auth == null
+          && resource.data.party_id is string
+          && resource.data.party_id.size() > 0
+          && partyExists(resource.data.party_id)
+        );
+    }
+
+    function canCreateCollectionDoc(collection, data) {
+      return request.auth != null
+        || (
+          collection == 'wishes'
+          && isPartyActiveForGuestWish(data)
+        );
+    }
+
+    // parties: anonymes List aller Dokumente unterbinden (Queries müssen zu den Filtern passen).
+    function partyListOwnedByAuth() {
+      return request.auth != null && (
+        isAdmin()
+        || (resource.data.created_by is string && resource.data.created_by == request.auth.uid)
+        || (resource.data.djId is string && resource.data.djId == request.auth.uid)
+        || (resource.data.uid is string && resource.data.uid == request.auth.uid)
+      );
+    }
+
+    // PWA „aktive Party in den letzten Tagen“ (align mit public/vb/app.js: status + lifecycle + end_date).
+    function partyGuestDiscoveryListAllowed() {
+      return request.auth == null
+        && resource.data.status == 'active'
+        && resource.data.lifecycle_status in ['active', 'standby']
+        && resource.data.end_date is timestamp
+        && resource.data.end_date >= request.time - duration.value(14, 'd');
+    }
+
+    // PWA Join-Code-Suche: Codes liegen in Firestore teils als String, teils als Zahl (8-stellig).
+    function partyHasNonEmptyJoinCode(data) {
+      return (data.party_code is string && data.party_code.size() > 0)
+        || (data.fixed_party_code is string && data.fixed_party_code.size() > 0)
+        || (data.party_code is int && data.party_code > 0)
+        || (data.party_code is float && data.party_code > 0)
+        || (data.fixed_party_code is int && data.fixed_party_code > 0)
+        || (data.fixed_party_code is float && data.fixed_party_code > 0);
+    }
+
+    // Join per Code: Legacy-Dokumente ohne lifecycle_status; ggf. "upcoming" (ältere App-Logik).
+    function partyLifecycleAllowsJoinByCode(data) {
+      return !('lifecycle_status' in data)
+        || data.lifecycle_status == null
+        || data.lifecycle_status in ['active', 'finished', 'standby', 'upcoming'];
+    }
+
+    // PWA Join-Code-Suche (party_code / fixed_party_code) inkl. beendeter Partys.
+    function partyGuestJoinCodeListAllowed() {
+      return request.auth == null
+        && partyLifecycleAllowsJoinByCode(resource.data)
+        && partyHasNonEmptyJoinCode(resource.data);
+    }
+
+    // User-Hauptprofil bleibt strikt Owner-Only.
+    match /users/{userId} {
+      allow get: if isUserOwner(userId) || isAdmin() || isPublicUserProfileKeysOnly(resource.data);
+      allow list: if isUserOwner(userId) || isAdmin();
+      allow delete: if isUserOwner(userId) || isAdmin();
+      allow create, update: if (isUserOwner(userId) || isAdmin())
+        && isSafeUserData(request.resource.data)
+        && (isAdmin() || userPreservesDeviceBlockFusion());
+
+      // Öffentliche Lesezugriffe für PWA/Gäste auf ausgewählte Unterdaten.
+      match /social_media_links/{docId} {
+        allow read: if true;
+        allow delete: if isUserOwner(userId) || isAdmin();
+        allow create, update: if (isUserOwner(userId) || isAdmin())
+          && isSafeSocialLinksData(request.resource.data);
+      }
+
+      match /contact_info/{docId} {
+        allow read: if isUserOwner(userId) || isAdmin();
+        allow delete: if isUserOwner(userId) || isAdmin();
+        allow create, update: if (isUserOwner(userId) || isAdmin())
+          && isSafeContactInfoData(request.resource.data);
+      }
+
+      match /history/{docId} {
+        allow read: if isUserOwner(userId) || isAdmin();
+        allow delete: if isUserOwner(userId) || isAdmin();
+        allow create, update: if (isUserOwner(userId) || isAdmin())
+          && isSafeHistoryData(request.resource.data);
+      }
+
+      match /settings/{docId} {
+        allow read: if isUserOwner(userId) || isAdmin();
+        allow delete: if isUserOwner(userId) || isAdmin();
+        allow create, update: if (isUserOwner(userId) || isAdmin())
+          && isSafeSettingsData(request.resource.data);
+      }
+
+      match /{subDocument=**} {
+        allow read: if isUserOwner(userId) || isAdmin();
+        allow delete: if isUserOwner(userId) || isAdmin();
+        allow create, update: if isUserOwner(userId)
+          && isSafeCommonData(request.resource.data);
+      }
+    }
+
+    // Whitelist: nur explizit freigegebene Collections sind sichtbar/schreibbar.
+    // Alles Unbekannte bleibt standardmäßig gesperrt.
+    // Öffentliches Lesen (PWA/Gäste, Footer/Settings ohne Login)
+    match /admin_config/global_settings {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /admin_config/app_update {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /admin_config/apple_developer_token {
+      allow read, write: if false;
+    }
+
+    // Spotify-Suchfilter (Blacklist, max. Titel-Länge) — nur Admin; 24h-Cache in App/Function
+    match /admin_config/spotify_settings {
+      allow read: if request.auth != null;
+      allow create, update: if isAdmin()
+        && isSafeSpotifySettingsData(request.resource.data);
+      allow delete: if false;
+    }
+
+    // Zentrale Social-Links (Social-Media-Seite); nicht vom Sammel-Admin-Block verdecken
+    match /admin_config/vibesbox_social {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /admin_config/{docId} {
+      allow read, write: if false;
+    }
+
+    match /countries/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /parties/{partyId} {
+      // get: Einzeldokument per ID (schwer ratbar); list: nur mit Filtern wie in der PWA (kein anonymes Scraping der ganzen Collection).
+      allow get: if true;
+      allow list: if partyListOwnedByAuth()
+        || partyGuestDiscoveryListAllowed()
+        || partyGuestJoinCodeListAllowed();
+      allow create: if request.auth != null
+        && isSafePartyData(request.resource.data)
+        && (
+          isAdmin()
+          || ('created_by' in request.resource.data && request.resource.data.created_by == request.auth.uid)
+          || ('djId' in request.resource.data && request.resource.data.djId == request.auth.uid)
+          || ('uid' in request.resource.data && request.resource.data.uid == request.auth.uid)
+        );
+      allow update: if (request.auth != null
+        && isSafePartyData(request.resource.data)
+        && (isAdmin() || isPartyOwnedByCurrentUser(partyId)))
+        || guestIncrementsOnlyTotalGuestCount(partyId);
+      allow delete: if request.auth != null
+        && (isAdmin() || isPartyOwnedByCurrentUser(partyId));
+
+      match /guests/{guestId} {
+        allow read: if request.auth != null
+          || (request.auth == null && partyExists(partyId));
+        // Anonym (PWA) oder eingeloggt (Flutter): client_id muss der Dokument-ID entsprechen.
+        allow create: if partyExists(partyId)
+          && (
+            canGuestWriteOwnClientDoc(guestId, request.resource.data)
+            || (
+              request.auth != null
+              && request.resource.data.client_id is string
+              && request.resource.data.client_id == guestId
+              && request.resource.data.keys().hasOnly(['client_id', 'last_seen', 'language'])
+            )
+          );
+        allow update: if partyExists(partyId)
+          && (
+            canGuestWriteOwnClientDoc(guestId, request.resource.data)
+            || (
+              request.auth != null
+              && resource.data.client_id is string
+              && resource.data.client_id == guestId
+              && request.resource.data.client_id == guestId
+              && request.resource.data.diff(resource.data).changedKeys().hasOnly(['last_seen', 'language'])
+            )
+          );
+      }
+
+      match /guestStats/{guestId} {
+        // get auf noch nicht existierendes Dokument: resource fehlt — sonst PERMISSION_DENIED vor erstem setDoc
+        allow read: if request.auth != null
+          || (
+            request.auth == null
+            && partyExists(partyId)
+            && guestId is string
+            && (
+              !exists(/databases/$(database)/documents/parties/$(partyId)/guestStats/$(guestId))
+              || (
+                resource.data.client_id is string
+                && resource.data.client_id == guestId
+              )
+            )
+          );
+        allow create, update: if canGuestWriteOwnClientDoc(guestId, request.resource.data)
+          && partyExists(partyId)
+          && isSafeGuestStatsData(request.resource.data);
+      }
+    }
+
+    match /guest_fingerprints/{clientId} {
+      allow read: if request.auth != null;
+      allow create, update: if canGuestWriteOwnClientDoc(clientId, request.resource.data);
+    }
+
+    match /social_media_links/{uid} {
+      allow read: if true;
+      allow create, update, delete: if request.auth != null
+        && (isAdmin() || request.auth.uid == uid);
+    }
+
+    // Sperrlisten: Einzeldokument (get) für Gast-Gerät/Session bleibt möglich; Collection-Scans (list) nur eingeloggt (DJ-UI).
+    match /blocked_devices/{docId} {
+      allow get: if true;
+      allow list: if request.auth != null;
+      allow create, update, delete: if request.auth != null;
+    }
+
+    match /blocked_guests/{docId} {
+      allow get: if true;
+      allow list: if request.auth != null;
+      allow create, update, delete: if request.auth != null;
+    }
+
+    // Audit: Gerät mit Account verknüpft → User gesperrt (nur Server schreibt via Admin SDK).
+    match /block_device_fusion_log/{docId} {
+      allow read: if request.auth != null        && (
+          isAdmin()
+          || (resource.data.dj_id is string && resource.data.dj_id == request.auth.uid)
+        );
+      allow create, update, delete: if false;
+    }
+
+    // Gast-Wunschbox: anonyme oder eingeloggte Gäste schreiben ein Event pro Sitzung/Party (party_id = lange ID).
+    match /party_stats/{docId} {
+      allow read: if request.auth != null && (
+        isAdmin()
+        || (
+          resource.data.party_id is string
+          && isPartyOwnedByCurrentUser(resource.data.party_id)
+        )
+      );
+      allow create: if request.resource.data.keys().hasOnly([
+          'party_id',
+          'language',
+          'is_logged_in_user',
+          'platform',
+          'timestamp',
+        ])
+        && request.resource.data.party_id is string
+        && request.resource.data.party_id.size() > 0
+        && request.resource.data.party_id.size() <= 120
+        && partyExists(request.resource.data.party_id)
+        && get(/databases/$(database)/documents/parties/$(request.resource.data.party_id)).data.lifecycle_status == 'active'
+        && request.resource.data.language is string
+        && request.resource.data.language.size() <= 20
+        && request.resource.data.is_logged_in_user is bool
+        && request.resource.data.platform is string
+        && (
+          request.resource.data.platform == 'android'
+          || request.resource.data.platform == 'ios'
+          || request.resource.data.platform == 'web'
+          || request.resource.data.platform == 'unknown'
+        )
+        && request.resource.data.timestamp == request.time;
+      allow update, delete: if false;
+    }
+
+    match /wishes/{wishId} {
+      allow read: if wishDocumentReadable();
+      allow create: if isSafeWishData(request.resource.data)
+        && (
+          (
+            request.auth != null
+            && (
+              isAdmin()
+              || canManageWishData(request.resource.data)
+            )
+          )
+          || (
+            request.auth == null
+            && isPartyActiveForGuestWish(request.resource.data)
+          )
+        );
+      allow update: if isSafeWishData(request.resource.data)
+        && (
+          (
+            request.auth != null
+            && (
+              isAdmin()
+              || canManageWishData(resource.data)
+              || canManageWishData(request.resource.data)
+            )
+          )
+          || canGuestUpdateWishData()
+        );
+      allow delete: if request.auth != null
+        && (
+          isAdmin()
+          || canManageWishData(resource.data)
+        );
+    }
+
+    // DJ/Admin: unverändert. Gäste (ohne Auth): nur Lesen wenn Session zu einer existierenden Party gehört
+    // (PWA History fragt ohnehin mit where party_id == … ab; keine Änderung an create/update/delete.)
+    match /music_history/{sessionId} {
+      allow read: if (request.auth != null
+        && (
+          isAdmin()
+          || ('djId' in resource.data && resource.data.djId == request.auth.uid)
+          || canManagePartyByData(resource.data)
+        ))
+        || (
+          request.auth == null
+          && resource.data.party_id is string
+          && resource.data.party_id.size() > 0
+          && partyExists(resource.data.party_id)
+        );
+      allow create: if request.auth != null
+        && isSafeCommonData(request.resource.data)
+        && (
+          isAdmin()
+          || ('djId' in request.resource.data && request.resource.data.djId == request.auth.uid)
+          || canManagePartyByData(request.resource.data)
+        );
+      allow update: if request.auth != null
+        && isSafeCommonData(request.resource.data)
+        && (
+          isAdmin()
+          || ('djId' in resource.data && resource.data.djId == request.auth.uid)
+          || canManagePartyByData(resource.data)
+          || canManagePartyByData(request.resource.data)
+        );
+      allow delete: if request.auth != null
+        && (
+          isAdmin()
+          || ('djId' in resource.data && resource.data.djId == request.auth.uid)
+          || canManagePartyByData(resource.data)
+        );
+
+      match /tracks/{trackId} {
+        allow read: if request.auth != null
+          || (
+            exists(/databases/$(database)/documents/music_history/$(sessionId))
+            && get(/databases/$(database)/documents/music_history/$(sessionId)).data.party_id is string
+            && partyExists(get(/databases/$(database)/documents/music_history/$(sessionId)).data.party_id)
+          );
+        // Schreibzugriff: war zwischenzeitlich nur implizit verboten → DJ-.add() schlug fehl (PERMISSION_DENIED)
+        allow create: if canWriteMusicHistoryTracks(sessionId)
+          && isSafeMusicHistoryTrackData(request.resource.data);
+        allow update: if canWriteMusicHistoryTracks(sessionId)
+          && isSafeMusicHistoryTrackData(request.resource.data);
+        allow delete: if canWriteMusicHistoryTracks(sessionId);
+      }
+    }
+
+    match /{collection}/{docId} {
+      allow read: if isCollectionWhitelisted(collection)
+        && collection != 'users'
+        && collection != 'parties'
+        && collection != 'wishes'
+        && collection != 'music_history'
+        && collection != 'countries'
+        && collection != 'social_media_links'
+        && collection != 'blocked_devices'
+        && collection != 'blocked_guests'
+        && collection != 'admin_config';
+      allow delete: if isCollectionWhitelisted(collection)
+        && collection != 'users'
+        && collection != 'parties'
+        && collection != 'wishes'
+        && collection != 'music_history'
+        && collection != 'countries'
+        && collection != 'social_media_links'
+        && collection != 'blocked_devices'
+        && collection != 'blocked_guests'
+        && collection != 'admin_config'
+        && (isAdmin() || isTopLevelDocOwner());
+      allow create: if isCollectionWhitelisted(collection)
+        && collection != 'users'
+        && collection != 'parties'
+        && collection != 'wishes'
+        && collection != 'music_history'
+        && collection != 'countries'
+        && collection != 'social_media_links'
+        && collection != 'blocked_devices'
+        && collection != 'blocked_guests'
+        && collection != 'admin_config'
+        && canCreateCollectionDoc(collection, request.resource.data)
+        && isSafeCollectionData(collection, request.resource.data);
+      allow update: if isCollectionWhitelisted(collection)
+        && collection != 'users'
+        && collection != 'parties'
+        && collection != 'wishes'
+        && collection != 'music_history'
+        && collection != 'countries'
+        && collection != 'social_media_links'
+        && collection != 'blocked_devices'
+        && collection != 'blocked_guests'
+        && collection != 'admin_config'
+        && request.auth != null
+        && (isAdmin() || isTopLevelDocOwner())
+        && isSafeCollectionData(collection, request.resource.data);
+
+      match /{subDocument=**} {
+        allow read: if isCollectionWhitelisted(collection)
+          && collection != 'users'
+          && collection != 'parties'
+          && collection != 'wishes'
+          && collection != 'music_history'
+          && collection != 'countries'
+          && collection != 'social_media_links'
+          && collection != 'blocked_devices'
+          && collection != 'blocked_guests'
+          && collection != 'admin_config';
+        allow delete: if isCollectionWhitelisted(collection)
+          && collection != 'users'
+          && collection != 'parties'
+          && collection != 'wishes'
+          && collection != 'music_history'
+          && collection != 'countries'
+          && collection != 'social_media_links'
+          && collection != 'blocked_devices'
+          && collection != 'blocked_guests'
+          && collection != 'admin_config'
+          && (isAdmin() || isTopLevelDocOwner() || isParentDocOwner(collection, docId));
+        allow create, update: if isCollectionWhitelisted(collection)
+          && collection != 'users'
+          && collection != 'parties'
+          && collection != 'wishes'
+          && collection != 'music_history'
+          && collection != 'countries'
+          && collection != 'social_media_links'
+          && collection != 'blocked_devices'
+          && collection != 'blocked_guests'
+          && collection != 'admin_config'
+          && request.auth != null
+          && isSafeCommonData(request.resource.data);
+      }
+    }
+
+    // Default-Deny für alles, was nicht explizit erlaubt wurde.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

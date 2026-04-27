@@ -1,0 +1,408 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import '../config/app_config.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+import 'dart:async';
+import 'main.dart' show buildFirebaseErrorWidget;
+import 'l10n/app_localizations.dart';
+import '../services/active_party_service.dart';
+import '../services/duplicate_check_service.dart';
+import '../services/history_pagination_service.dart';
+import '../services/wish_management_service.dart';
+import '../services/user_blocking_service.dart';
+import '../utils/footer_helper.dart';
+import '../utils/ui_constants.dart';
+import '../utils/wish_grouping_helper.dart';
+import '../models/song_request.dart';
+import '../widgets/empty_list_message.dart';
+import '../widgets/pagination_control.dart';
+import '../widgets/sticky_pagination_layout.dart';
+import '../widgets/custom_page_header.dart';
+import '../widgets/wish_card.dart';
+
+class OffenPage extends StatefulWidget {
+  final List<SongRequest> requests;
+  final VoidCallback? onPageOpened;
+  
+  const OffenPage({super.key, required this.requests, this.onPageOpened});
+
+  @override
+  State<OffenPage> createState() => _OffenPageState();
+}
+
+// Öffentliche abstrakte Klasse für den State, damit MainPage darauf zugreifen kann
+abstract class OffenPageState extends State<OffenPage> {
+  void onPageLeft();
+  void onPageReturned();
+}
+
+class _OffenPageState extends OffenPageState {
+  DateTime _lastViewedTime = DateTime.fromMillisecondsSinceEpoch(0);
+  Set<String> _playedSongsSet = {};
+  int _currentPage = 1;
+
+  @override
+  void initState() {
+    super.initState();
+  }
+
+  @override
+  void dispose() {
+    super.dispose();
+  }
+  
+  @override
+  void onPageLeft() {
+    _markWishesAsViewedOnPageExit();
+  }
+
+  @override
+  void onPageReturned() {
+    _markWishesAsViewedOnPageExit();
+  }
+
+  /// Navigiert zur vorherigen Seite
+  void _goToPreviousPage() {
+    if (_currentPage > 1) {
+      setState(() {
+        _currentPage--;
+      });
+    }
+  }
+
+  /// Navigiert zur nächsten Seite
+  void _goToNextPage(int totalPages) {
+    if (_currentPage < totalPages) {
+      setState(() {
+        _currentPage++;
+      });
+    }
+  }
+
+  Future<void> _markWishesAsViewedOnPageExit() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || !AppConfig.isAdminEmail(user.email)) return;
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .set({
+            'last_viewed_wishes_at': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+      
+      widget.onPageOpened?.call();
+    } catch (e) {
+      print('Fehler beim Markieren der Wünsche als gesehen: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+    final l = AppLocalizations.of(context);
+    
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: SafeArea(
+        child: Column(
+          children: [
+            // Titelleiste mit CustomPageHeader (erstes Kind)
+            CustomPageHeader(
+              icon: Icons.pending,
+              title: l?.open_wishes ?? 'Offene Wünsche',
+            ),
+            // Content-Bereich (zweites Kind)
+            Expanded(
+              child: StickyPaginationLayout(
+                currentPage: _currentPage > 0 ? _currentPage : 1,
+                totalPages: 1,
+                onPrevious: null,
+                onNext: null,
+                child: StreamBuilder<ActivePartyInfo?>(
+                  stream: ActivePartyService.getActivePartyInfoStream(user?.uid),
+                  builder: (context, partyInfoSnapshot) {
+                    final partyCode = partyInfoSnapshot.data?.partyCode ?? '';
+                    
+                    // Wenn kein partyCode vorhanden, leere Liste anzeigen
+                    if (partyCode.isEmpty) {
+                      return SingleChildScrollView(
+                        padding: EdgeInsets.only(
+                          left: 16,
+                          right: 16,
+                          top: 16,
+                          bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const SizedBox(height: 24),
+                            EmptyListMessage(),
+                            SizedBox(height: UIConstants.kFooterPadding * 2),
+                          ],
+                        ),
+                      );
+                    }
+                    
+                    // StreamBuilder für Wünsche (nur nach party_id gefiltert)
+                    return StreamBuilder<QuerySnapshot>(
+                      stream: FirebaseFirestore.instance
+                          .collection('requests')
+                          .where('party_id', isEqualTo: partyCode)
+                          .where('status', isEqualTo: 'pending')
+                          .orderBy('created_at', descending: true)
+                          .snapshots(),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState == ConnectionState.waiting) {
+                          return const Center(child: CircularProgressIndicator());
+                        }
+
+                        if (snapshot.hasError) {
+                          return buildFirebaseErrorWidget(snapshot.error!);
+                        }
+
+                        final wishesDocs = snapshot.data?.docs ?? [];
+
+                        // Filtere Duplikate
+                        final filteredDocs = wishesDocs.where((doc) {
+                          final data = doc.data() as Map<String, dynamic>;
+                          return (data['is_duplicate'] as bool?) != true;
+                        }).toList();
+
+                        // Konvertiere zu SongRequest Objekten
+                        final openWishes = filteredDocs.map((doc) {
+                          return SongRequest.fromDocument(doc);
+                        }).toList();
+
+                        // Wenn Liste leer -> EmptyListMessage
+                        if (openWishes.isEmpty) {
+                          return SingleChildScrollView(
+                            padding: EdgeInsets.only(
+                              left: 16,
+                              right: 16,
+                              top: 16,
+                              bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const SizedBox(height: 24),
+                                EmptyListMessage(),
+                                SizedBox(height: UIConstants.kFooterPadding * 2),
+                              ],
+                            ),
+                          );
+                        }
+
+                        // Sortiere nach createdAt (neueste zuerst)
+                        openWishes.sort((a, b) {
+                          final tsA = a.createdAt?.toDate() ?? DateTime.fromMillisecondsSinceEpoch(0);
+                          final tsB = b.createdAt?.toDate() ?? DateTime.fromMillisecondsSinceEpoch(0);
+                          return tsB.compareTo(tsA);
+                        });
+
+                        // Gruppiere Wünsche
+                        final groupedResult = WishGroupingHelper.groupWishes(openWishes);
+                        final allGroupedList = groupedResult['groups'] as List<Map<String, dynamic>>;
+                        final groupedFirstRequests = groupedResult['firstRequests'] as Map<String, SongRequest>;
+                        final groupedDocIds = groupedResult['docIds'] as Map<String, List<String>>;
+
+                        // Paginierung: Berechne Seiten
+                        final totalPages = HistoryPaginationService.calculateTotalPages(allGroupedList.length);
+                        if (_currentPage > totalPages && totalPages > 0) {
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            setState(() {
+                              _currentPage = totalPages;
+                            });
+                          });
+                        }
+                        
+                        // Hole paginierte Liste
+                        final paginatedGroupedList = HistoryPaginationService.getItemsForPage(
+                          allGroupedList,
+                          _currentPage > 0 ? _currentPage : 1,
+                        );
+
+                        // Variable Logik für bottomPadding
+                        final bottomPadding = totalPages > 1 ? 220.0 : 150.0;
+
+                        return SingleChildScrollView(
+                          padding: EdgeInsets.only(
+                            left: 16,
+                            right: 16,
+                            top: 16,
+                            bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const SizedBox(height: 24),
+                              RepaintBoundary(
+                                child: ListView.separated(
+                                  shrinkWrap: true,
+                                  physics: const NeverScrollableScrollPhysics(),
+                                  padding: EdgeInsets.only(
+                                    top: 8.0,
+                                    bottom: bottomPadding,
+                                  ),
+                                  itemCount: paginatedGroupedList.length,
+                                  separatorBuilder: (_, __) => const Divider(height: 1),
+                                  itemBuilder: (context, index) {
+                                    final groupEntry = paginatedGroupedList[index];
+                                    final groupKey = groupEntry['key'] as String;
+                                    final data = groupEntry['data'] as Map<String, dynamic>;
+                                    final docIds = groupedDocIds[groupKey]!;
+                                    final firstRequest = groupedFirstRequests[groupKey]!;
+                                    
+                                    final number = allGroupedList.length - (HistoryPaginationService.calculateStartIndex(_currentPage > 0 ? _currentPage : 1) + index);
+                                    final tsCreated = data['createdAt'];
+                                    final created = tsCreated is Timestamp
+                                        ? tsCreated.toDate()
+                                        : DateTime.fromMillisecondsSinceEpoch(0);
+                                    final isNew = _lastViewedTime != DateTime.fromMillisecondsSinceEpoch(0) && created.isAfter(_lastViewedTime);
+                                    
+                                    final displayText = (data['title'] ?? '') as String;
+                                    
+                                    return WishCard(
+                                      key: ValueKey(groupKey),
+                                      groupedData: data,
+                                      docIds: docIds,
+                                      type: WishCardType.offen,
+                                      number: number,
+                                      isNew: isNew,
+                                      onTap: () => _showGroupedWishDetailDialog(context, data, docIds),
+                                      onPlay: (ctx, ids) => WishManagementService.showConfirmUpdateGroupedStatusDialog(ctx, ids, 'played', 'Als gespielt markieren', displayText),
+                                      onReject: (ctx, ids) => _updateGroupedStatusToRejected(ctx, ids),
+                                      onDelete: (ctx, ids) => _deleteGroupedWishes(ctx, ids),
+                                      onBlockGrouped: (ctx, req, dataMap, ids) => UserBlockingService.showGroupedBlockDialog(ctx, req, dataMap, ids),
+                                    );
+                                  },
+                                ),
+                              ),
+                              SizedBox(height: UIConstants.kFooterPadding * 2),
+                            ],
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Zeigt Detail-Dialog für gruppierte Wünsche
+  void _showGroupedWishDetailDialog(BuildContext context, Map<String, dynamic> data, List<String> docIds) {
+    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final l = AppLocalizations.of(context);
+    final title = (data['title'] ?? data['song'] ?? '') as String;
+    final artist = (data['artist'] ?? '') as String;
+    final displayText = title.isNotEmpty && artist.isNotEmpty 
+        ? '$title - $artist' 
+        : (title.isNotEmpty ? title : artist);
+    
+    showDialog(
+      context: context,
+      builder: (context) => Directionality(
+        textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
+        child: AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: Colors.orange, width: 2.0),
+          ),
+          title: Text(
+            displayText,
+            textAlign: isRtl ? TextAlign.right : TextAlign.left,
+          ),
+          content: Directionality(
+            textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: isRtl ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${l?.translate('wish_count') ?? 'Anzahl Wünsche:'} ${docIds.length}',
+                    textAlign: isRtl ? TextAlign.right : TextAlign.left,
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      WishManagementService.showConfirmUpdateGroupedStatusDialog(context, docIds, 'played', l?.translate('mark_as_played') ?? 'Als gespielt markieren', displayText);
+                    },
+                    icon: const Icon(Icons.check, color: Colors.white),
+                    label: Text(l?.played ?? 'Gespielt', style: const TextStyle(color: Colors.white)),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                  ),
+                  const SizedBox(height: 8),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      WishManagementService.showConfirmDeleteOrRejectGroupedDialog(context, docIds, displayText);
+                    },
+                    icon: const Icon(Icons.delete, color: Colors.white),
+                    label: Text(l?.delete ?? 'Löschen', style: const TextStyle(color: Colors.white)),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Aktualisiert gruppierte Wünsche auf 'rejected'
+  Future<void> _updateGroupedStatusToRejected(BuildContext context, List<String> docIds) async {
+    try {
+      await WishManagementService.updateGroupedStatus(docIds, 'rejected');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${docIds.length} Wünsche wurden abgelehnt'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Fehler: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  /// Löscht gruppierte Wünsche
+  Future<void> _deleteGroupedWishes(BuildContext context, List<String> docIds) async {
+    try {
+      await WishManagementService.deleteGroupedWishes(docIds);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${docIds.length} Wünsche wurden gelöscht'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Fehler: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+}

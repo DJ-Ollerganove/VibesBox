@@ -1,0 +1,18 @@
+# Vibesbox – robots.txt
+# Landingpage für Suchmaschinen sichtbar, interne/technische Bereiche geschützt.
+
+User-agent: *
+Allow: /
+Allow: /impressum.html
+Allow: /datenschutz.html
+Allow: /agb.html
+
+# Gäste-App: Zugang nur über Party-Code/QR, nicht in Suchergebnissen
+Disallow: /vb/
+
+# Technische Skripte im Root (z. B. party_shared.js) nicht crawlen
+Disallow: /party_shared.js
+
+# Weitere Crawler (Google, Bing, etc. respektieren User-agent: *)
+# Sitemap – sobald sitemap.xml vorhanden ist, wird sie ausgewertet
+Sitemap: https://vibesbox.app/sitemap.xml
