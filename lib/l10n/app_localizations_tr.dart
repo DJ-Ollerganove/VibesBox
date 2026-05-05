@@ -186,6 +186,11 @@ class AppLocalizationsTR {
     'guest_wishes_permission_hint':
         'İsteklerin yüklenemedi (erişim reddedildi). Daha sonra tekrar dene veya partiyi VibesBox\'ta yeniden aç.',
     'wishbox': 'Müzik istekleri',
+    'wishbox_dj_party_unnamed': 'Adsız parti',
+    'wishbox_dj_no_party_selected': 'Aktif parti yok',
+    'wishbox_dj_party_start': 'Başlangıç',
+    'wishbox_dj_party_end': 'Bitiş',
+    'wishbox_dj_party_time_not_set': '—',
     'wish_limit_remaining': 'Bu saatte {remaining} / {limit} istek mevcut',
     'wish_limit_reset_next_hour': 'Bir sonraki tam saatte tekrar istek gönderebilirsin.',
     'wishbox_inactive_description': 'Müzik istekleri şu anda etkin değil. Yalnızca parti sırasında veya elle etkinleştirildiğinde kullanılabilir.',
@@ -1286,6 +1291,9 @@ class AppLocalizationsTR {
     'dj_quickstart_h1_checkin': 'Misafir girişi',
     'dj_quickstart_p_checkin':
         'Check-in ve QR kodlar misafirleri partine yönlendirir. QR kodlar ve basılı veya paylaşılan misafir metinleri için dil, DJ uygulama dilinden bağımsız olarak ayrı seçilir.',
+    'dj_quickstart_h1_qr': 'QR kodlar, PDF, görsel ve bağlantı',
+    'dj_quickstart_p_qr':
+        'Bir parti oluşturduğunda dilek kutusu için bir QR kod üretilir. Görsel olarak kaydedebilir, PDF oluşturabilir (yazdırmak, kaydetmek veya paylaşmak için) veya parti koduyla birlikte dilek kutusunun doğrudan bağlantısını panoya kopyalayabilirsin. PDF veya görsel oluştururken QR kodun yanında ne gösterileceğini seçebilirsin: konum (yalnızca girdiysen), giriş e-postan, profilde saklayabileceğin alternatif e-posta ve profilde ekleyebileceğin telefon numarası.',
     'dj_quickstart_h1_recognition': 'Müzik tanıma',
     'dj_quickstart_p_recognition':
         'Müzik tanıma, güvenilir taramalar için otomatik ayarlama (duyarlılık, eşik) kullanır. Algılanan parçalar açık isteklerle eşleştirilebilir. Aktif tanıma göstergesi (ör. durum çubuğunda) açılıp kapatılabilir.',

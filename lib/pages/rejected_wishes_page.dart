@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'dart:async';
 
@@ -43,6 +44,23 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
   int _resultsPerPage = ResultsPerPageService.defaultResultsPerPage;
   final ScrollController _scrollController =
       ScrollController(); // ✅ Für Scrollen nach oben beim Seitenwechsel
+
+  String? _cachedRejectedStreamPartyId;
+  Stream<QuerySnapshot>? _cachedRejectedWishesStream;
+
+  Stream<QuerySnapshot> _rejectedWishesStreamForParty(String partyId) {
+    if (_cachedRejectedStreamPartyId != partyId) {
+      _cachedRejectedStreamPartyId = partyId;
+      _cachedRejectedWishesStream =
+          WishManagementService.getWishesStream(partyId, 'rejected');
+    }
+    return _cachedRejectedWishesStream!;
+  }
+
+  void _tearDownRejectedStream() {
+    _cachedRejectedStreamPartyId = null;
+    _cachedRejectedWishesStream = null;
+  }
 
   @override
   void initState() {
@@ -182,27 +200,29 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
         valueListenable: ActivePartyService.storedSessionNotifier,
         builder: (context, info, _) {
           final effectivePartyId = info?.partyId;
-          return KeyedSubtree(
-            key: ValueKey<String>(effectivePartyId ?? 'none'),
-            child: effectivePartyId == null || effectivePartyId.isEmpty
-                ? const Stack(
-                    children: [
-                      Positioned.fill(
-                        child: Center(child: NoActivePartyDisplay()),
-                      ),
-                    ],
-                  )
-                : StreamBuilder<QuerySnapshot>(
-                    stream: WishManagementService.getWishesStream(
-                      effectivePartyId,
-                      'rejected',
-                    ),
-                    builder: (context, snapshot) => _buildWishesListWithPartyId(
-                      context,
-                      snapshot,
-                      effectivePartyId,
-                    ),
+          if (effectivePartyId == null || effectivePartyId.isEmpty) {
+            _tearDownRejectedStream();
+            return const KeyedSubtree(
+              key: ValueKey<String>('none'),
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: Center(child: NoActivePartyDisplay()),
                   ),
+                ],
+              ),
+            );
+          }
+          return KeyedSubtree(
+            key: ValueKey<String>(effectivePartyId),
+            child: StreamBuilder<QuerySnapshot>(
+              stream: _rejectedWishesStreamForParty(effectivePartyId),
+              builder: (context, snapshot) => _buildWishesListWithPartyId(
+                context,
+                snapshot,
+                effectivePartyId,
+              ),
+            ),
           );
         },
       ),
@@ -214,7 +234,8 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
     AsyncSnapshot<QuerySnapshot> snapshot,
     String partyId,
   ) {
-    if (snapshot.connectionState == ConnectionState.waiting) {
+    if (snapshot.connectionState == ConnectionState.waiting &&
+        !snapshot.hasData) {
       return SingleChildScrollView(
         padding: EdgeInsets.only(
           left: 16,
@@ -237,7 +258,9 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
       debugLog('❌❌❌ STREAM FEHLER in rejected_wishes_page.dart ❌❌❌');
       debugLog('   Error: ${snapshot.error}');
       debugLog('   Error Type: ${snapshot.error.runtimeType}');
-      debugLog('   Party ID: $ActivePartyService.currentPartyId');
+      debugLog(
+        '   Party ID: ${ActivePartyService.currentPartyId}',
+      );
       if (snapshot.error is Error) {
         debugLog('   Stack Trace: ${(snapshot.error as Error).stackTrace}');
       }
@@ -246,11 +269,13 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
 
     final wishesDocs = snapshot.data?.docs ?? [];
 
-    debugLog(
-      '🔍 [DEBUG] RejectedWishesPage: Party-ID: $partyId, Gefundene Wünsche: ${wishesDocs.length}',
-    );
-    if (wishesDocs.isEmpty) {
-      debugLog('⚠️ [DEBUG] Keine Wünsche gefunden für Party-ID: $partyId');
+    if (kDebugMode) {
+      debugLog(
+        '🔍 [DEBUG] RejectedWishesPage: Party-ID: $partyId, Gefundene Wünsche: ${wishesDocs.length}',
+      );
+      if (wishesDocs.isEmpty) {
+        debugLog('⚠️ [DEBUG] Keine Wünsche gefunden für Party-ID: $partyId');
+      }
     }
 
     final partyFilteredDocs = wishesDocs
@@ -258,7 +283,7 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
           final data = doc.data() as Map<String, dynamic>;
           final docPartyId = data['party_id'] as String?;
           final matches = docPartyId == partyId;
-          if (!matches) {
+          if (kDebugMode && !matches) {
             debugLog(
               '🚫 PARTY-FILTER: Dokument ${doc.id} gehört zu Party "$docPartyId", erwartet "$partyId" - wird ausgeschlossen',
             );
@@ -268,12 +293,23 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
         .toList()
         .cast<QueryDocumentSnapshot<Map<String, dynamic>>>();
 
-    debugLog(
-      '🔍 [DEBUG] RejectedWishesPage: Nach Party-ID-Filter: ${partyFilteredDocs.length} von ${wishesDocs.length} Dokumenten verbleiben',
-    );
+    if (kDebugMode) {
+      debugLog(
+        '🔍 [DEBUG] RejectedWishesPage: Nach Party-ID-Filter: ${partyFilteredDocs.length} von ${wishesDocs.length} Dokumenten verbleiben',
+      );
+    }
 
     final rejectedWishes = <SongRequest>[];
+    final seenRejectedDocIds = <String>{};
     for (final doc in partyFilteredDocs) {
+      if (!seenRejectedDocIds.add(doc.id)) {
+        if (kDebugMode) {
+          debugLog(
+            '⚠️ RejectedWishesPage: doppelte Dokument-ID übersprungen: ${doc.id}',
+          );
+        }
+        continue;
+      }
       try {
         final songRequest = SongRequest.fromDocument(doc);
         rejectedWishes.add(songRequest);
@@ -310,6 +346,7 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
     final groupedResult = WishGroupingHelper.groupWishes(
       rejectedWishes,
       listSort: WishGroupListSort.byRejectedTimestamp,
+      sessionPartyId: partyId,
     );
     final allGroupedList =
         groupedResult['groups'] as List<Map<String, dynamic>>;
@@ -366,6 +403,7 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
     final bottomPadding = totalPages > 1 ? 8.0 : 150.0;
 
     return SingleChildScrollView(
+      key: PageStorageKey<String>('rejected_scroll_$partyId'),
       controller: _scrollController,
       padding: EdgeInsets.only(
         left: 16,

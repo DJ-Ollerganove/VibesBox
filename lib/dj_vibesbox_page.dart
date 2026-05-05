@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'l10n/app_localizations.dart';
+import 'utils/formatting_utils.dart';
 import 'utils/ui_constants.dart';
 import 'services/active_party_service.dart';
 import 'services/wish_management_service.dart';
@@ -69,6 +70,7 @@ class _DjVibesBoxPageState extends State<DjVibesBoxPage>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        _buildPartyContextHeader(context, l, isRtl),
         // TabBar (VibesBox-Stil: Orange/Schwarz)
         Container(
           color: Colors.transparent,
@@ -173,7 +175,7 @@ class _DjVibesBoxPageState extends State<DjVibesBoxPage>
                                     ? () => Navigator.push(
                                           context,
                                           MaterialPageRoute(
-                                            builder: (context) => ManualWishPage(partyId: partyId!),
+                                            builder: (context) => ManualWishPage(partyId: partyId),
                                           ),
                                         )
                                     : null,
@@ -257,6 +259,94 @@ class _DjVibesBoxPageState extends State<DjVibesBoxPage>
           ),
         ),
       ],
+    );
+  }
+
+  /// Partyname + Start/Ende oberhalb der Tabs Offen | Gespielt | Abgelehnt (alle Tabs sichtbar).
+  Widget _buildPartyContextHeader(
+    BuildContext context,
+    AppLocalizations l,
+    bool isRtl,
+  ) {
+    final align = isRtl ? CrossAxisAlignment.end : CrossAxisAlignment.start;
+    final textAlign = isRtl ? TextAlign.end : TextAlign.start;
+    final nameStyle = TextStyle(
+      color: Colors.white.withValues(alpha: 0.94),
+      fontSize: 15,
+      fontWeight: FontWeight.w600,
+      height: 1.2,
+    );
+    final lineStyle = TextStyle(
+      color: Colors.white.withValues(alpha: 0.72),
+      fontSize: 12.5,
+      height: 1.35,
+    );
+
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+        child: Column(
+          crossAxisAlignment: align,
+          children: [
+            Text(
+              l.wishbox_dj_no_party_selected,
+              style: lineStyle,
+              textAlign: textAlign,
+            ),
+          ],
+        ),
+      );
+    }
+
+    return StreamBuilder<ActivePartyInfo?>(
+      stream: ActivePartyService.getActivePartyInfoStream(uid),
+      builder: (context, snapshot) {
+        final effective =
+            snapshot.data ?? ActivePartyService.storedSessionNotifier.value;
+        if (effective == null || effective.partyId.isEmpty) {
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+            child: Column(
+              crossAxisAlignment: align,
+              children: [
+                Text(
+                  l.wishbox_dj_no_party_selected,
+                  style: lineStyle,
+                  textAlign: textAlign,
+                ),
+              ],
+            ),
+          );
+        }
+
+        final name = (effective.partyName?.trim().isNotEmpty ?? false)
+            ? effective.partyName!.trim()
+            : l.wishbox_dj_party_unnamed;
+
+        final startLine = effective.startDate != null
+            ? '${l.wishbox_dj_party_start}: ${FormattingUtils.formatDateTimeForDisplay(effective.startDate!, context)}'
+            : '${l.wishbox_dj_party_start}: ${l.wishbox_dj_party_time_not_set}';
+
+        final endLine = effective.endDate != null
+            ? '${l.wishbox_dj_party_end}: ${FormattingUtils.formatDateTimeForDisplay(effective.endDate!, context)}'
+            : (effective.startDate != null
+                ? '${l.wishbox_dj_party_end}: ${l.party_running_still}'
+                : '${l.wishbox_dj_party_end}: ${l.wishbox_dj_party_time_not_set}');
+
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+          child: Column(
+            crossAxisAlignment: align,
+            children: [
+              Text(name, style: nameStyle, textAlign: textAlign),
+              const SizedBox(height: 6),
+              Text(startLine, style: lineStyle, textAlign: textAlign),
+              Text(endLine, style: lineStyle, textAlign: textAlign),
+            ],
+          ),
+        );
+      },
     );
   }
 }

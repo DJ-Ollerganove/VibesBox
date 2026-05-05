@@ -182,6 +182,11 @@ class AppLocalizationsDE {
     'guest_wishes_permission_hint':
         'Deine Wünsche konnten nicht geladen werden (Zugriff verweigert). Bitte versuche es später erneut oder öffne die Party in der VibesBox kurz neu.',
     'wishbox': 'Wunschbox',
+    'wishbox_dj_party_unnamed': 'Unbenannte Party',
+    'wishbox_dj_no_party_selected': 'Keine aktive Party',
+    'wishbox_dj_party_start': 'Start',
+    'wishbox_dj_party_end': 'Ende',
+    'wishbox_dj_party_time_not_set': '–',
     'wish_limit_remaining': '{remaining} von {limit} Wünschen frei je voller Stunde',
     'wish_limit_reset_next_hour': 'Du kannst in der nächsten vollen Stunde wieder Wünsche senden.',
     'wishbox_inactive_description': 'Die Wunschbox ist derzeit nicht aktiv. Sie ist nur während der Party-Zeit oder wenn sie manuell aktiviert wurde verfügbar.',
@@ -1233,6 +1238,9 @@ class AppLocalizationsDE {
     'dj_quickstart_h1_checkin': 'Gäste-Check-in',
     'dj_quickstart_p_checkin':
         'Check-in und QR-Codes führen Gäste in deine Party. Die Sprache für QR-Codes und gedruckte oder geteilte Gästetexte wählst du separat – unabhängig von deiner DJ-App-Sprache.',
+    'dj_quickstart_h1_qr': 'QR-Codes, PDF, Bild und Link',
+    'dj_quickstart_p_qr':
+        'Sobald du eine Party angelegt hast, wird ein QR-Code für die Wunschbox erzeugt. Du kannst ihn als Bild speichern, als PDF erzeugen (zum Drucken, Speichern oder Teilen) oder den direkten Link zur Wunschbox inklusive Party-Code in die Zwischenablage kopieren. Beim Erzeugen von PDF oder Bild kannst du festlegen, was zusätzlich zum QR-Code mit angezeigt werden soll: Location (nur wenn du eine angegeben hast), die E-Mail-Adresse deines Logins, eine alternative E-Mail, die du im Profil hinterlegen kannst, sowie eine Telefonnummer, die du ebenfalls im Profil eintragen kannst.',
     'dj_quickstart_h1_recognition': 'Musikerkennung',
     'dj_quickstart_p_recognition':
         'Die Musikerkennung arbeitet mit automatischer Anpassung (z. B. Empfindlichkeit, Schwellenwert), damit Erkennung und Scans zuverlässig bleiben. Erkannte Titel können mit offenen Wünschen abgeglichen werden. Die Anzeige aktiver Erkennung (z. B. in der Statusleiste) ist schaltbar.',

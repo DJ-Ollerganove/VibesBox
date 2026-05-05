@@ -91,6 +91,18 @@ class AppLocalizations {
   String get about => translate('about');
   String get history => translate('history');
   String get wishbox => translate('wishbox');
+  /// DJ-Wunschbox: Party ohne Namen in Firestore / Session.
+  String get wishbox_dj_party_unnamed => translate('wishbox_dj_party_unnamed');
+  /// DJ-Wunschbox: Kopfzeile, wenn keine Party aktiv ist.
+  String get wishbox_dj_no_party_selected =>
+      translate('wishbox_dj_no_party_selected');
+  /// DJ-Wunschbox: Label vor Startzeit (Doppelpunkt in der UI angehängt).
+  String get wishbox_dj_party_start => translate('wishbox_dj_party_start');
+  /// DJ-Wunschbox: Label vor Endzeit.
+  String get wishbox_dj_party_end => translate('wishbox_dj_party_end');
+  /// DJ-Wunschbox: Platzhalter, wenn eine Zeit fehlt.
+  String get wishbox_dj_party_time_not_set =>
+      translate('wishbox_dj_party_time_not_set');
   String get yourWishes => translate('your_wishes');
   /// Hinweis auf „Deine Wünsche“, wenn kein Nutzer eingeloggt ist.
   String get your_wishes_login_required_body =>
@@ -1797,6 +1809,8 @@ class AppLocalizations {
   String get dj_quickstart_p_music => translate('dj_quickstart_p_music');
   String get dj_quickstart_h1_checkin => translate('dj_quickstart_h1_checkin');
   String get dj_quickstart_p_checkin => translate('dj_quickstart_p_checkin');
+  String get dj_quickstart_h1_qr => translate('dj_quickstart_h1_qr');
+  String get dj_quickstart_p_qr => translate('dj_quickstart_p_qr');
   String get dj_quickstart_h1_recognition =>
       translate('dj_quickstart_h1_recognition');
   String get dj_quickstart_p_recognition =>

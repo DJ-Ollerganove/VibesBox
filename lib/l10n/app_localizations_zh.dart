@@ -181,6 +181,11 @@ class AppLocalizationsZH {
     'guest_wishes_permission_hint':
         '无法加载你的点歌（权限被拒绝）。请稍后重试或在 VibesBox 中重新进入派对。',
     'wishbox': '点歌',
+    'wishbox_dj_party_unnamed': '未命名派对',
+    'wishbox_dj_no_party_selected': '无进行中的派对',
+    'wishbox_dj_party_start': '开始',
+    'wishbox_dj_party_end': '结束',
+    'wishbox_dj_party_time_not_set': '—',
     'wish_limit_remaining': '本小时 {remaining}/{limit} 个请求可用',
     'wish_limit_reset_next_hour': '到下一个整点即可再次发送请求。',
     'wishbox_inactive_description': '点歌当前未启用。仅在派对进行期间或手动开启时可用。',
@@ -1244,6 +1249,9 @@ class AppLocalizationsZH {
     'dj_quickstart_h1_checkin': '来宾签到',
     'dj_quickstart_p_checkin':
         '签到与二维码将客人带入你的派对。二维码及印刷或分享的来宾文案语言可单独选择，与 DJ 应用语言无关。',
+    'dj_quickstart_h1_qr': '二维码、PDF、图片与链接',
+    'dj_quickstart_p_qr':
+        '创建派对后会生成指向许愿箱的二维码。你可以将其保存为图片、生成 PDF（用于打印、保存或分享），或将包含派对代码的许愿箱直达链接复制到剪贴板。生成 PDF 或图片时，可选择除二维码外还要显示的内容：地点（仅在你已填写时）、登录邮箱、可在个人资料中保存的备用邮箱，以及可在个人资料中添加的电话号码。',
     'dj_quickstart_h1_recognition': '听歌识曲',
     'dj_quickstart_p_recognition':
         '听歌识曲使用自动调节（灵敏度、阈值）以保持识别稳定。可将识别的曲目与未处理请求匹配。活动识别提示（如状态栏中）可开关。',

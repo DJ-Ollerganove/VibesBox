@@ -187,6 +187,11 @@ class AppLocalizationsPT {
     'guest_wishes_permission_hint':
         'Não foi possível carregar os teus pedidos (acesso negado). Tenta mais tarde ou volta a abrir a festa na VibesBox.',
     'wishbox': 'Pedidos de música',
+    'wishbox_dj_party_unnamed': 'Festa sem nome',
+    'wishbox_dj_no_party_selected': 'Nenhuma festa ativa',
+    'wishbox_dj_party_start': 'Início',
+    'wishbox_dj_party_end': 'Fim',
+    'wishbox_dj_party_time_not_set': '—',
     'wish_limit_remaining': '{remaining} de {limit} pedidos disponíveis nesta hora',
     'wish_limit_reset_next_hour': 'Você pode enviar pedidos novamente na próxima hora cheia.',
     'wishbox_inactive_description': 'Os pedidos de música não estão ativos no momento. Estão disponíveis apenas durante a festa ou quando ativados manualmente.',
@@ -1292,6 +1297,9 @@ class AppLocalizationsPT {
     'dj_quickstart_h1_checkin': 'Check-in de convidados',
     'dj_quickstart_p_checkin':
         'O check-in e os códigos QR levam os convidados à tua festa. A língua dos códigos QR e dos textos para convidados impressos ou partilhados escolhe-se em separado, independentemente da língua da app do DJ.',
+    'dj_quickstart_h1_qr': 'Códigos QR, PDF, imagem e link',
+    'dj_quickstart_p_qr':
+        'Assim que crias uma festa, é gerado um código QR para a caixa de pedidos. Podes guardá-lo como imagem, criar um PDF (para imprimir, guardar ou partilhar) ou copiar o link direto para a caixa de pedidos com o código da festa para a área de transferência. Ao gerar PDF ou imagem, escolhes o que aparece além do código QR: local (só se tiveres indicado um), o e-mail de início de sessão, um e-mail alternativo que podes guardar no perfil e um número de telefone que podes adicionar no perfil.',
     'dj_quickstart_h1_recognition': 'Reconhecimento musical',
     'dj_quickstart_p_recognition':
         'O reconhecimento musical usa ajuste automático (sensibilidade, limiar) para manter as análises fiáveis. Faixas detetadas podem corresponder a pedidos em aberto. O indicador de reconhecimento ativo (p.ex. na barra de estado) é opcional.',

@@ -55,8 +55,6 @@ class ShazamService {
 
   String _prefsKeyFreeLastScan(String uid) =>
       'shazam_free_last_scan_completed_ms_$uid';
-  bool _autoAdjustStreamInitialized =
-      false; // Flag um sicherzustellen, dass Stream nur einmal initialisiert wird
 
   ShazamService._internal() {
     _channel.setMethodCallHandler(_handleNativeMethodCall);
@@ -65,13 +63,9 @@ class ShazamService {
     };
     // Initialisiere autoAdjustStream sofort beim ersten App-Start (ohne await, läuft im Hintergrund)
     // Die Subscription bleibt dauerhaft bestehen für diesen Test
-    _initAutoAdjustStream()
-        .then((_) {
-          _autoAdjustStreamInitialized = true;
-        })
-        .catchError((error) {
-          debugLog('⚠️ Fehler beim Initialisieren von autoAdjustStream: $error');
-        });
+    _initAutoAdjustStream().catchError((error) {
+      debugLog('⚠️ Fehler beim Initialisieren von autoAdjustStream: $error');
+    });
   }
 
   Future<void> _handleNativeMethodCall(MethodCall call) async {
@@ -104,6 +98,7 @@ class ShazamService {
   // MethodChannel-Methoden für Foreground Service
   static const String _methodStartScanning = 'startScanning';
   static const String _methodStopScanning = 'stopScanning';
+  static const String _methodStopCurrentScan = 'stopCurrentScan';
   static const String _methodUpdateRecognitionNotification =
       'updateRecognitionNotification';
   static const String _methodUpdateNotificationContent =
@@ -135,8 +130,6 @@ class ShazamService {
   String?
   _lastNotificationText; // Zuletzt in der Statusleiste angezeigter Inhalt
   int _scanIntervalSeconds = 60; // Standard: 60 Sekunden
-  int _currentInterval =
-      60; // Aktuell verwendetes Intervall (für sofortige Updates)
   double _micSensitivity = 1.0; // Standard: 1.0 (0.5 bis 2.0)
   double _recognitionThreshold =
       0.3; // Standard: 0.3 (0.0 bis 1.0) - Schwellenwert für Scan-Start
@@ -145,7 +138,6 @@ class ShazamService {
   String _userPlanType = 'free';
   StreamSubscription<DocumentSnapshot>?
   _settingsSubscription; // Listener für Intervall-Änderungen
-  bool _isRestartingTimer = false; // Lock um Race Conditions zu vermeiden
   /// Verhindert parallele [_performScan]-Läufe: sonst setzt ein zweiter Lauf sofort
   /// „Höre zu…“ und überschreibt die Erfolgszeile, bevor sie sichtbar wird.
   bool _performScanInFlight = false;
@@ -168,6 +160,9 @@ class ShazamService {
   static const Duration _tokenRefreshWindow = Duration(minutes: 25);
   /// Vor JWT-Ablauf neu holen (Puffer gegen Uhrzeit/Netz).
   static const Duration _tokenRefreshSafetyMargin = Duration(minutes: 3);
+
+  /// Shazam Native: ~8 s Aufnahme + Netz/ShazamKit — ohne Timeout kann Dart ewig warten.
+  static const Duration _recognizeInvokeTimeout = Duration(seconds: 45);
 
   // Streams für Status-Updates
   final _statusController = StreamController<ShazamScanStatus>.broadcast();
@@ -339,8 +334,6 @@ class ShazamService {
 
   // AUTOMATIC GAIN & THRESHOLD MAPPING: Stream für automatisch berechnete Werte
   Stream<Map<String, double>>? _autoAdjustStream;
-  StreamSubscription<Map<String, double>>?
-  _autoAdjustStreamSubscription; // Einziger Listener auf EventChannel
   /// Broadcast-Stream für UI: Jedes Auto-Adjust-Update wird hier weitergeleitet, damit Slider etc. live mitgehen
   final StreamController<Map<String, double>> _autoAdjustUiController =
       StreamController<Map<String, double>>.broadcast();
@@ -375,7 +368,8 @@ class ShazamService {
 
       // Einziger Listener auf EventChannel: Werte übernehmen und an UI weiterleiten
       debugLog('🚀 Flutter: EventChannel-Stream wird jetzt abonniert...');
-      _autoAdjustStreamSubscription = _autoAdjustStream!.listen(
+      // Subscription absichtlich nicht gehalten (dispose cancel ist bewusst auskommentiert).
+      _autoAdjustStream!.listen(
         (data) {
           final sens = data['mic_sensitivity'];
           final thresh = data['recognition_threshold'];
@@ -483,7 +477,6 @@ class ShazamService {
     await _persistLastFreeScanCompleted(DateTime.now());
     await loadScanInterval();
     if (_isEnabled && _userPlanType == 'free') {
-      _currentInterval = effectiveScanIntervalSeconds;
       _scanTimer?.cancel();
       _scanTimer = null;
       _startTimer();
@@ -514,7 +507,6 @@ class ShazamService {
         }
         if (_userPlanType == 'free') {
           _scanIntervalSeconds = freeScanIntervalSeconds;
-          _currentInterval = freeScanIntervalSeconds;
           _smartThresholdEnabled = false;
         }
 
@@ -722,7 +714,6 @@ class ShazamService {
 
     // Speichere neuen Wert
     await saveScanInterval(seconds);
-    _currentInterval = seconds;
 
     // Auto-Resume: Timer sofort zurücksetzen und neu starten (falls aktiv)
     if (wasEnabled) {
@@ -732,7 +723,7 @@ class ShazamService {
 
       // Stoppe aktuellen Scan (nur der laufende Scan, nicht der Service)
       try {
-        await _channel.invokeMethod<void>('stopCurrentScan');
+        await _channel.invokeMethod<void>(_methodStopCurrentScan);
         debugLog('✅ Aktueller Scan gestoppt');
       } catch (e) {
         debugLog('⚠️ Fehler beim Stoppen des aktuellen Scans: $e');
@@ -819,7 +810,7 @@ class ShazamService {
   Future<void> _quickReconnectForSensitivity() async {
     try {
       // Stoppe nur den aktuellen Scan (nicht den gesamten Service)
-      await _channel.invokeMethod<void>('stopCurrentScan');
+      await _channel.invokeMethod<void>(_methodStopCurrentScan);
 
       // Warte minimal (< 50ms)
       await Future.delayed(const Duration(milliseconds: 50));
@@ -1002,7 +993,7 @@ class ShazamService {
 
     // Stoppe aktuellen Scan über MethodChannel (falls aktiv)
     try {
-      await _channel.invokeMethod<void>('stopCurrentScan');
+      await _channel.invokeMethod<void>(_methodStopCurrentScan);
       debugLog('✅ Aktueller Scan gestoppt');
     } catch (e) {
       debugLog('⚠️ Fehler beim Stoppen des aktuellen Scans: $e');
@@ -1088,7 +1079,6 @@ class ShazamService {
     // WICHTIG: Initialisiere autoAdjustStream FRÜH, damit die Verbindung steht bevor Android sendet
     _initAutoAdjustStream();
 
-    _currentInterval = effectiveScanIntervalSeconds;
     debugLog(
       '📋 Geladenes Scan-Intervall: ${effectiveScanIntervalSeconds}s (Free: ${_userPlanType == 'free'})',
     );
@@ -1159,6 +1149,19 @@ class ShazamService {
   /// Stoppt das automatische Scanning
   Future<void> stopAutoScanning() async {
     debugLog('🛑 Stoppe Shazam Auto-Scanning...');
+    // Zuerst nativen Lauf abbrechen, damit `recognize` nicht offen bleibt und
+    // [_performScanInFlight] zuverlässig frei wird.
+    try {
+      await _invokeMethodWithTimeoutRetry<void>(
+        _methodStopCurrentScan,
+        timeout: const Duration(seconds: 3),
+        retries: 1,
+        retryDelay: const Duration(milliseconds: 150),
+      );
+    } catch (e) {
+      debugLog('⚠️ stopCurrentScan beim Gesamtstopp: $e');
+    }
+    await Future.delayed(const Duration(milliseconds: 150));
     _nextScanAllowedAt = null;
     _isEnabled = false;
     _serviceOwnerUid = null;
@@ -1181,7 +1184,6 @@ class ShazamService {
     // Stoppe Timer
     _scanTimer?.cancel();
     _scanTimer = null;
-    _isRestartingTimer = false;
     debugLog('⏹️ Timer gestoppt');
 
     // Harte Stop-Sequenz: erst Notification sicher ausblenden (mit Retry), dann Service stoppen.
@@ -1272,7 +1274,7 @@ class ShazamService {
         final info = await plugin.androidInfo;
         resolved = (info.id).trim();
         if (resolved.isEmpty) {
-          resolved = (info.fingerprint ?? '').trim();
+          resolved = info.fingerprint.trim();
         }
       } else if (Platform.isIOS) {
         final info = await plugin.iosInfo;
@@ -1498,13 +1500,34 @@ class ShazamService {
       await _initAutoAdjustStream();
 
       // Führe Shazam-Scan durch (Free-DJ: intelligente Steuerung immer false)
-      final result = await _channel
-          .invokeMethod<Map<dynamic, dynamic>>('recognize', {
-            'token': token,
-            'mic_sensitivity': _micSensitivity,
-            'recognition_threshold': _recognitionThreshold,
-            'smart_threshold_enabled': effectiveSmartThresholdEnabled,
-          });
+      Map<dynamic, dynamic>? result;
+      try {
+        result = await _channel
+            .invokeMethod<Map<dynamic, dynamic>>('recognize', {
+              'token': token,
+              'mic_sensitivity': _micSensitivity,
+              'recognition_threshold': _recognitionThreshold,
+              'smart_threshold_enabled': effectiveSmartThresholdEnabled,
+            })
+            .timeout(_recognizeInvokeTimeout);
+      } on TimeoutException catch (_) {
+        debugLog(
+          '⏱️ recognize-Timeout (${_recognizeInvokeTimeout.inSeconds}s) – '
+          'Native-Scan abbrechen',
+        );
+        try {
+          await _invokeMethodWithTimeoutRetry<void>(
+            _methodStopCurrentScan,
+            timeout: const Duration(seconds: 3),
+            retries: 1,
+            retryDelay: const Duration(milliseconds: 150),
+          );
+        } catch (e) {
+          debugLog('⚠️ stopCurrentScan nach Timeout: $e');
+        }
+        await Future.delayed(const Duration(milliseconds: 150));
+        result = null;
+      }
 
       if (_userPlanType == 'free') {
         await _persistLastFreeScanCompleted(DateTime.now());
@@ -1624,7 +1647,7 @@ class ShazamService {
             .get();
 
         if (settingsDoc.exists) {
-          final settingsData = settingsDoc.data() as Map<String, dynamic>?;
+          final settingsData = settingsDoc.data();
           final thresholdValue = settingsData?['duplicate_threshold'];
           if (thresholdValue != null) {
             if (thresholdValue is double) {
@@ -1661,7 +1684,7 @@ class ShazamService {
 
       // Prüfe jeden pending Wunsch
       for (final wishDoc in wishesSnapshot.docs) {
-        final wishData = wishDoc.data() as Map<String, dynamic>;
+        final wishData = wishDoc.data();
         final wishTitle = (wishData['title'] as String? ?? '').trim();
         final wishArtist = (wishData['artist'] as String? ?? '').trim();
 
@@ -1794,10 +1817,7 @@ class ShazamService {
     stopAutoScanning();
     _settingsSubscription?.cancel();
     _settingsSubscription = null;
-    // TEST: Entferne cancel() für autoAdjustStream, damit die Verbindung niemals unterbrochen wird
-    // _autoAdjustStreamSubscription?.cancel();
-    // _autoAdjustStreamSubscription = null;
-    // _autoAdjustStream = null;
+    // autoAdjustStream: bewusst ohne cancel(), Verbindung soll dauerhaft bestehen.
     if (!_autoAdjustUiController.isClosed) _autoAdjustUiController.close();
     _statusController.close();
     _resultController.close();

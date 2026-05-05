@@ -1,5 +1,9 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:geocoding/geocoding.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../models/location_result.dart';
@@ -38,20 +42,107 @@ class _LocationMapPickerPageState extends State<LocationMapPickerPage> {
   bool _locationPermissionGranted = false;
   bool _isRequestingPermission = false;
   bool _locationPermissionDenied = false;
+  /// Ohne feste Koordinaten: Karte erst nach Standort-Auflösung (kein Berlin-Flash).
+  bool _mapReady = false;
+  /// True, wenn ohne feste Koordinaten GPS fehlgeschlagen ist und Berlin-Fallback genutzt wurde.
+  bool _usedBerlinFallback = false;
+
+  bool get _hasExplicitInitialCoordinates =>
+      widget.initialLatitude != null && widget.initialLongitude != null;
+
+  static const LatLng _fallbackCenter = LatLng(52.5200, 13.4050);
 
   @override
   void initState() {
     super.initState();
-    // Initialisiere Position: Bei Suche→Karte direkt auf gesuchten Ort (z.B. Marsa Alam),
-    // sonst Standard Berlin. Kein automatischer Sprung zu GPS – Nutzer kann Standort-Button nutzen.
-    if (widget.initialLatitude != null && widget.initialLongitude != null) {
-      _selectedPosition = LatLng(widget.initialLatitude!, widget.initialLongitude!);
+    if (_hasExplicitInitialCoordinates) {
+      _selectedPosition = LatLng(
+        widget.initialLatitude!,
+        widget.initialLongitude!,
+      );
+      _mapReady = true;
+      _usedBerlinFallback = false;
+      _loadLocationDataForPosition(_selectedPosition!);
     } else {
-      _selectedPosition = const LatLng(52.5200, 13.4050);
+      _mapReady = false;
+      _usedBerlinFallback = false;
     }
-    _loadLocationDataForPosition(_selectedPosition!);
-    // Beim Öffnen der Karte: Berechtigung prüfen und ggf. anfordern
-    _initLocationPermission();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_startInitialLocationFlow());
+    });
+  }
+
+  /// Ohne Adresse/Koordinaten: Standort nutzen; sonst bereits gesetzte Pin-Position.
+  Future<void> _startInitialLocationFlow() async {
+    if (_hasExplicitInitialCoordinates) {
+      await _initLocationPermission();
+      return;
+    }
+    await _initLocationPermission();
+    if (!mounted) return;
+    await _tryCenterOnDeviceLocation();
+  }
+
+  Future<void> _tryCenterOnDeviceLocation() async {
+    if (!mounted || _hasExplicitInitialCoordinates) return;
+
+    if (kIsWeb) {
+      setState(() {
+        _selectedPosition = _fallbackCenter;
+        _mapReady = true;
+        _usedBerlinFallback = true;
+      });
+      await _loadLocationDataForPosition(_selectedPosition!);
+      return;
+    }
+
+    if (!_locationPermissionGranted) {
+      setState(() {
+        _selectedPosition = _fallbackCenter;
+        _mapReady = true;
+        _usedBerlinFallback = true;
+      });
+      await _loadLocationDataForPosition(_selectedPosition!);
+      return;
+    }
+
+    final serviceOn = await Geolocator.isLocationServiceEnabled();
+    if (!mounted) return;
+    if (!serviceOn) {
+      setState(() {
+        _selectedPosition = _fallbackCenter;
+        _mapReady = true;
+        _usedBerlinFallback = true;
+      });
+      await _loadLocationDataForPosition(_selectedPosition!);
+      return;
+    }
+
+    try {
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.medium,
+          timeLimit: Duration(seconds: 14),
+        ),
+      );
+      if (!mounted) return;
+      final ll = LatLng(pos.latitude, pos.longitude);
+      setState(() {
+        _selectedPosition = ll;
+        _mapReady = true;
+        _usedBerlinFallback = false;
+      });
+      await _loadLocationDataForPosition(ll);
+    } catch (e) {
+      debugLog('⚠️ Standort für Karte nicht ermittelbar: $e');
+      if (!mounted) return;
+      setState(() {
+        _selectedPosition = _fallbackCenter;
+        _mapReady = true;
+        _usedBerlinFallback = true;
+      });
+      await _loadLocationDataForPosition(_selectedPosition!);
+    }
   }
 
   /// Prüft Standortberechtigung und fordert sie beim Öffnen an (permission_handler).
@@ -130,17 +221,36 @@ class _LocationMapPickerPageState extends State<LocationMapPickerPage> {
     );
   }
 
-  /// Wird aufgerufen wenn der Standort-Button geklickt wird
-  Future<void> _onMyLocationButtonPressed() async {
+  /// App-Leiste / Karte: Kamera + Pin auf aktuelle GPS-Position.
+  Future<void> _recenterOnMyLocation() async {
+    if (kIsWeb) return;
     if (!_locationPermissionGranted) {
-      // Frage Berechtigung an wenn noch nicht erteilt
       await _requestLocationPermission();
     }
-    
-    // Wenn Berechtigung jetzt erteilt ist, zentriere Karte auf Standort
-    if (_locationPermissionGranted && _mapController != null) {
-      // Die Karte wird automatisch auf den Standort zentriert wenn myLocationEnabled = true
-      // Wir können hier zusätzlich die Kamera bewegen, falls nötig
+    if (!_locationPermissionGranted || !mounted) return;
+    final on = await Geolocator.isLocationServiceEnabled();
+    if (!on || !mounted) return;
+    try {
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.medium,
+          timeLimit: Duration(seconds: 14),
+        ),
+      );
+      if (!mounted) return;
+      final ll = LatLng(pos.latitude, pos.longitude);
+      setState(() {
+        _selectedPosition = ll;
+        _usedBerlinFallback = false;
+      });
+      await _loadLocationDataForPosition(ll);
+      if (_mapController != null && mounted) {
+        await _mapController!.animateCamera(
+          CameraUpdate.newLatLngZoom(ll, 15.0),
+        );
+      }
+    } catch (e) {
+      debugLog('⚠️ Standort-Button: Position nicht ermittelbar: $e');
     }
   }
 
@@ -187,11 +297,11 @@ class _LocationMapPickerPageState extends State<LocationMapPickerPage> {
             ? [thoroughfare, subThoroughfare].join(' ').trim()
             : null;
         final parts = <String>[];
-        if (street != null && street!.isNotEmpty) parts.add(street!);
+        if (street != null && street.isNotEmpty) parts.add(street);
         if (postalCode != null && city != null) {
           parts.add('$postalCode $city');
         } else if (city != null) {
-          parts.add(city!);
+          parts.add(city);
         }
         if (placemark.country?.trim().isNotEmpty == true) {
           parts.add(placemark.country!.trim());
@@ -296,48 +406,67 @@ class _LocationMapPickerPageState extends State<LocationMapPickerPage> {
         foregroundColor: UIConstants.appBarForegroundColor,
         iconTheme: UIConstants.appBarIconTheme,
         titleTextStyle: UIConstants.appBarTitleTextStyle,
+        actions: [
+          IconButton(
+            tooltip: l.show_location_label,
+            icon: const Icon(Icons.my_location),
+            onPressed: () => unawaited(_recenterOnMyLocation()),
+          ),
+        ],
       ),
       body: Stack(
         children: [
-          // Google Map (Padding unten für Info-Box + Safe Area, damit Karten-Buttons und Google-Schriftzug nicht überlappt werden)
-          GoogleMap(
-            onMapCreated: _onMapCreated,
-            initialCameraPosition: CameraPosition(
-              target: _selectedPosition ?? const LatLng(52.5200, 13.4050),
-              zoom: 15.0,
+          if (!_mapReady || _selectedPosition == null)
+            const Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircularProgressIndicator(color: UIConstants.appOrange),
+                  SizedBox(height: 16),
+                  Text(
+                    'Standort wird ermittelt…',
+                    style: TextStyle(color: Colors.white70, fontSize: 14),
+                  ),
+                ],
+              ),
+            )
+          else
+            // Google Map (Padding unten für Info-Box + Safe Area, damit Karten-Buttons und Google-Schriftzug nicht überlappt werden)
+            GoogleMap(
+              onMapCreated: _onMapCreated,
+              initialCameraPosition: CameraPosition(
+                target: _selectedPosition!,
+                zoom: 15.0,
+              ),
+              padding: EdgeInsets.only(
+                bottom: FooterHelper.getBottomPaddingHeight() + 40.0 + MediaQuery.of(context).padding.bottom,
+              ),
+              onTap: _onMapTap,
+              markers: {
+                Marker(
+                  markerId: const MarkerId('selected_location'),
+                  position: _selectedPosition!,
+                  draggable: true,
+                  onDragEnd: (LatLng newPosition) async {
+                    setState(() {
+                      _selectedPosition = newPosition;
+                    });
+                    _loadLocationDataForPosition(newPosition);
+
+                    if (_mapController != null) {
+                      await _mapController!.animateCamera(
+                        CameraUpdate.newLatLngZoom(newPosition, 15.0),
+                      );
+                    }
+                  },
+                ),
+              },
+              mapType: MapType.normal,
+              myLocationEnabled: _locationPermissionGranted,
+              myLocationButtonEnabled: true,
+              zoomControlsEnabled: true,
+              style: _darkMapStyle,
             ),
-            padding: EdgeInsets.only(
-              bottom: FooterHelper.getBottomPaddingHeight() + 40.0 + MediaQuery.of(context).padding.bottom,
-            ),
-            onTap: _onMapTap,
-            markers: _selectedPosition != null
-                ? {
-                    Marker(
-                      markerId: const MarkerId('selected_location'),
-                      position: _selectedPosition!,
-                      draggable: true,
-                      onDragEnd: (LatLng newPosition) async {
-                        setState(() {
-                          _selectedPosition = newPosition;
-                        });
-                        _loadLocationDataForPosition(newPosition);
-                        
-                        // Zentriere Karte auf neue Position nach Drag
-                        if (_mapController != null) {
-                          await _mapController!.animateCamera(
-                            CameraUpdate.newLatLngZoom(newPosition, 15.0),
-                          );
-                        }
-                      },
-                    ),
-                  }
-                : {},
-            mapType: MapType.normal,
-            myLocationEnabled: _locationPermissionGranted, // Nur wenn Berechtigung erteilt
-            myLocationButtonEnabled: true,
-            zoomControlsEnabled: true,
-            style: _darkMapStyle,
-          ),
           // Info-Box unten (mit Safe-Area-Padding für Geräte mit Home-Indikator)
           Positioned(
             bottom: 0,
@@ -379,6 +508,29 @@ class _LocationMapPickerPageState extends State<LocationMapPickerPage> {
                               _locationPermissionDenied
                                   ? 'Bitte aktiviere GPS in den Einstellungen, um deinen Standort zu finden.'
                                   : 'Tippe auf den Standort-Button (oben rechts), um deine Position zu verwenden.',
+                              style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  if (_usedBerlinFallback && _locationPermissionGranted)
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      margin: const EdgeInsets.only(bottom: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade900,
+                        border: Border.all(color: Colors.amber.shade700, width: 1),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.place_outlined, color: Colors.amber.shade600, size: 16),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Dein Standort konnte nicht ermittelt werden; die Karte zeigt eine Standardposition. '
+                              'Tippe auf das Fadenkreuz in der App-Leiste, um es erneut zu versuchen.',
                               style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
                             ),
                           ),

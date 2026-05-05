@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'main.dart' show buildFirebaseErrorWidget;
 import '../utils/ui_constants.dart';
@@ -31,6 +32,23 @@ class _GespieltPageState extends State<GespieltPage> {
   int _resultsPerPage = ResultsPerPageService.defaultResultsPerPage;
   String? _currentPartyId;
 
+  String? _cachedPlayedStreamPartyId;
+  Stream<QuerySnapshot>? _cachedPlayedWishesStream;
+
+  Stream<QuerySnapshot> _playedWishesStreamForParty(String partyId) {
+    if (_cachedPlayedStreamPartyId != partyId) {
+      _cachedPlayedStreamPartyId = partyId;
+      _cachedPlayedWishesStream =
+          WishManagementService.getWishesStream(partyId, 'played');
+    }
+    return _cachedPlayedWishesStream!;
+  }
+
+  void _tearDownPlayedStream() {
+    _cachedPlayedStreamPartyId = null;
+    _cachedPlayedWishesStream = null;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -60,20 +78,25 @@ class _GespieltPageState extends State<GespieltPage> {
                         if (mounted) setState(() => _currentPartyId = null);
                       });
                     }
-                    return KeyedSubtree(
-                      key: ValueKey<String>(activePartyId ?? 'none'),
-                      child: activePartyId == null || activePartyId.isEmpty
-                          ? const Stack(
-                              children: [
-                                Positioned.fill(
-                                  child: Center(child: NoActivePartyDisplay()),
-                                ),
-                              ],
-                            )
-                          : StreamBuilder<QuerySnapshot>(
-                              stream: WishManagementService.getWishesStream(activePartyId, 'played'),
-                              builder: (context, snapshot) => _buildWishesListWithPartyId(context, snapshot, activePartyId),
+                    if (activePartyId == null || activePartyId.isEmpty) {
+                      _tearDownPlayedStream();
+                      return const KeyedSubtree(
+                        key: ValueKey<String>('none'),
+                        child: Stack(
+                          children: [
+                            Positioned.fill(
+                              child: Center(child: NoActivePartyDisplay()),
                             ),
+                          ],
+                        ),
+                      );
+                    }
+                    return KeyedSubtree(
+                      key: ValueKey<String>(activePartyId),
+                      child: StreamBuilder<QuerySnapshot>(
+                        stream: _playedWishesStreamForParty(activePartyId),
+                        builder: (context, snapshot) => _buildWishesListWithPartyId(context, snapshot, activePartyId),
+                      ),
                     );
                   },
                 ),
@@ -82,7 +105,8 @@ class _GespieltPageState extends State<GespieltPage> {
 
   /// Wunschliste für eine gegebene Party-ID (für Stream- und Prefs-Fallback)
   Widget _buildWishesListWithPartyId(BuildContext context, AsyncSnapshot<QuerySnapshot> snapshot, String partyId) {
-                    if (snapshot.connectionState == ConnectionState.waiting) {
+                    if (snapshot.connectionState == ConnectionState.waiting &&
+                        !snapshot.hasData) {
                           return SingleChildScrollView(
                             padding: EdgeInsets.only(
                               left: 16,
@@ -115,10 +139,11 @@ class _GespieltPageState extends State<GespieltPage> {
 
                         final wishesDocs = snapshot.data?.docs ?? [];
                         
-                        // DEBUG: Zeige Party-ID und Anzahl der gefundenen Dokumente
-                        debugLog('🔍 [DEBUG] GespieltPage: Party-ID: $partyId, Gefundene Wünsche: ${wishesDocs.length}');
-                        if (wishesDocs.isEmpty) {
-                          debugLog('⚠️ [DEBUG] Keine Wünsche gefunden für Party-ID: $partyId');
+                        if (kDebugMode) {
+                          debugLog('🔍 [DEBUG] GespieltPage: Party-ID: $partyId, Gefundene Wünsche: ${wishesDocs.length}');
+                          if (wishesDocs.isEmpty) {
+                            debugLog('⚠️ [DEBUG] Keine Wünsche gefunden für Party-ID: $partyId');
+                          }
                         }
 
                         // SICHERHEITS-PRÜFUNG: Filter nach party_id
@@ -126,18 +151,27 @@ class _GespieltPageState extends State<GespieltPage> {
                           final data = doc.data() as Map<String, dynamic>;
                           final docPartyId = data['party_id'] as String?;
                           final matches = docPartyId == partyId;
-                          if (!matches) {
+                          if (kDebugMode && !matches) {
                             debugLog('🚫 PARTY-FILTER: Dokument ${doc.id} gehört zu Party "$docPartyId", erwartet "$partyId" - wird ausgeschlossen');
                           }
                           return matches;
                         }).toList();
                         
-                        debugLog('🔍 [DEBUG] GespieltPage: Nach Party-ID-Filter: ${partyFilteredDocs.length} von ${wishesDocs.length} Dokumenten verbleiben');
+                        if (kDebugMode) {
+                          debugLog('🔍 [DEBUG] GespieltPage: Nach Party-ID-Filter: ${partyFilteredDocs.length} von ${wishesDocs.length} Dokumenten verbleiben');
+                        }
 
                         // Konvertiere zu SongRequest Objekten (mit Error-Handling)
                         // WICHTIG: is_duplicate Filter entfernt, da Gruppierung jetzt party-spezifisch ist
                         final playedWishes = <SongRequest>[];
+                        final seenPlayedDocIds = <String>{};
                         for (final doc in partyFilteredDocs) {
+                          if (!seenPlayedDocIds.add(doc.id)) {
+                            if (kDebugMode) {
+                              debugLog('⚠️ GespieltPage: doppelte Dokument-ID übersprungen: ${doc.id}');
+                            }
+                            continue;
+                          }
                           try {
                             final songRequest = SongRequest.fromDocument(doc);
                             playedWishes.add(songRequest);
@@ -179,6 +213,7 @@ class _GespieltPageState extends State<GespieltPage> {
                         final groupedResult = WishGroupingHelper.groupWishes(
                           sortedWishes,
                           listSort: WishGroupListSort.byPlayedTimestamp,
+                          sessionPartyId: partyId,
                         );
                         final allGroupedList = groupedResult['groups'] as List<Map<String, dynamic>>;
                         final groupedDocIds = groupedResult['docIds'] as Map<String, List<String>>;
@@ -204,6 +239,7 @@ class _GespieltPageState extends State<GespieltPage> {
                         final bottomPadding = totalPages > 1 ? 220.0 : 150.0;
 
                         return SingleChildScrollView(
+                          key: PageStorageKey<String>('gespielt_played_scroll_$partyId'),
                           padding: EdgeInsets.only(
                             left: 16,
                             right: 16,

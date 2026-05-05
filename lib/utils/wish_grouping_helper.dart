@@ -40,9 +40,15 @@ class WishGroupingHelper {
   /// damit z. B. "Warum hast du nicht nein gesagt" und "Warum hast du nicht nein gesagt (Club Mix)" als ein Eintrag (Counter 2) erscheinen.
   /// Die Anzeige nutzt weiterhin den ursprünglichen Titel (displayTitle).
   /// Gibt Map zurück mit: 'groups', 'firstRequests', 'docIds'
+  ///
+  /// [sessionPartyId]: Wenn gesetzt (z. B. aktive Party der Ansicht), wird sie für den
+  /// Gruppierungsschlüssel verwendet statt [SongRequest.partyId]. So landen Wünsche mit
+  /// fehlendem/parse-defektem `party_id` im Model nicht in einer **zweiten** Gruppe
+  /// (`…|…|` vs. `…|…|<party>`) — dieselbe Zeile doppelt, Löschen wirkt auf alle Docs.
   static Map<String, dynamic> groupWishes(
     List<SongRequest> sortedRequests, {
     WishGroupListSort listSort = WishGroupListSort.byWishCreatedAt,
+    String? sessionPartyId,
   }) {
     final Map<String, Map<String, dynamic>> groupedWishes = {};
     final Map<String, List<String>> groupedDocIds = {};
@@ -53,8 +59,10 @@ class WishGroupingHelper {
       // Nur für den Gruppenschlüssel: normalisieren (Klammern, Mix-Begriffe, Umlaute, Sonderzeichen)
       final titleForKey = normalizeTextForDuplicateCheck(request.displayTitle, ignoredKeywords);
       final artistForKey = normalizeTextForDuplicateCheck(request.artist ?? '', ignoredKeywords);
-      final partyId = request.partyId ?? '';
-      final groupKey = '$titleForKey|$artistForKey|$partyId';
+      final partyForGroupKey = (sessionPartyId != null && sessionPartyId.trim().isNotEmpty)
+          ? sessionPartyId.trim()
+          : (request.partyId ?? '').trim();
+      final groupKey = '$titleForKey|$artistForKey|$partyForGroupKey';
       
       if (!groupedWishes.containsKey(groupKey)) {
         // Erste Wunsch für diesen Song - erstelle Gruppeneintrag
@@ -104,6 +112,10 @@ class WishGroupingHelper {
         groupedDocIds[groupKey] = [request.id];
         groupedFirstRequests[groupKey] = request;
       } else {
+        final idsForGroup = groupedDocIds[groupKey]!;
+        if (idsForGroup.contains(request.id)) {
+          continue;
+        }
         // Weitere Wunsch für diesen Song - füge Daten hinzu
         final group = groupedWishes[groupKey]!;
         final requestedBy = request.requestedBy ?? [];
@@ -207,7 +219,7 @@ class WishGroupingHelper {
           group['title_variants'] = variants;
         }
         
-        groupedDocIds[groupKey]!.add(request.id);
+        idsForGroup.add(request.id);
       }
     }
 

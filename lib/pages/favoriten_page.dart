@@ -271,7 +271,14 @@ class _FavoritenPageState extends State<FavoritenPage> {
                       return tsB.compareTo(tsA);
                     });
                     
-                    final groupedResult = WishGroupingHelper.groupWishes(openWishes);
+                    final groupedResult = WishGroupingHelper.groupWishes(
+                      openWishes,
+                      sessionPartyId:
+                          (_currentPartyId != null &&
+                                  _currentPartyId!.isNotEmpty)
+                              ? _currentPartyId
+                              : null,
+                    );
                     final allGroupedList = groupedResult['groups'] as List<Map<String, dynamic>>;
                     final groupedFirstRequests = groupedResult['firstRequests'] as Map<String, SongRequest>;
                     final groupedDocIds = groupedResult['docIds'] as Map<String, List<String>>;

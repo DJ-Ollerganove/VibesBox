@@ -80,6 +80,8 @@ class ActivePartyService {
       false; // Verhindert Überschreibung durch altes Laden
   static final Map<String, Stream<ActivePartyInfo?>> _streamCache = {};
   static String? _streamCacheKey;
+  /// Re-Auswertung „läuft die Party jetzt?“ ohne neues Firestore-Dokument (nur [DateTime.now]).
+  static const Duration _kActivePartyWallClockPoll = Duration(seconds: 10);
   /// Letzte UID, für die [initialize] Party-Listener gestartet hat (nach Logout zurücksetzen).
   static String? _initializeBootstrapKey;
 
@@ -1084,116 +1086,163 @@ class ActivePartyService {
     }
   }
 
-  /// Zentraler Stream: Firestore-Listener auf parties (created_by == djId).
-  /// Aktiv **nur** bei gültigem Zeitfenster \[start, end) **und** (lifecycle `active` oder Legacy-Flags).
-  /// Außerhalb des Fensters: immer keine aktive Party, unabhängig vom Lifecycle-String.
+  /// Wertet den Parties-[snapshot] mit aktueller Uhrzeit aus.
+  ///
+  /// Ohne neues Firestore-Write ändert sich nur [DateTime.now] – der reine
+  /// `.snapshots()`-Stream feuert dann nicht. Deshalb zusätzlich
+  /// [_kActivePartyWallClockPoll] im zentralen Stream.
+  static Future<ActivePartyInfo?> _resolveActivePartyFromPartiesSnapshot(
+    QuerySnapshot<Object?> snapshot,
+    String effectiveDjId,
+  ) async {
+    final now2 = DateTime.now();
+    String? activePartyId;
+    DateTime? nextStart;
+
+    for (final doc in snapshot.docs) {
+      final data = doc.data() as Map<String, dynamic>;
+      final lifecycleStatus = data['lifecycle_status'] as String?;
+      final finishedAt = data['finished_at'];
+      if (lifecycleStatus == 'finished' ||
+          lifecycleStatus == 'standby' ||
+          finishedAt != null) {
+        continue;
+      }
+
+      final startTimestamp = data['start_date'] as Timestamp?;
+      final endTimestamp = data['end_date'] as Timestamp?;
+      if (startTimestamp != null && endTimestamp != null) {
+        final startDate = startTimestamp.toDate();
+        if (startDate.isAfter(now2)) {
+          if (nextStart == null || startDate.isBefore(nextStart)) {
+            nextStart = startDate;
+          }
+        }
+      }
+
+      if (activePartyId == null &&
+          _isPartyDocumentRunningNow(data, now: now2)) {
+        activePartyId = doc.id;
+        break;
+      }
+    }
+
+    _nextStartDate = nextStart;
+    nextStartDateNotifier.value = nextStart;
+
+    final wasActivePartyId = _currentHeartbeatPartyId;
+    if (wasActivePartyId != null && activePartyId != wasActivePartyId) {
+      final partyNowFinished = snapshot.docs.any((d) {
+        if (d.id != wasActivePartyId) return false;
+        final data = d.data() as Map<String, dynamic>;
+        return data['lifecycle_status'] == 'finished' ||
+            data['finished_at'] != null;
+      });
+      if (partyNowFinished) {
+        debugLog(
+          '[ACTIVE-PARTY-SERVICE] ⏹️ Party $wasActivePartyId beendet (lifecycle/finished_at) – Session sofort löschen',
+        );
+        final sessionIdToDeactivate = _currentHeartbeatSessionId;
+        await clearLocalSession();
+        if (sessionIdToDeactivate != null) {
+          try {
+            await FirebaseFirestore.instance
+                .collection('music_history')
+                .doc(sessionIdToDeactivate)
+                .update(_sanitizeWriteMap({'isActive': false}));
+          } catch (e) {
+            debugLog(
+              '[ACTIVE-PARTY-SERVICE] ⚠️ music_history isActive=false nicht gesetzt: $e',
+            );
+          }
+        }
+        _lastEmittedPartyInfo = null;
+        return null;
+      }
+    }
+
+    if (activePartyId == null) {
+      if (wasActivePartyId != null ||
+          _storedSessionInfo != null ||
+          storedSessionNotifier.value != null) {
+        debugLog(
+          '[ACTIVE-PARTY-SERVICE] Keine aktive Party (Zeitfenster/Flags) – clearLocalSession()',
+        );
+        await clearLocalSession();
+      }
+      _lastEmittedPartyInfo = null;
+      return null;
+    }
+
+    final partyDoc = snapshot.docs.firstWhere((d) => d.id == activePartyId);
+    final partyData = partyDoc.data() as Map<String, dynamic>;
+    final info = await _materializeActivePartyForDj(
+      effectiveDjId,
+      activePartyId,
+      partyData,
+    );
+    if (info == null) {
+      _lastEmittedPartyInfo = null;
+      return null;
+    }
+    _lastEmittedPartyInfo = info;
+    await _updatePersistentSession(info);
+    return info;
+  }
+
+  /// Zentraler Stream: Firestore-Listener auf parties (created_by == djId)
+  /// **plus** periodische Re-Auswertung mit [DateTime.now], damit beim Start/Ende
+  /// der Party (ohne Feldänderung in Firestore) die UI umschaltet.
   static Stream<ActivePartyInfo?> _createActivePartyInfoStream(
     String effectiveDjId,
   ) {
-    // Replay: beim Abonnieren sofort letzten bekannten Wert senden (BehaviorSubject-Logik ohne rxdart)
-    // asyncMap: Callback gibt Future<ActivePartyInfo?> zurück, Stream emittiert ActivePartyInfo? (kein Future).
-    final inner = FirebaseFirestore.instance
-        .collection('parties')
-        .where('created_by', isEqualTo: effectiveDjId)
-        .snapshots()
-        .asyncMap<ActivePartyInfo?>((snapshot) async {
-          final now2 = DateTime.now();
-          String? activePartyId;
-          DateTime? nextStart;
+    QuerySnapshot<Object?>? latestSnapshot;
+    StreamSubscription<QuerySnapshot<Object?>>? fsSub;
+    Timer? wallClockTimer;
+    var resolutionGen = 0;
+    late final StreamController<ActivePartyInfo?> out;
 
-          for (final doc in snapshot.docs) {
-            final data = doc.data() as Map<String, dynamic>;
-            final lifecycleStatus = data['lifecycle_status'] as String?;
-            final finishedAt = data['finished_at'];
-            if (lifecycleStatus == 'finished' ||
-                lifecycleStatus == 'standby' ||
-                finishedAt != null) {
-              continue;
-            }
+    Future<void> scheduleResolve() async {
+      final g = ++resolutionGen;
+      final snap = latestSnapshot;
+      if (snap == null) {
+        return;
+      }
+      final result =
+          await _resolveActivePartyFromPartiesSnapshot(snap, effectiveDjId);
+      if (g != resolutionGen || out.isClosed) {
+        return;
+      }
+      out.add(result);
+    }
 
-            final startTimestamp = data['start_date'] as Timestamp?;
-            final endTimestamp = data['end_date'] as Timestamp?;
-            if (startTimestamp != null && endTimestamp != null) {
-              final startDate = startTimestamp.toDate();
-              if (startDate.isAfter(now2)) {
-                if (nextStart == null || startDate.isBefore(nextStart)) {
-                  nextStart = startDate;
-                }
-              }
-            }
-
-            if (activePartyId == null &&
-                _isPartyDocumentRunningNow(data, now: now2)) {
-              activePartyId = doc.id;
-              break;
-            }
+    out = StreamController<ActivePartyInfo?>.broadcast(
+      onListen: () {
+        fsSub ??= FirebaseFirestore.instance
+            .collection('parties')
+            .where('created_by', isEqualTo: effectiveDjId)
+            .snapshots()
+            .listen((snap) {
+          latestSnapshot = snap;
+          scheduleResolve();
+        });
+        wallClockTimer ??= Timer.periodic(_kActivePartyWallClockPoll, (_) {
+          if (latestSnapshot != null) {
+            scheduleResolve();
           }
+        });
+      },
+      onCancel: () {
+        wallClockTimer?.cancel();
+        wallClockTimer = null;
+        fsSub?.cancel();
+        fsSub = null;
+        latestSnapshot = null;
+      },
+    );
 
-          _nextStartDate = nextStart;
-          nextStartDateNotifier.value = nextStart;
-
-          final wasActivePartyId = _currentHeartbeatPartyId;
-          if (wasActivePartyId != null && activePartyId != wasActivePartyId) {
-            final partyNowFinished = snapshot.docs.any((d) {
-              if (d.id != wasActivePartyId) return false;
-              final data = d.data() as Map<String, dynamic>;
-              return data['lifecycle_status'] == 'finished' ||
-                  data['finished_at'] != null;
-            });
-            if (partyNowFinished) {
-              debugLog(
-                '[ACTIVE-PARTY-SERVICE] ⏹️ Party $wasActivePartyId beendet (lifecycle/finished_at) – Session sofort löschen',
-              );
-              final sessionIdToDeactivate = _currentHeartbeatSessionId;
-              await clearLocalSession();
-              if (sessionIdToDeactivate != null) {
-                try {
-                  await FirebaseFirestore.instance
-                      .collection('music_history')
-                      .doc(sessionIdToDeactivate)
-                      .update(_sanitizeWriteMap({'isActive': false}));
-                } catch (e) {
-                  debugLog(
-                    '[ACTIVE-PARTY-SERVICE] ⚠️ music_history isActive=false nicht gesetzt: $e',
-                  );
-                }
-              }
-              _lastEmittedPartyInfo = null;
-              return null;
-            }
-          }
-
-          // Keine aktive Party laut Firestore-Snapshot → lokale Session bereinigen (keine Geister-UI).
-          if (activePartyId == null) {
-            if (wasActivePartyId != null ||
-                _storedSessionInfo != null ||
-                storedSessionNotifier.value != null) {
-              debugLog(
-                '[ACTIVE-PARTY-SERVICE] Keine aktive Party im Parties-Snapshot – clearLocalSession()',
-              );
-              await clearLocalSession();
-            }
-            _lastEmittedPartyInfo = null;
-            return null;
-          }
-
-          final partyDoc = snapshot.docs.firstWhere(
-            (d) => d.id == activePartyId,
-          );
-          final partyData = partyDoc.data() as Map<String, dynamic>;
-          final info = await _materializeActivePartyForDj(
-            effectiveDjId,
-            activePartyId,
-            partyData,
-          );
-          if (info == null) {
-            _lastEmittedPartyInfo = null;
-            return null;
-          }
-          _lastEmittedPartyInfo = info;
-          await _updatePersistentSession(info);
-          return info;
-        })
+    return out
+        .stream
         .distinct((prev, next) {
           if (prev == null && next == null) return true;
           if (prev == null || next == null) return false;
@@ -1202,8 +1251,8 @@ class ActivePartyService {
               prev.partyName == next.partyName &&
               prev.startDate == next.startDate &&
               prev.endDate == next.endDate;
-        });
-    return inner.asBroadcastStream(onCancel: (_) {});
+        })
+        .asBroadcastStream();
   }
 
   /// Stream für aktive Party-ID (vereinfachte Methode)

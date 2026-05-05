@@ -3211,7 +3211,7 @@
               const endPosix = Number(partyDataForDj.end_time_posix || 0);
               if (lifecycleStatus === 'finished' || (Number.isFinite(endPosix) && endPosix > 0 && nowPosix >= endPosix)) {
                 if (window.IS_DEBUG) console.log('⚠️ Party ist beendet (lifecycle_status === finished), clearPartyData und Zurück zur Code-Eingabe');
-                if (typeof clearPartyData === 'function') clearPartyData(false, true);
+                if (typeof runGuestPartyEndedWishboxFlow === 'function') runGuestPartyEndedWishboxFlow();
                 return;
               }
               
@@ -3383,7 +3383,7 @@
               const endPosixEarly = Number(partyData.end_time_posix || 0);
               if (lifecycleEarly === 'finished' || (Number.isFinite(endPosixEarly) && endPosixEarly > 0 && nowPosixEarly >= endPosixEarly)) {
                 if (window.IS_DEBUG) console.log('⚠️ Party beendet (lifecycle/end_time_posix), clearPartyData');
-                if (typeof clearPartyData === 'function') clearPartyData(false, true);
+                if (typeof runGuestPartyEndedWishboxFlow === 'function') runGuestPartyEndedWishboxFlow();
                 return;
               }
               const startTimestamp = partyData.start_date;
@@ -4152,27 +4152,23 @@
               
               // ✅ Wenn Party beendet: Sofortiger Logout (ohne Verzögerung)
               if (isFinished) {
-                if (window.IS_DEBUG) console.log('🔴 Party beendet erkannt - führe sofortigen Logout durch');
-                // Overlay entfernen
+                if (window.IS_DEBUG) console.log('🔴 Party beendet erkannt – Overlay „Wunschbox beendet“, dann Ausgang');
                 togglePartyPausedOverlay(false);
-                // Streams sofort stoppen (bevor Logout)
                 if (typeof unsubParty === 'function') unsubParty();
                 if (typeof unsubWishes === 'function') unsubWishes();
                 if (wishLimitUnsubscribe) {
                   wishLimitUnsubscribe();
                   wishLimitUnsubscribe = null;
                 }
-                // Cache-Bereinigung VOR performLogout (doppelte Sicherheit)
-                localStorage.removeItem('validatedPartyId');
-                localStorage.removeItem('validatedPartyCode');
-                localStorage.removeItem('validatedPartyName');
-                clearSessionPartyData();
-                // Sofortiger Logout ohne Bestätigung (führt auch Redirect durch)
-                performLogout();
-                // performLogout() führt bereits Redirect durch, aber als Fallback:
-                // UI zurücksetzen (falls Redirect verzögert wird)
-                updateWishboxUI();
-                return; // Wichtig: Keine weitere Ausführung
+                if (typeof runGuestPartyEndedWishboxFlow === 'function') {
+                  runGuestPartyEndedWishboxFlow();
+                } else if (typeof clearPartyData === 'function') {
+                  clearPartyData(false, true);
+                } else {
+                  try { sessionStorage.setItem('vb_party_ended_notice', '1'); } catch (eF) {}
+                  window.location.replace('/');
+                }
+                return;
               }
               
               // ✅ PRIORITÄT 2: Pause-Logik (nur wenn Party noch aktiv ist)
@@ -5326,6 +5322,79 @@
       });
     }
     
+    /** Overlay (PWA-Stil wie Party-Code-Modal): Party/Wunschbox beendet, dann [onContinue] (z. B. clearPartyData). */
+    function showPartyWishboxEndedOverlay(onContinue, partyNameRaw) {
+      if (document.getElementById('vbPartyEndedOverlay')) return;
+      const overlay = document.createElement('div');
+      overlay.className = 'party-code-error-modal-overlay';
+      overlay.id = 'vbPartyEndedOverlay';
+      const modal = document.createElement('div');
+      modal.className = 'party-code-error-modal-content';
+      const iconWrap = document.createElement('div');
+      iconWrap.className = 'party-code-error-modal-icon';
+      iconWrap.innerHTML = '<i class="fas fa-compact-disc"></i>';
+      const h2 = document.createElement('h2');
+      h2.className = 'logout-modal-title';
+      h2.textContent = t('party_ended_wishbox_overlay_title', 'Wishbox closed');
+      const p = document.createElement('p');
+      p.className = 'party-code-error-modal-message';
+      var rawName = (partyNameRaw && String(partyNameRaw).trim()) ? String(partyNameRaw).trim() : '';
+      if (rawName.length > 120) rawName = rawName.substring(0, 117) + '\u2026';
+      var bodyTpl = rawName
+        ? t('party_ended_wishbox_overlay_body_named', 'The music wishbox for this party has ended.')
+        : t('party_ended_wishbox_overlay_body', 'The music wishbox for this party has ended.');
+      if (rawName) {
+        bodyTpl = bodyTpl.split('{party}').join(rawName);
+      }
+      p.textContent = bodyTpl;
+      const btnRow = document.createElement('div');
+      btnRow.className = 'logout-modal-buttons';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'party-code-error-modal-button';
+      btn.id = 'vbPartyEndedOverlayCta';
+      btn.textContent = t('party_ended_wishbox_overlay_cta', 'Back to home');
+      var done = false;
+      function finish() {
+        if (done) return;
+        done = true;
+        document.removeEventListener('keydown', onEsc);
+        var el = document.getElementById('vbPartyEndedOverlay');
+        if (el) el.remove();
+        try {
+          if (typeof onContinue === 'function') onContinue();
+        } catch (eC) {
+          console.error(eC);
+        }
+      }
+      function onEsc(e) {
+        if (e.key === 'Escape') finish();
+      }
+      btn.addEventListener('click', function () { finish(); });
+      document.addEventListener('keydown', onEsc);
+      btnRow.appendChild(btn);
+      modal.appendChild(iconWrap);
+      modal.appendChild(h2);
+      modal.appendChild(p);
+      modal.appendChild(btnRow);
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+    }
+
+    /** Gast: Party zu Ende (Zeit/DJ) – erst Info-Overlay, dann Redirect zur Root-PWA wie [clearPartyData]. */
+    function runGuestPartyEndedWishboxFlow() {
+      if (document.getElementById('vbPartyEndedOverlay')) return;
+      var partyName = (localStorage.getItem('currentPartyName') || localStorage.getItem('validatedPartyName') || sessionStorage.getItem('currentPartyName') || sessionStorage.getItem('validatedPartyName') || '').trim();
+      showPartyWishboxEndedOverlay(function () {
+        if (typeof clearPartyData === 'function') {
+          clearPartyData(false, true);
+        } else {
+          try { sessionStorage.setItem('vb_party_ended_notice', '1'); } catch (eR) {}
+          window.location.replace('/');
+        }
+      }, partyName);
+    }
+
     // ✅ Reset bei beendeter Party: löscht party_id/party_name, setzt UI zurück, leitet zur Code-Eingabe
     // skipRedirect=true: Nur Storage leeren und UI zurücksetzen, ohne Redirect (z.B. für QR-Code-Wechsel)
     function clearSessionPartyData() {
@@ -5389,7 +5458,7 @@
 
     // ✅ Wird aufgerufen, wenn die Party beendet ist (manuell oder Zeit) – löscht alle Gast-Session-Daten (sauberer Logout)
     function clearGuestSessionBecausePartyEnded() {
-      clearPartyData(false, true);
+      runGuestPartyEndedWishboxFlow();
     }
 
     // ✅ Führt den eigentlichen Logout durch (nach Bestätigung)
@@ -8422,7 +8491,7 @@
               if (isFinished) {
                 if (window.IS_DEBUG) console.log('🔴 visibilitychange: Party beendet erkannt - Redirect zur Main PWA');
                 console.warn('DEBUG [Auto-Login]: Redirect zur Startseite wird ausgelöst! Grund: visibilitychange – Party beendet erkannt.');
-                if (typeof clearPartyData === 'function') clearPartyData(false, true);
+                if (typeof runGuestPartyEndedWishboxFlow === 'function') runGuestPartyEndedWishboxFlow();
                 else {
                   try { sessionStorage.setItem('vb_party_ended_notice', '1'); } catch (eV) {}
                   window.location.replace('/');

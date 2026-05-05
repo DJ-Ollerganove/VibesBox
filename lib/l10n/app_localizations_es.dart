@@ -186,6 +186,11 @@ class AppLocalizationsES {
     'guest_wishes_permission_hint':
         'No se pudieron cargar tus peticiones (acceso denegado). Inténtalo más tarde o vuelve a abrir la fiesta en VibesBox.',
     'wishbox': 'Peticiones musicales',
+    'wishbox_dj_party_unnamed': 'Fiesta sin nombre',
+    'wishbox_dj_no_party_selected': 'Sin fiesta activa',
+    'wishbox_dj_party_start': 'Inicio',
+    'wishbox_dj_party_end': 'Fin',
+    'wishbox_dj_party_time_not_set': '—',
     'wish_limit_remaining': '{remaining} de {limit} solicitudes disponibles esta hora',
     'wish_limit_reset_next_hour': 'Podrás enviar solicitudes de nuevo en la próxima hora en punto.',
     'wishbox_inactive_description': 'Las peticiones musicales no están activas en este momento. Solo están disponibles durante la fiesta o cuando se activan manualmente.',
@@ -1290,6 +1295,9 @@ class AppLocalizationsES {
     'dj_quickstart_h1_checkin': 'Registro de invitados',
     'dj_quickstart_p_checkin':
         'El registro (check-in) y los códigos QR llevan a los invitados a tu fiesta. El idioma de los códigos QR y de los textos para invitados impresos o compartidos se elige por separado, independiente del idioma de la app del DJ.',
+    'dj_quickstart_h1_qr': 'Códigos QR, PDF, imagen y enlace',
+    'dj_quickstart_p_qr':
+        'Al crear una fiesta se genera un código QR para la caja de peticiones. Puedes guardarlo como imagen, crear un PDF (para imprimir, guardar o compartir) o copiar el enlace directo a la caja de peticiones con el código de fiesta al portapapeles. Al generar un PDF o una imagen eliges qué se muestra junto al código QR: ubicación (solo si la indicaste), el correo de inicio de sesión, un correo alternativo que puedes guardar en el perfil y un teléfono que puedes añadir en el perfil.',
     'dj_quickstart_h1_recognition': 'Reconocimiento musical',
     'dj_quickstart_p_recognition':
         'El reconocimiento musical usa ajuste automático (sensibilidad, umbral) para mantener los análisis fiables. Las pistas detectadas pueden coincidir con solicitudes abiertas. El indicador de reconocimiento activo (p. ej. en la barra de estado) es opcional.',

@@ -186,6 +186,11 @@ class AppLocalizationsFR {
     'guest_wishes_permission_hint':
         'Tes demandes n\'ont pas pu être chargées (accès refusé). Réessaie plus tard ou rouvre la fête dans VibesBox.',
     'wishbox': 'Demandes musicales',
+    'wishbox_dj_party_unnamed': 'Soirée sans nom',
+    'wishbox_dj_no_party_selected': 'Aucune soirée active',
+    'wishbox_dj_party_start': 'Début',
+    'wishbox_dj_party_end': 'Fin',
+    'wishbox_dj_party_time_not_set': '—',
     'wish_limit_remaining': '{remaining} sur {limit} demandes disponibles cette heure',
     'wish_limit_reset_next_hour': 'Vous pourrez envoyer à nouveau des demandes à la prochaine heure pleine.',
     'wishbox_inactive_description': 'Les demandes musicales ne sont pas actives pour le moment. Elles ne sont disponibles que pendant la soirée ou lorsqu’elles ont été activées manuellement.',
@@ -1291,6 +1296,9 @@ class AppLocalizationsFR {
     'dj_quickstart_h1_checkin': 'Enregistrement des invités',
     'dj_quickstart_p_checkin':
         'L\'enregistrement (check-in) et les codes QR conduisent les invités vers votre soirée. La langue des codes QR et des textes invités imprimés ou partagés se choisit séparément, indépendamment de la langue de l\'application DJ.',
+    'dj_quickstart_h1_qr': 'Codes QR, PDF, image et lien',
+    'dj_quickstart_p_qr':
+        'Dès qu\'une soirée est créée, un code QR pour la boîte à souhaits est généré. Vous pouvez l\'enregistrer en image, créer un PDF (pour imprimer, enregistrer ou partager) ou copier le lien direct vers la boîte à souhaits avec le code soirée dans le presse-papiers. Lors de la création d\'un PDF ou d\'une image, vous choisissez ce qui s\'affiche en plus du code QR : lieu (seulement si renseigné), l\'e-mail de connexion, une e-mail alternative enregistrable dans le profil, et un numéro de téléphone saisissable dans le profil.',
     'dj_quickstart_h1_recognition': 'Reconnaissance musicale',
     'dj_quickstart_p_recognition':
         'La reconnaissance musicale utilise un réglage automatique (sensibilité, seuil) afin que les analyses restent fiables. Les titres détectés peuvent être associés aux demandes ouvertes. L\'indicateur de reconnaissance active (p.ex. dans la barre d\'état) est activable.',

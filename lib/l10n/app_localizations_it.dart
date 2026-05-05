@@ -160,6 +160,11 @@ class AppLocalizationsIT {
         'Accedi per vedere le tue richieste musicali.',
     'guest_wishes_permission_hint': 'Impossibile caricare i tuoi desideri (accesso negato). Riprova più tardi o riapri la festa in VibesBox.',
     'wishbox': 'Richieste musicali',
+    'wishbox_dj_party_unnamed': 'Festa senza nome',
+    'wishbox_dj_no_party_selected': 'Nessuna festa attiva',
+    'wishbox_dj_party_start': 'Inizio',
+    'wishbox_dj_party_end': 'Fine',
+    'wishbox_dj_party_time_not_set': '—',
     'wish_limit_remaining': '{remaining} di {limit} richieste disponibili a quest\'ora',
     'wish_limit_reset_next_hour': 'È possibile inviare nuovamente le richieste all\'ora intera successiva.',
     'wishbox_inactive_description': 'Le richieste musicali non sono attive al momento. Sono disponibili solo durante la festa o se abilitate manualmente.',
@@ -1161,6 +1166,9 @@ class AppLocalizationsIT {
     'dj_quickstart_h1_checkin': 'Check-in ospiti',
     'dj_quickstart_p_checkin':
         'Check-in e codici QR portano gli ospiti alla tua festa. La lingua per codici QR e testi ospiti stampati o condivisi si sceglie separatamente, indipendentemente dalla lingua dell\'app DJ.',
+    'dj_quickstart_h1_qr': 'Codici QR, PDF, immagine e link',
+    'dj_quickstart_p_qr':
+        'Dopo aver creato una festa viene generato un codice QR per la wish box. Puoi salvarlo come immagine, creare un PDF (per stampare, salvare o condividere) o copiare negli appunti il link diretto alla wish box con il codice festa. Generando PDF o immagine scegli cosa mostrare oltre al codice QR: location (solo se l\'hai indicata), l\'e-mail di accesso, un\'e-mail alternativa salvabile nel profilo e un numero di telefono aggiungibile nel profilo.',
     'dj_quickstart_h1_recognition': 'Riconoscimento musicale',
     'dj_quickstart_p_recognition':
         'Il riconoscimento musicale usa regolazione automatica (sensibilità, soglia) per mantenere le analisi affidabili. I brani rilevati possono essere abbinati alle richieste aperte. L\'indicatore di riconoscimento attivo (es. nella barra di stato) è attivabile.',

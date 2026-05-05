@@ -186,6 +186,11 @@ class AppLocalizationsEN {
     'guest_wishes_permission_hint':
         'Your wishes could not be loaded (access denied). Please try again later or reopen the party in VibesBox.',
     'wishbox': 'Music requests',
+    'wishbox_dj_party_unnamed': 'Unnamed party',
+    'wishbox_dj_no_party_selected': 'No active party',
+    'wishbox_dj_party_start': 'Start',
+    'wishbox_dj_party_end': 'End',
+    'wishbox_dj_party_time_not_set': '—',
     'wish_limit_remaining': '{remaining} of {limit} requests available this hour',
     'wish_limit_reset_next_hour': 'You can send requests again at the next full hour.',
     'wishbox_inactive_description': 'Music requests are not available right now. They are only available during the party or when manually enabled.',
@@ -1273,6 +1278,9 @@ class AppLocalizationsEN {
     'dj_quickstart_h1_checkin': 'Guest check-in',
     'dj_quickstart_p_checkin':
         'Check-in and QR codes guide guests into your party. Choose the language for QR codes and printed or shared guest copy separately—independent of your DJ app language.',
+    'dj_quickstart_h1_qr': 'QR codes, PDF, image, and link',
+    'dj_quickstart_p_qr':
+        'Once you create a party, a QR code is generated for the wish box. You can save it as an image, generate a PDF (to print, save, or share), or copy the direct wish-box link including the party code to the clipboard. When generating a PDF or image, you can choose what appears alongside the QR code: location (only if you entered one), your login email, an alternative email you can save in your profile, and a phone number you can add in your profile.',
     'dj_quickstart_h1_recognition': 'Music recognition',
     'dj_quickstart_p_recognition':
         'Music recognition uses automatic adjustment (e.g. sensitivity, threshold) so scans stay reliable. Detected tracks can be matched to open requests. Indicators for active recognition (e.g. in the status bar) can be toggled.',

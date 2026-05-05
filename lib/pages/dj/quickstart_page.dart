@@ -67,6 +67,7 @@ class QuickstartPage extends StatelessWidget {
                     section(l.dj_quickstart_h1_music, l.dj_quickstart_p_music),
                     section(
                         l.dj_quickstart_h1_checkin, l.dj_quickstart_p_checkin),
+                    section(l.dj_quickstart_h1_qr, l.dj_quickstart_p_qr),
                     section(l.dj_quickstart_h1_recognition,
                         l.dj_quickstart_p_recognition),
                     section(l.dj_quickstart_h1_i18n, l.dj_quickstart_p_i18n),

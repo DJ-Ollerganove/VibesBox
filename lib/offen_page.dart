@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'main.dart' show buildFirebaseErrorWidget;
@@ -52,6 +53,54 @@ class _OffenPageState extends OffenPageState
       ScrollController(); // ✅ Für Scrollen nach oben beim Seitenwechsel
   bool _hasFavorites = false; // Prüft ob Favoriten vorhanden sind
 
+  /// Gleiche Party: Stream-Instanz beibehalten — sonst neu-Subscribe bei jedem
+  /// [storedSessionNotifier]-Tick → Flackern, Scroll-Sprung, doppelte Events.
+  String? _cachedPendingStreamPartyId;
+  Stream<QuerySnapshot>? _cachedPendingWishesStream;
+
+  StreamSubscription<QuerySnapshot>? _favoritePresenceSub;
+  String? _favoritePresencePartyId;
+
+  Stream<QuerySnapshot> _pendingWishesStreamForParty(String partyId) {
+    if (_cachedPendingStreamPartyId != partyId) {
+      _cachedPendingStreamPartyId = partyId;
+      _cachedPendingWishesStream =
+          WishManagementService.getWishesStream(partyId, 'pending');
+    }
+    return _cachedPendingWishesStream!;
+  }
+
+  void _ensureFavoritePresenceListener(String partyId) {
+    if (_favoritePresencePartyId == partyId && _favoritePresenceSub != null) {
+      return;
+    }
+    unawaited(_favoritePresenceSub?.cancel());
+    _favoritePresencePartyId = partyId;
+    _favoritePresenceSub = FirebaseFirestore.instance
+        .collection('wishes')
+        .where('party_id', isEqualTo: partyId)
+        .where('status', isEqualTo: 'pending')
+        .where('is_favorite', isEqualTo: true)
+        .limit(1)
+        .snapshots()
+        .listen((snapshot) {
+          final hasFavorites = snapshot.docs.isNotEmpty;
+          if (_hasFavorites != hasFavorites && mounted) {
+            setState(() {
+              _hasFavorites = hasFavorites;
+            });
+          }
+        });
+  }
+
+  void _tearDownPartyStreams() {
+    _cachedPendingStreamPartyId = null;
+    _cachedPendingWishesStream = null;
+    unawaited(_favoritePresenceSub?.cancel());
+    _favoritePresenceSub = null;
+    _favoritePresencePartyId = null;
+  }
+
   @override
   bool get wantKeepAlive => true; // Tab-State beim Wechsel zu Gespielt/Abgelehnt erhalten – verhindert dispose + Neubau
 
@@ -72,30 +121,13 @@ class _OffenPageState extends OffenPageState
     if (mounted) setState(() {});
   }
 
-  void _checkFavorites(String partyId) {
-    FirebaseFirestore.instance
-        .collection('wishes')
-        .where('party_id', isEqualTo: partyId)
-        .where('status', isEqualTo: 'pending')
-        .where('is_favorite', isEqualTo: true)
-        .limit(1)
-        .snapshots()
-        .listen((snapshot) {
-          final hasFavorites = snapshot.docs.isNotEmpty;
-          if (_hasFavorites != hasFavorites && mounted) {
-            setState(() {
-              _hasFavorites = hasFavorites;
-            });
-          }
-        });
-  }
-
   @override
   void dispose() {
     // Massen-Update beim Verlassen entfernt: Es führte beim Tab-Wechsel (oder Route-Wechsel) dazu,
     // dass die Liste neu geladen wurde und Songs scheinbar verschwanden. "Gelesen" wird weiterhin
     // beim Öffnen der Detailansicht (WishCard._markWishesAsSeen) gesetzt.
     widget.showOnlyFavoritesNotifier?.removeListener(_onFavoritesFilterChanged);
+    unawaited(_favoritePresenceSub?.cancel());
     _scrollController.dispose(); // ✅ ScrollController aufräumen
     super.dispose();
   }
@@ -220,98 +252,6 @@ class _OffenPageState extends OffenPageState
     );
   }
 
-  /// Markiert alle ungelesenen Wünsche (isSeen == false oder Feld fehlt) für die aktuelle Party als gelesen
-  /// Wird beim Verlassen der Seite aufgerufen (Weg 2)
-  Future<void> _markAllUnreadAsSeen(String partyId) async {
-    try {
-      debugLog(
-        '📖 OffenPage: Starte Massen-Update für ungelesene Wünsche (Party: $partyId)',
-      );
-
-      // Query: Alle pending Wünsche für diese Party
-      // Hinweis: Firestore unterstützt keine direkte Abfrage nach "Feld fehlt" oder "isSeen == false"
-      // Daher filtern wir client-seitig
-      const BATCH_SIZE =
-          450; // Firestore Batch-Limit: 500, wir bleiben sicher darunter
-      int totalUpdated = 0;
-
-      Query query = FirebaseFirestore.instance
-          .collection('wishes')
-          .where('party_id', isEqualTo: partyId)
-          .where('status', isEqualTo: 'pending')
-          .limit(BATCH_SIZE);
-
-      while (true) {
-        final snapshot = await query.get();
-
-        if (snapshot.docs.isEmpty) {
-          break; // Keine weiteren Dokumente
-        }
-
-        // Client-seitig filtern: Nur Wünsche mit isSeen == false oder Feld fehlt
-        final unreadDocs = snapshot.docs.where((doc) {
-          final data = doc.data() as Map<String, dynamic>;
-          final isSeen = data['isSeen'];
-          // Ungelesen wenn: Feld fehlt (null) oder explizit false
-          return isSeen == null || isSeen == false;
-        }).toList();
-
-        if (unreadDocs.isEmpty) {
-          // Wenn keine ungelesenen in diesem Batch, prüfe ob es weitere gibt
-          if (snapshot.docs.length < BATCH_SIZE) {
-            break; // Keine weiteren Dokumente
-          }
-          // Nächste Seite für Pagination
-          final lastDoc = snapshot.docs.last;
-          query = FirebaseFirestore.instance
-              .collection('wishes')
-              .where('party_id', isEqualTo: partyId)
-              .where('status', isEqualTo: 'pending')
-              .startAfterDocument(lastDoc)
-              .limit(BATCH_SIZE);
-          continue;
-        }
-
-        // Batch-Update erstellen für ungelesene Wünsche
-        final batch = FirebaseFirestore.instance.batch();
-        for (final doc in unreadDocs) {
-          batch.update(doc.reference, {'isSeen': true});
-        }
-
-        await batch.commit();
-        totalUpdated += unreadDocs.length;
-        debugLog(
-          '   ✅ ${unreadDocs.length} Wünsche als gelesen markiert (Gesamt: $totalUpdated)',
-        );
-
-        // Wenn weniger als BATCH_SIZE Dokumente, sind wir fertig
-        if (snapshot.docs.length < BATCH_SIZE) {
-          break;
-        }
-
-        // Nächste Seite für Pagination
-        final lastDoc = snapshot.docs.last;
-        query = FirebaseFirestore.instance
-            .collection('wishes')
-            .where('party_id', isEqualTo: partyId)
-            .where('status', isEqualTo: 'pending')
-            .startAfterDocument(lastDoc)
-            .limit(BATCH_SIZE);
-      }
-
-      if (totalUpdated > 0) {
-        debugLog(
-          '✅ OffenPage: Massen-Update abgeschlossen - $totalUpdated Wünsche als gelesen markiert',
-        );
-      } else {
-        debugLog('ℹ️ OffenPage: Keine ungelesenen Wünsche gefunden');
-      }
-    } catch (e) {
-      debugLog('⚠️ OffenPage: Fehler beim Massen-Update ungelesener Wünsche: $e');
-      // Fehler wird stillschweigend ignoriert, da die Seite bereits verlassen wird
-    }
-  }
-
   /// Gibt die aktuell angezeigten Wunsch-IDs zurück (für Navigation-basierte Speicherung)
   @override
   List<String> getCurrentVisibleIds() {
@@ -333,35 +273,31 @@ class _OffenPageState extends OffenPageState
           // Zentrale Session: nur storedSessionNotifier – kein Prefs-Fallback (Geister-Partys vermeiden).
           // Key erzwingt sauberen Rebuild bei Party-Wechsel.
           final activePartyId = info?.partyId;
-          if (activePartyId != null &&
-              activePartyId.isNotEmpty &&
-              activePartyId != ActivePartyService.currentPartyId) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) _checkFavorites(activePartyId);
-            });
-          }
-          return KeyedSubtree(
-            key: ValueKey<String>(activePartyId ?? 'none'),
-            // Kein Prefs-Fallback: nur zentrale Session – sonst „Geister-Party“ bei verzögertem clear.
-            child: activePartyId == null || activePartyId.isEmpty
-                ? const Stack(
-                    children: [
-                      Positioned.fill(
-                        child: Center(child: NoActivePartyDisplay()),
-                      ),
-                    ],
-                  )
-                : StreamBuilder<QuerySnapshot>(
-                    stream: WishManagementService.getWishesStream(
-                      activePartyId,
-                      'pending',
-                    ),
-                    builder: (context, snapshot) => _buildWishesListWithPartyId(
-                      context,
-                      snapshot,
-                      activePartyId,
-                    ),
+          if (activePartyId == null || activePartyId.isEmpty) {
+            _tearDownPartyStreams();
+            return const KeyedSubtree(
+              key: ValueKey<String>('none'),
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: Center(child: NoActivePartyDisplay()),
                   ),
+                ],
+              ),
+            );
+          }
+          _ensureFavoritePresenceListener(activePartyId);
+          return KeyedSubtree(
+            key: ValueKey<String>(activePartyId),
+            // Kein Prefs-Fallback: nur zentrale Session – sonst „Geister-Party“ bei verzögertem clear.
+            child: StreamBuilder<QuerySnapshot>(
+              stream: _pendingWishesStreamForParty(activePartyId),
+              builder: (context, snapshot) => _buildWishesListWithPartyId(
+                context,
+                snapshot,
+                activePartyId,
+              ),
+            ),
           );
         },
       ),
@@ -373,7 +309,10 @@ class _OffenPageState extends OffenPageState
     AsyncSnapshot<QuerySnapshot> snapshot,
     String partyId,
   ) {
-    if (snapshot.connectionState == ConnectionState.waiting) {
+    // Nur beim allerersten Laden ohne Daten: leere Platzhalter-UI (kein erneutes
+    // „Leerflackern“ bei Stream-Neuaufbau, solange bereits Snapshots da waren).
+    if (snapshot.connectionState == ConnectionState.waiting &&
+        !snapshot.hasData) {
       return SingleChildScrollView(
         padding: EdgeInsets.only(
           left: 16,
@@ -406,12 +345,13 @@ class _OffenPageState extends OffenPageState
 
     final wishesDocs = snapshot.data?.docs ?? [];
 
-    // DEBUG: Zeige Party-ID und Anzahl der gefundenen Dokumente
-    debugLog(
-      '🔍 [DEBUG] OffenPage: Party-ID: $partyId, Gefundene Wünsche: ${wishesDocs.length}',
-    );
-    if (wishesDocs.isEmpty) {
-      debugLog('⚠️ [DEBUG] Keine Wünsche gefunden für Party-ID: $partyId');
+    if (kDebugMode) {
+      debugLog(
+        '🔍 [DEBUG] OffenPage: Party-ID: $partyId, Gefundene Wünsche: ${wishesDocs.length}',
+      );
+      if (wishesDocs.isEmpty) {
+        debugLog('⚠️ [DEBUG] Keine Wünsche gefunden für Party-ID: $partyId');
+      }
     }
 
     // SICHERHEITS-PRÜFUNG: Filter nach party_id (partyId wie History/Gesperrt)
@@ -419,7 +359,7 @@ class _OffenPageState extends OffenPageState
       final data = doc.data() as Map<String, dynamic>;
       final docPartyId = data['party_id'] as String?;
       final matches = docPartyId == partyId;
-      if (!matches) {
+      if (kDebugMode && !matches) {
         debugLog(
           '🚫 PARTY-FILTER: Dokument ${doc.id} gehört zu Party "$docPartyId", erwartet "$partyId" - wird ausgeschlossen',
         );
@@ -427,9 +367,11 @@ class _OffenPageState extends OffenPageState
       return matches;
     }).toList();
 
-    debugLog(
-      '🔍 [DEBUG] OffenPage: Nach Party-ID-Filter: ${partyFilteredDocs.length} von ${wishesDocs.length} Dokumenten verbleiben',
-    );
+    if (kDebugMode) {
+      debugLog(
+        '🔍 [DEBUG] OffenPage: Nach Party-ID-Filter: ${partyFilteredDocs.length} von ${wishesDocs.length} Dokumenten verbleiben',
+      );
+    }
 
     // Sammle alle docIds der aktuell angezeigten Wünsche
     _currentVisibleIds.clear();
@@ -441,7 +383,9 @@ class _OffenPageState extends OffenPageState
     for (final doc in partyFilteredDocs) {
       final data = doc.data() as Map<String, dynamic>;
       final createdAtValue = data['createdAt'];
-      if (createdAtValue != null && createdAtValue is! Timestamp) {
+      if (kDebugMode &&
+          createdAtValue != null &&
+          createdAtValue is! Timestamp) {
         debugLog(
           '⚠️ ZEIT-FEHLER: createdAt ist kein Timestamp, sondern ${createdAtValue.runtimeType} (Dokument-ID: ${doc.id})',
         );
@@ -451,13 +395,24 @@ class _OffenPageState extends OffenPageState
     // Verwende partyFilteredDocs direkt (is_duplicate Filter entfernt, da Gruppierung jetzt party-spezifisch ist)
     final filteredDocs = partyFilteredDocs;
 
-    debugLog(
-      '🔍 [DEBUG] OffenPage: Nach Duplikat-Filter: ${filteredDocs.length} von ${wishesDocs.length} Dokumenten verbleiben',
-    );
+    if (kDebugMode) {
+      debugLog(
+        '🔍 [DEBUG] OffenPage: Nach Duplikat-Filter: ${filteredDocs.length} von ${wishesDocs.length} Dokumenten verbleiben',
+      );
+    }
 
     // Konvertiere zu SongRequest Objekten (mit Error-Handling)
     final openWishes = <SongRequest>[];
+    final seenOpenWishDocIds = <String>{};
     for (final doc in filteredDocs) {
+      if (!seenOpenWishDocIds.add(doc.id)) {
+        if (kDebugMode) {
+          debugLog(
+            '⚠️ OffenPage: doppelte Dokument-ID im Snapshot übersprungen: ${doc.id}',
+          );
+        }
+        continue;
+      }
       try {
         final songRequest = SongRequest.fromDocument(doc);
         openWishes.add(songRequest);
@@ -470,10 +425,12 @@ class _OffenPageState extends OffenPageState
       }
     }
 
-    debugLog(
-      '🔍 [DEBUG] OffenPage: Nach Mapping: ${openWishes.length} SongRequest-Objekte erstellt',
-    );
-    if (partyId == 'B5wSVwhA67bM5Igp7wj2') {
+    if (kDebugMode) {
+      debugLog(
+        '🔍 [DEBUG] OffenPage: Nach Mapping: ${openWishes.length} SongRequest-Objekte erstellt',
+      );
+    }
+    if (kDebugMode && partyId == 'B5wSVwhA67bM5Igp7wj2') {
       debugLog(
         '🔍 [DEBUG] OffenPage (Party B5wSVwhA67bM5Igp7wj2): docs=${wishesDocs.length} openWishes=${openWishes.length}',
       );
@@ -484,7 +441,7 @@ class _OffenPageState extends OffenPageState
     final wishesToShow = showOnlyFavorites
         ? openWishes.where((r) => r.isFavorite == true).toList()
         : openWishes;
-    if (partyId == 'B5wSVwhA67bM5Igp7wj2') {
+    if (kDebugMode && partyId == 'B5wSVwhA67bM5Igp7wj2') {
       debugLog(
         '🔍 [DEBUG] OffenPage (Party B5wSVwhA67bM5Igp7wj2): showOnlyFavorites=$showOnlyFavorites wishesToShow=${wishesToShow.length}',
       );
@@ -558,7 +515,10 @@ class _OffenPageState extends OffenPageState
       });
 
     // Gruppiere Wünsche
-    final groupedResult = WishGroupingHelper.groupWishes(sortedWishes);
+    final groupedResult = WishGroupingHelper.groupWishes(
+      sortedWishes,
+      sessionPartyId: partyId,
+    );
     final allGroupedList =
         groupedResult['groups'] as List<Map<String, dynamic>>;
     final groupedFirstRequests =
@@ -599,6 +559,7 @@ class _OffenPageState extends OffenPageState
 
     final l10nList = AppLocalizations.of(context)!;
     return SingleChildScrollView(
+      key: PageStorageKey<String>('offen_pending_scroll_$partyId'),
       controller:
           _scrollController, // ✅ ScrollController für Scrollen nach oben
       padding: EdgeInsets.only(
@@ -686,7 +647,7 @@ class _OffenPageState extends OffenPageState
                   children: [
                     WishCard(
                       key: ValueKey(
-                        'offen-wish-${docIds.join('|')}',
+                        'offen-$partyId-$groupKey-$dataIndex',
                       ),
                       request:
                           groupedFirstRequests[groupKey], // ✅ FIX: Übergib originales SongRequest mit clientId
@@ -781,191 +742,5 @@ class _OffenPageState extends OffenPageState
         ],
       ),
     );
-  }
-
-  /// Zeigt Detail-Dialog für gruppierte Wünsche
-  void _showGroupedWishDetailDialog(
-    BuildContext context,
-    Map<String, dynamic> data,
-    List<String> docIds,
-  ) {
-    final isRtl = [
-      'ar',
-      'he',
-      'fa',
-      'ur',
-    ].contains(Localizations.localeOf(context).languageCode);
-    final l = AppLocalizations.of(context)!;
-    final title = unescapeHtml((data['title'] ?? data['song'] ?? '') as String);
-    final artist = unescapeHtml((data['artist'] ?? '') as String);
-    final displayText = title.isNotEmpty && artist.isNotEmpty
-        ? '$title - $artist'
-        : (title.isNotEmpty ? title : artist);
-
-    showDialog(
-      context: context,
-      builder: (context) => Directionality(
-        textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
-        child: AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: const BorderSide(color: UIConstants.frameOffen, width: 2.0),
-          ),
-          title: Text(
-            displayText,
-            textAlign: isRtl ? TextAlign.right : TextAlign.left,
-          ),
-          content: Directionality(
-            textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: isRtl
-                    ? CrossAxisAlignment.end
-                    : CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '${l.wish_count_label} ${docIds.length}',
-                    textAlign: isRtl ? TextAlign.right : TextAlign.left,
-                  ),
-                  const SizedBox(height: 16),
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      debugLog(
-                        '>>> UI: Rufe jetzt den Dialog auf (von Detail-Dialog)',
-                      );
-                      Navigator.pop(context);
-                      if (ActivePartyService.currentPartyId != null &&
-                          ActivePartyService.currentPartyId!.isNotEmpty) {
-                        WishManagementService.showConfirmUpdateGroupedStatusDialog(
-                          context,
-                          docIds,
-                          'played',
-                          l.mark_as_played,
-                          displayText,
-                          ActivePartyService.currentPartyId!,
-                        );
-                      } else {
-                        debugLog(
-                          '⚠️ Offen/Detail played: keine Party-ID – übersprungen',
-                        );
-                      }
-                    },
-                    icon: const Icon(Icons.check, color: Colors.white),
-                    label: Text(
-                      l.played,
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: UIConstants.frameGespielt,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.pop(context);
-                      if (ActivePartyService.currentPartyId != null &&
-                          ActivePartyService.currentPartyId!.isNotEmpty) {
-                        WishManagementService.showConfirmDeleteOrRejectGroupedDialog(
-                          context,
-                          docIds,
-                          displayText,
-                          ActivePartyService.currentPartyId!,
-                        );
-                      } else {
-                        debugLog(
-                          '⚠️ Offen/Detail löschen: keine Party-ID – übersprungen',
-                        );
-                      }
-                    },
-                    icon: const Icon(Icons.delete, color: Colors.white),
-                    label: Text(
-                      l.delete,
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: UIConstants.frameNoParty,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// Aktualisiert gruppierte Wünsche auf 'rejected'
-  Future<void> _updateGroupedStatusToRejected(
-    BuildContext context,
-    List<String> docIds,
-  ) async {
-    final locRej = AppLocalizations.of(context)!;
-    try {
-      if (ActivePartyService.currentPartyId == null ||
-          ActivePartyService.currentPartyId!.isEmpty) {
-        debugLog('⚠️ _updateGroupedStatusToRejected: keine Party-ID – abgebrochen');
-        return;
-      }
-      await WishManagementService.updateGroupedStatus(
-        docIds,
-        'rejected',
-        ActivePartyService.currentPartyId!,
-      );
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(locRej.snackbar_wishes_rejected(docIds.length)),
-            backgroundColor: UIConstants.frameGespielt,
-          ),
-        );
-      }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(locRej.snackbar_error_details(e)),
-            backgroundColor: UIConstants.frameNoParty,
-          ),
-        );
-      }
-    }
-  }
-
-  /// Löscht gruppierte Wünsche
-  Future<void> _deleteGroupedWishes(
-    BuildContext context,
-    List<String> docIds,
-  ) async {
-    final locDel = AppLocalizations.of(context)!;
-    try {
-      if (ActivePartyService.currentPartyId == null ||
-          ActivePartyService.currentPartyId!.isEmpty) {
-        debugLog('⚠️ _deleteGroupedWishes: keine Party-ID – abgebrochen');
-        return;
-      }
-      await WishManagementService.deleteGroupedWishes(
-        docIds,
-        ActivePartyService.currentPartyId!,
-      );
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(locDel.snackbar_wishes_deleted(docIds.length)),
-            backgroundColor: UIConstants.frameGespielt,
-          ),
-        );
-      }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(locDel.snackbar_error_details(e)),
-            backgroundColor: UIConstants.frameNoParty,
-          ),
-        );
-      }
-    }
   }
 }
