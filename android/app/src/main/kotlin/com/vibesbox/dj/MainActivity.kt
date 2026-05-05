@@ -17,6 +17,7 @@ import android.provider.Settings
 import android.util.Base64
 import android.util.Log
 import android.os.Bundle
+import androidx.activity.enableEdgeToEdge
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.shazam.shazamkit.AudioSampleRateInHz
@@ -46,6 +47,8 @@ class MainActivity: FlutterFragmentActivity() {
         const val EXTRA_NAV_TARGET = "nav_target"
         private const val NAV_TARGET_HISTORY = "history"
         private const val METHOD_NOTIFICATION_NAV_TARGET = "onNotificationNavigationTarget"
+        /** Obere Zeitschranke für die Legacy-ShazamKit-Audio-Schleife (8s Erwartung + Puffer). */
+        private const val MAX_LEGACY_SCAN_WALL_MS = 12_000L
     }
 
     private val BATTERY_CHANNEL = "dj_og_app/battery_optimization"
@@ -92,6 +95,7 @@ class MainActivity: FlutterFragmentActivity() {
     private lateinit var appPrefs: SharedPreferences
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         appPrefs = getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
         pendingNotificationNavTarget = extractNavigationTarget(intent)
@@ -619,7 +623,10 @@ class MainActivity: FlutterFragmentActivity() {
                             var shouldSendToShazam = true // Wird auf false gesetzt, wenn unter Schwellenwert
                             var smartThresholdCalculated = false // Wird auf true gesetzt, nachdem Smart-Threshold berechnet wurde
                             // autoGainCalculated und optimizedSensitivity sind jetzt auf Klassenebene definiert
-                            while (!matchFound && isRecording) {
+                            while (
+                                !matchFound && isRecording &&
+                                    System.currentTimeMillis() - scanStartTime < MAX_LEGACY_SCAN_WALL_MS
+                            ) {
                                 try {
                                     val readSize = audioRecord?.read(shortBuffer, 0, shortBuffer.size) ?: 0
                                     if (readSize > 0) {
@@ -755,6 +762,17 @@ class MainActivity: FlutterFragmentActivity() {
                                     break
                                 }
                             }
+                            if (System.currentTimeMillis() - scanStartTime >= MAX_LEGACY_SCAN_WALL_MS && currentResult != null) {
+                                Log.w(
+                                    "Shazam",
+                                    "Legacy-Scan: Zeitlimit ${MAX_LEGACY_SCAN_WALL_MS}ms erreicht — schließe Flutter-Antwort",
+                                )
+                            }
+                        }
+                        // IO-Schleife beendet (Break/Timeout/Happy-Path): Mikrofon immer freigeben,
+                        // offenes recognize immer an Flutter zurückgeben.
+                        withContext(Dispatchers.Main) {
+                            stopRecordingSafely()
                         }
                     }
                     is ShazamKitResult.Failure -> {
@@ -933,7 +951,23 @@ class MainActivity: FlutterFragmentActivity() {
         stopRecordingSafely()
     }
     
+    /**
+     * Flutter [recognize] darf nie ohne Antwort bleiben — sonst bleibt Dart auf dem Aufruf hängen.
+     */
+    private fun completePendingRecognizeResultIfOpen(reason: String) {
+        val pending = currentResult ?: return
+        Log.w("Shazam", "completePendingRecognizeResultIfOpen: $reason")
+        currentResult = null
+        try {
+            pending.success(mapOf("title" to "", "artist" to ""))
+        } catch (e: Exception) {
+            Log.e("Shazam", "completePendingRecognizeResultIfOpen reply failed: ${e.message}", e)
+        }
+    }
+
     private fun stopRecordingSafely() {
+        completePendingRecognizeResultIfOpen("stopRecordingSafely")
+
         // Prüfe AudioRecord-Status bevor wir Flags setzen
         val wasRecording = isRecording
         

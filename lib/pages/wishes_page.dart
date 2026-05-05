@@ -476,10 +476,17 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
       'ur',
     ].contains(Localizations.localeOf(context).languageCode);
 
+    final mediaQuery = MediaQuery.of(context);
+    final bottomInset = mediaQuery.viewInsets.bottom > 0
+        ? mediaQuery.viewInsets.bottom
+        : mediaQuery.padding.bottom;
+
     return Scaffold(
       backgroundColor: Colors.black,
       resizeToAvoidBottomInset: true,
       body: SafeArea(
+        top: false,
+        bottom: false,
         child: Directionality(
           textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
           child: SingleChildScrollView(
@@ -487,7 +494,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
               left: 16,
               right: 16,
               top: 16,
-              bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+              bottom: bottomInset + 16,
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,

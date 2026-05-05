@@ -1,9 +1,47 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // --- Pfad-Helfer (einheitliche Referenzen; wiederholte get() auf denselben Pfad zählen als eine Operation) ---
+    function usersDocPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+    function partiesDocPath(partyId) {
+      return /databases/$(database)/documents/parties/$(partyId);
+    }
+    function musicHistoryDocPath(sessionId) {
+      return /databases/$(database)/documents/music_history/$(sessionId);
+    }
+
+    // --- Party: Typ-/Pflichtfeld zuerst, dann exists/get (invalid Requests ohne Doc-Read ablehnen) ---
+    function partyIdWellFormed(partyId) {
+      return partyId is string && partyId.size() > 0;
+    }
+    function partyDocExists(partyId) {
+      return partyIdWellFormed(partyId) && exists(partiesDocPath(partyId));
+    }
+    /** Ein get() auf parties/{partyId}; nur nach partyDocExists oder gleichwertiger Absicherung aufrufen. */
+    function partyData(partyId) {
+      return get(partiesDocPath(partyId)).data;
+    }
+    function partyLifecycleIsActive(partyId) {
+      return partyDocExists(partyId)
+        && partyData(partyId).lifecycle_status == 'active';
+    }
+    function partyWishboxOpenOrMissing(partyId) {
+      return !('wishbox_enabled' in partyData(partyId))
+        || partyData(partyId).wishbox_enabled == true;
+    }
+
+    // --- Auth-User-Dokument: nach request.auth != null nutzen ---
+    function authUserDocExists() {
+      return request.auth != null && exists(usersDocPath(request.auth.uid));
+    }
+    function authUserData() {
+      return get(usersDocPath(request.auth.uid)).data;
+    }
+
     // Zentrale XSS/Payload-Pruefung fuer Texteingaben.
-    // Erlaubt normale Sonderzeichen (', &, -, !, ?, ., @, ...),
-    // blockiert nur gezielte Hacker-Muster.
     function isSafeText(text, maxLen) {
       return text is string
         && text.size() <= maxLen
@@ -33,7 +71,6 @@ service cloud.firestore {
         && (!('email_verified' in data) || data.email_verified is bool);
     }
 
-    /** Registrierung: typische Erstfelder (Zähler, Timestamps) explizit erlauben. */
     function isSafeUserRegistrationPayload(data) {
       return isSafeUserData(data)
         && (!('loginCount' in data)
@@ -42,7 +79,6 @@ service cloud.firestore {
         && (!('created_at' in data) || data.created_at is timestamp);
     }
 
-    // Geräte-Sperr-Fusion (Cloud Function): Nutzer dürfen device_block_fusion / Sperre nicht selbst aufheben.
     function userPreservesDeviceBlockFusion() {
       return !resource.exists
         || !('device_block_fusion' in resource.data)
@@ -108,7 +144,6 @@ service cloud.firestore {
         && isSafeOptionalText(data, 'browser_language', 20);
     }
 
-    // parties/{id}/guestStats: Wünsche-Liste begrenzt (client_id prüft canGuestWriteOwnClientDoc)
     function isSafeGuestStatsData(data) {
       return data != null
         && (!('wishes' in data) || (
@@ -119,7 +154,6 @@ service cloud.firestore {
     }
 
     function isSafePartyData(data) {
-      // Align mit Flutter neue_party_page: party_name maxLength 100 (nicht 60, sonst Permission Denied).
       return isSafeOptionalText(data, 'partyName', 100)
         && isSafeOptionalText(data, 'party_name', 100)
         && isSafeOptionalText(data, 'announcement', 500)
@@ -171,7 +205,6 @@ service cloud.firestore {
         && isSafeOptionalText(data, 'status', 40);
     }
 
-    // Nur title/artist/timestamp (wie TrackEntry.toFirestore im DJ-App)
     function isSafeMusicHistoryTrackData(data) {
       return data.keys().hasOnly(['title', 'artist', 'timestamp'])
         && 'title' in data && isSafeText(data.title, 100)
@@ -179,16 +212,21 @@ service cloud.firestore {
         && data.timestamp is timestamp;
     }
 
+    /** Session-Dokument; nur nach exists(musicHistoryDocPath(sessionId)) verwenden. */
+    function musicHistorySessionData(sessionId) {
+      return get(musicHistoryDocPath(sessionId)).data;
+    }
+
     function canWriteMusicHistoryTracks(sessionId) {
       return request.auth != null
-        && exists(/databases/$(database)/documents/music_history/$(sessionId))
+        && exists(musicHistoryDocPath(sessionId))
         && (
           isAdmin()
           || (
-            'djId' in get(/databases/$(database)/documents/music_history/$(sessionId)).data
-            && get(/databases/$(database)/documents/music_history/$(sessionId)).data.djId == request.auth.uid
+            'djId' in musicHistorySessionData(sessionId)
+            && musicHistorySessionData(sessionId).djId == request.auth.uid
           )
-          || canManagePartyByData(get(/databases/$(database)/documents/music_history/$(sessionId)).data)
+          || canManagePartyBySessionData(musicHistorySessionData(sessionId))
         );
     }
 
@@ -231,7 +269,6 @@ service cloud.firestore {
         : false;
     }
 
-    // Fallback fuer Subdokumente ohne direkten Collection-Kontext.
     function isSafeCommonData(data) {
       return isSafeUserData(data)
         && isSafeWishData(data)
@@ -250,19 +287,11 @@ service cloud.firestore {
         && (
           request.auth.token.admin == true
           || (
-            exists(/databases/$(database)/documents/users/$(request.auth.uid))
-            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.admin == true
+            authUserDocExists()
+            && 'admin' in authUserData()
+            && authUserData().admin == true
           )
         );
-    }
-
-    // DJ-Rolle: users.role_id zeigt auf roles/{id} mit name == "DJ"
-    function isDjRoleUser() {
-      return request.auth != null
-        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && 'role_id' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data
-        && exists(/databases/$(database)/documents/roles/$(get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role_id))
-        && get(/databases/$(database)/documents/roles/$(get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role_id)).data.name == 'DJ';
     }
 
     function isSafeSpotifySettingsData(data) {
@@ -346,30 +375,18 @@ service cloud.firestore {
       return ('party_id' in data)
         && data.party_id is string
         && data.party_id.size() > 0
-        && exists(/databases/$(database)/documents/parties/$(data.party_id))
-        && get(/databases/$(database)/documents/parties/$(data.party_id)).data.lifecycle_status == 'active'
-        && (
-          !('wishbox_enabled' in get(/databases/$(database)/documents/parties/$(data.party_id)).data)
-          || get(/databases/$(database)/documents/parties/$(data.party_id)).data.wishbox_enabled == true
-        );
+        && partyLifecycleIsActive(data.party_id)
+        && partyWishboxOpenOrMissing(data.party_id);
     }
 
     function isPartyOwnedByCurrentUser(partyId) {
       return request.auth != null
-        && partyId is string
-        && partyId.size() > 0
-        && exists(/databases/$(database)/documents/parties/$(partyId))
+        && partyDocExists(partyId)
         && (
-          get(/databases/$(database)/documents/parties/$(partyId)).data.created_by == request.auth.uid
-          || get(/databases/$(database)/documents/parties/$(partyId)).data.djId == request.auth.uid
-          || get(/databases/$(database)/documents/parties/$(partyId)).data.uid == request.auth.uid
+          partyData(partyId).created_by == request.auth.uid
+          || partyData(partyId).djId == request.auth.uid
+          || partyData(partyId).uid == request.auth.uid
         );
-    }
-
-    function partyExists(partyId) {
-      return partyId is string
-        && partyId.size() > 0
-        && exists(/databases/$(database)/documents/parties/$(partyId));
     }
 
     function canGuestWriteOwnClientDoc(docId, data) {
@@ -381,11 +398,8 @@ service cloud.firestore {
         && data.client_id == docId;
     }
 
-    // Wunschbox/PWA/Flutter: Gast erhöht nur total_guest_count genau um 1 (kein weiteres Party-Feld ändern).
-    // Eingeloggte Gäste (Flutter) nutzen dieselbe Logik wie anonyme PWA-Gäste.
     function guestIncrementsOnlyTotalGuestCount(partyId) {
-      // total_guest_count kann als int oder float (z. B. 1.0) vorliegen — is int allein verweigert sonst gültige +1-Updates
-      return partyExists(partyId)
+      return partyDocExists(partyId)
         && request.resource.data.diff(resource.data).changedKeys().hasOnly(['total_guest_count'])
         && request.resource.data.total_guest_count is number
         && (
@@ -401,19 +415,22 @@ service cloud.firestore {
         );
     }
 
-    // Öffentliches users/{uid}-Dokument: ausschließlich diese Schlüssel (keine E-Mails, Pläne, Einstellungen).
-    // Hinweis: Firestore liefert beim get immer das ganze Dokument — daher striktes keys().hasOnly(...).
     function isPublicUserProfileKeysOnly(data) {
       return data != null
         && data.keys().hasOnly(['displayName', 'djName', 'photoUrl', 'photoURL', 'publicProfile']);
     }
 
-    function canManagePartyByData(data) {
+    /** Party-Zugehoerigkeit aus bereits geladenen Session-/Event-Daten (kein Doc-Read). */
+    function canManagePartyBySessionData(data) {
       return request.auth != null
         && (
           ('party_id' in data && isPartyOwnedByCurrentUser(data.party_id))
           || ('partyId' in data && isPartyOwnedByCurrentUser(data.partyId))
         );
+    }
+
+    function canManagePartyByData(data) {
+      return canManagePartyBySessionData(data);
     }
 
     function isWishOwnerByData(data) {
@@ -428,20 +445,17 @@ service cloud.firestore {
         );
     }
 
-    // Flutter: Queries wie where('name', == displayName) — Lesen nur wenn Name zum Profil/Token passt.
+    /** JWT zuerst (ohne Firestore-Read), dann users/{uid}. */
     function authenticatedUserOwnsWishByDisplayName() {
       return request.auth != null
         && resource.data != null
         && resource.data.name is string
         && (
-          (
-            exists(/databases/$(database)/documents/users/$(request.auth.uid))
-            && 'displayName' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data
-            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.displayName == resource.data.name
-          )
+          ('name' in request.auth.token && request.auth.token.name == resource.data.name)
           || (
-            'name' in request.auth.token
-            && request.auth.token.name == resource.data.name
+            authUserDocExists()
+            && 'displayName' in authUserData()
+            && authUserData().displayName == resource.data.name
           )
         );
     }
@@ -460,20 +474,18 @@ service cloud.firestore {
         && isPartyActiveForGuestWish(resource.data);
     }
 
-    // Lesen einzelner Wunsch-Dokumente: keine anonyme Voll-Collection mehr (list/get nur mit Regel-Pass).
-    // Admin/DJ: wie zuvor über canManageWishData / Owner; anonyme Gäste (PWA): nur mit gültiger party_id + existierender Party.
     function wishDocumentReadable() {
-      return request.auth != null && (
+      return (request.auth != null && (
           isAdmin()
           || canManageWishData(resource.data)
           || isWishOwnerByData(resource.data)
           || authenticatedUserOwnsWishByDisplayName()
-        )
+        ))
         || (
           request.auth == null
           && resource.data.party_id is string
           && resource.data.party_id.size() > 0
-          && partyExists(resource.data.party_id)
+          && partyDocExists(resource.data.party_id)
         );
     }
 
@@ -485,7 +497,6 @@ service cloud.firestore {
         );
     }
 
-    // parties: anonymes List aller Dokumente unterbinden (Queries müssen zu den Filtern passen).
     function partyListOwnedByAuth() {
       return request.auth != null && (
         isAdmin()
@@ -495,7 +506,6 @@ service cloud.firestore {
       );
     }
 
-    // PWA „aktive Party in den letzten Tagen“ (align mit public/vb/app.js: status + lifecycle + end_date).
     function partyGuestDiscoveryListAllowed() {
       return request.auth == null
         && resource.data.status == 'active'
@@ -504,7 +514,6 @@ service cloud.firestore {
         && resource.data.end_date >= request.time - duration.value(14, 'd');
     }
 
-    // PWA Join-Code-Suche: Codes liegen in Firestore teils als String, teils als Zahl (8-stellig).
     function partyHasNonEmptyJoinCode(data) {
       return (data.party_code is string && data.party_code.size() > 0)
         || (data.fixed_party_code is string && data.fixed_party_code.size() > 0)
@@ -514,43 +523,34 @@ service cloud.firestore {
         || (data.fixed_party_code is float && data.fixed_party_code > 0);
     }
 
-    // Join per Code: Legacy-Dokumente ohne lifecycle_status; ggf. "upcoming" (ältere App-Logik).
     function partyLifecycleAllowsJoinByCode(data) {
       return !('lifecycle_status' in data)
         || data.lifecycle_status == null
         || data.lifecycle_status in ['active', 'finished', 'standby', 'upcoming'];
     }
 
-    // DJ-App (eingeloggt): Party per party_code/fixed_party_code finden (wie PWA-Join), nur limit<=1.
-    // Ohne lifecycle-Filter: auch alte/abweichende lifecycle_status-Werte blockieren die Code-Wiederverwendung.
     function partyDjJoinCodeCollisionListAllowed() {
       return request.auth != null
         && request.query.limit <= 1
         && partyHasNonEmptyJoinCode(resource.data);
     }
 
-    // PWA Join-Code-Suche (party_code / fixed_party_code) inkl. beendeter Partys.
     function partyGuestJoinCodeListAllowed() {
       return request.auth == null
         && partyLifecycleAllowsJoinByCode(resource.data)
         && partyHasNonEmptyJoinCode(resource.data);
     }
 
-    // User-Hauptprofil bleibt strikt Owner-Only.
     match /users/{userId} {
       allow get: if isUserOwner(userId) || isAdmin() || isPublicUserProfileKeysOnly(resource.data);
       allow list: if isUserOwner(userId) || isAdmin();
       allow delete: if isUserOwner(userId) || isAdmin();
-      // Erstellen: eigenes Profil (Registrierung) oder Admin.
-      // Registrierung: E-Mail ist typischerweise noch nicht verifiziert — emailVerified == false ist erlaubt
-      // (siehe isSafeUserData: bool-Feld optional).
       allow create: if (isUserOwner(userId) && isSafeUserRegistrationPayload(request.resource.data))
         || (isAdmin() && isSafeUserData(request.resource.data));
       allow update: if (isUserOwner(userId) || isAdmin())
         && isSafeUserData(request.resource.data)
         && (isAdmin() || userPreservesDeviceBlockFusion());
 
-      // Öffentliche Lesezugriffe für PWA/Gäste auf ausgewählte Unterdaten.
       match /social_media_links/{docId} {
         allow read: if true;
         allow delete: if isUserOwner(userId) || isAdmin();
@@ -587,9 +587,6 @@ service cloud.firestore {
       }
     }
 
-    // Whitelist: nur explizit freigegebene Collections sind sichtbar/schreibbar.
-    // Alles Unbekannte bleibt standardmäßig gesperrt.
-    // Öffentliches Lesen (PWA/Gäste, Footer/Settings ohne Login)
     match /admin_config/global_settings {
       allow read: if true;
       allow write: if isAdmin();
@@ -604,8 +601,6 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    // Spotify-Suchfilter (Blacklist, max. Titel-Länge). Lesen öffentlich (wie globale Settings),
-    // damit Gäste/Clients die Filter-Parameter laden können; Schreiben nur Admin. Cloud Function nutzt Admin-SDK.
     match /admin_config/spotify_settings {
       allow read: if true;
       allow create, update: if isAdmin()
@@ -613,7 +608,6 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // Zentrale Social-Links (Social-Media-Seite); nicht vom Sammel-Admin-Block verdecken
     match /admin_config/vibesbox_social {
       allow read: if true;
       allow write: if isAdmin();
@@ -623,7 +617,6 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    // ISO-Länderliste: Seed aus der App (CountriesService) darf bei gültigem Payload schreiben
     function isCountrySeedData(data) {
       return data != null
         && data.keys().hasOnly(['name', 'code'])
@@ -635,7 +628,6 @@ service cloud.firestore {
 
     match /countries/{docId} {
       allow read: if true;
-      // Seed beim Cold Start oft ohne Auth — nur strenges Payload + docId == ISO-Code
       allow create: if isAdmin()
         || (
           isCountrySeedData(request.resource.data)
@@ -651,7 +643,6 @@ service cloud.firestore {
     }
 
     match /parties/{partyId} {
-      // get: Einzeldokument per ID (schwer ratbar); list: nur mit Filtern wie in der PWA (kein anonymes Scraping der ganzen Collection).
       allow get: if true;
       allow list: if partyListOwnedByAuth()
         || partyGuestDiscoveryListAllowed()
@@ -674,9 +665,8 @@ service cloud.firestore {
 
       match /guests/{guestId} {
         allow read: if request.auth != null
-          || (request.auth == null && partyExists(partyId));
-        // Anonym (PWA) oder eingeloggt (Flutter): client_id muss der Dokument-ID entsprechen.
-        allow create: if partyExists(partyId)
+          || (request.auth == null && partyDocExists(partyId));
+        allow create: if partyDocExists(partyId)
           && (
             canGuestWriteOwnClientDoc(guestId, request.resource.data)
             || (
@@ -686,7 +676,7 @@ service cloud.firestore {
               && request.resource.data.keys().hasOnly(['client_id', 'last_seen', 'language'])
             )
           );
-        allow update: if partyExists(partyId)
+        allow update: if partyDocExists(partyId)
           && (
             canGuestWriteOwnClientDoc(guestId, request.resource.data)
             || (
@@ -700,11 +690,10 @@ service cloud.firestore {
       }
 
       match /guestStats/{guestId} {
-        // get auf noch nicht existierendes Dokument: resource fehlt — sonst PERMISSION_DENIED vor erstem setDoc
         allow read: if request.auth != null
           || (
             request.auth == null
-            && partyExists(partyId)
+            && partyDocExists(partyId)
             && guestId is string
             && (
               !exists(/databases/$(database)/documents/parties/$(partyId)/guestStats/$(guestId))
@@ -715,7 +704,7 @@ service cloud.firestore {
             )
           );
         allow create, update: if canGuestWriteOwnClientDoc(guestId, request.resource.data)
-          && partyExists(partyId)
+          && partyDocExists(partyId)
           && isSafeGuestStatsData(request.resource.data);
       }
     }
@@ -731,7 +720,6 @@ service cloud.firestore {
         && (isAdmin() || request.auth.uid == uid);
     }
 
-    // Sperrlisten: Einzeldokument (get) für Gast-Gerät/Session bleibt möglich; Collection-Scans (list) nur eingeloggt (DJ-UI).
     match /blocked_devices/{docId} {
       allow get: if true;
       allow list: if request.auth != null;
@@ -744,7 +732,6 @@ service cloud.firestore {
       allow create, update, delete: if request.auth != null;
     }
 
-    // Audit: Gerät mit Account verknüpft → User gesperrt (nur Server schreibt via Admin SDK).
     match /block_device_fusion_log/{docId} {
       allow read: if request.auth != null        && (
           isAdmin()
@@ -753,7 +740,6 @@ service cloud.firestore {
       allow create, update, delete: if false;
     }
 
-    // Gast-Wunschbox: anonyme oder eingeloggte Gäste schreiben ein Event pro Sitzung/Party (party_id = lange ID).
     match /party_stats/{docId} {
       allow read: if request.auth != null && (
         isAdmin()
@@ -772,8 +758,6 @@ service cloud.firestore {
         && request.resource.data.party_id is string
         && request.resource.data.party_id.size() > 0
         && request.resource.data.party_id.size() <= 120
-        && partyExists(request.resource.data.party_id)
-        && get(/databases/$(database)/documents/parties/$(request.resource.data.party_id)).data.lifecycle_status == 'active'
         && request.resource.data.language is string
         && request.resource.data.language.size() <= 20
         && request.resource.data.is_logged_in_user is bool
@@ -784,7 +768,8 @@ service cloud.firestore {
           || request.resource.data.platform == 'web'
           || request.resource.data.platform == 'unknown'
         )
-        && request.resource.data.timestamp == request.time;
+        && request.resource.data.timestamp == request.time
+        && partyLifecycleIsActive(request.resource.data.party_id);
       allow update, delete: if false;
     }
 
@@ -825,8 +810,6 @@ service cloud.firestore {
         );
     }
 
-    // DJ/Admin: unverändert. Gäste (ohne Auth): nur Lesen wenn Session zu einer existierenden Party gehört
-    // (PWA History fragt ohnehin mit where party_id == … ab; keine Änderung an create/update/delete.)
     match /music_history/{sessionId} {
       allow read: if (request.auth != null
         && (
@@ -838,7 +821,7 @@ service cloud.firestore {
           request.auth == null
           && resource.data.party_id is string
           && resource.data.party_id.size() > 0
-          && partyExists(resource.data.party_id)
+          && partyDocExists(resource.data.party_id)
         );
       allow create: if request.auth != null
         && isSafeCommonData(request.resource.data)
@@ -865,11 +848,10 @@ service cloud.firestore {
       match /tracks/{trackId} {
         allow read: if request.auth != null
           || (
-            exists(/databases/$(database)/documents/music_history/$(sessionId))
-            && get(/databases/$(database)/documents/music_history/$(sessionId)).data.party_id is string
-            && partyExists(get(/databases/$(database)/documents/music_history/$(sessionId)).data.party_id)
+            exists(musicHistoryDocPath(sessionId))
+            && musicHistorySessionData(sessionId).party_id is string
+            && partyDocExists(musicHistorySessionData(sessionId).party_id)
           );
-        // Schreibzugriff: war zwischenzeitlich nur implizit verboten → DJ-.add() schlug fehl (PERMISSION_DENIED)
         allow create: if canWriteMusicHistoryTracks(sessionId)
           && isSafeMusicHistoryTrackData(request.resource.data);
         allow update: if canWriteMusicHistoryTracks(sessionId)
@@ -963,7 +945,6 @@ service cloud.firestore {
       }
     }
 
-    // Default-Deny für alles, was nicht explizit erlaubt wurde.
     match /{document=**} {
       allow read, write: if false;
     }

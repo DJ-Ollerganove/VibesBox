@@ -38,7 +38,7 @@ android {
         // Mindestanforderung: Android 5.0 (API 21) für breite Kompatibilität
         // Android 8.1 ist API 27, sollte also unterstützt werden
         minSdk = flutter.minSdkVersion  // Explizit gesetzt für Android 5.0+
-        targetSdk = 36
+        targetSdk = 35
         // Aus pubspec bzw. `flutter build --build-name` / `--build-number` (keine festen Werte!)
         versionCode = flutter.versionCode
         versionName = flutter.versionName
