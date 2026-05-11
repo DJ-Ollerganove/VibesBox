@@ -3,8 +3,8 @@
 Das Agent-Terminal kann GitHub **HTTPS** nicht über den macOS-Schlüsselbund anmelden.
 
 1. GitHub → **Settings → Developer settings → Personal access tokens** → Token mit Scope **`repo`** erzeugen.
-2. Im Projektroot den Ordner **`.secrets/`** anlegen (liegt in `.gitignore`).
-3. Datei **`.secrets/cursor_git.env`** anlegen mit genau einer Zeile (siehe auch `scripts/cursor_git_env.example`):
+2. Im Projektroot den Ordner **`secrets_cursor/`** anlegen – auch **im Finder** möglich (kein Name mit führendem Punkt).
+3. Datei **`secrets_cursor/cursor_git.env`** anlegen mit genau einer Zeile (siehe auch `scripts/cursor_git_env.example`):
 
    `GITHUB_PAT=ghp_…`
 

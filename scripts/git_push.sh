@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Push zu origin – für Cursor-Agent und CI, wenn HTTPS ohne Keychain funktioniert.
-# Voraussetzung: .secrets/cursor_git.env mit GITHUB_PAT (siehe scripts/cursor_git_env.example)
+# Voraussetzung: secrets_cursor/cursor_git.env mit GITHUB_PAT (siehe scripts/cursor_git_env.example)
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-ENV_FILE="$ROOT/.secrets/cursor_git.env"
+ENV_FILE="$ROOT/secrets_cursor/cursor_git.env"
 if [[ -f "$ENV_FILE" ]]; then
   # shellcheck disable=SC1090
   set -a
@@ -17,7 +17,7 @@ fi
 TOKEN="${GITHUB_PAT:-${GITHUB_TOKEN:-}}"
 if [[ -z "$TOKEN" ]]; then
   echo "git_push.sh: Kein GITHUB_PAT oder GITHUB_TOKEN." >&2
-  echo "Lege an: $ROOT/.secrets/cursor_git.env (Vorlage: scripts/cursor_git_env.example)" >&2
+  echo "Lege an: $ROOT/secrets_cursor/cursor_git.env (Vorlage: scripts/cursor_git_env.example)" >&2
   exit 2
 fi
 
