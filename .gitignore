@@ -79,6 +79,9 @@ backup_*/
 *.aab
 *.apk
 
+# Firebase Functions -- local parameters (.env for non-interactive CLI deploys)
+functions/.env
+
 # Secrets (do not commit)
 AuthKey.p8
 **/serviceAccount*.json
