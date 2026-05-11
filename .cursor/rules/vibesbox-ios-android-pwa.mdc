@@ -1,0 +1,30 @@
+---
+description: VibesBox – immer Flutter (iOS+Android) und PWA (public/) zusammen denken; Git-Push für Agent.
+alwaysApply: true
+---
+
+# VibesBox: iOS, Android und PWA (`public/`)
+
+## Drei Oberflächen, ein Produkt
+
+- **Flutter-App** (`lib/`, `pubspec.yaml`, `android/`, `ios/`): gleiche Logik für **iOS und Android**. Änderungen an Features, Texten, Party-Flows, Auth, Deep Links usw. immer prüfen, ob beide Plattformen betroffen sind (keine iOS-only-Lösung ohne Android-Check und umgekehrt).
+- **PWA / Web-Assets** unter **`public/`** (z. B. `public/vb/app.js`, `public/vb/index.html`, `public/index.html`, `public/party_shared.js`, `public/lang_menu_shared.js`): oft gleiche Nutzerflows wie die App. Wenn sich Verhalten, URLs, Sprachen oder Limits ändern, **PWA-Dateien mitbedenken**, nicht nur `lib/`.
+
+## Nach Arbeit an `public/` (Hosting)
+
+- Regel **Firebase Hosting** beachten: am Ende der Session **`firebase deploy --only hosting`** aus dem Projektroot ausführen (wenn Firebase CLI und Login vorhanden), nicht nur vorschlagen.
+
+## Lokale Vorbereitung (Mac)
+
+- Bei größeren Abhängigkeits-/Native-Änderungen sinnvoll: `./scripts/dev_prepare_all_targets.sh` (Flutter + CocoaPods).
+
+## Git / GitHub – Push aus dem Agent-Terminal
+
+- Das Agent-Terminal hat **keinen** Zugriff auf den macOS-Schlüsselbund; HTTPS-Push schlägt ohne Token fehl.
+- **Push-Befehl für den Agenten:** aus Projektroot **`./scripts/git_push.sh`** ausführen (optional Branch als Argument: `./scripts/git_push.sh main`).
+- Voraussetzung **einmalig** auf dem Rechner: Datei **`.secrets/cursor_git.env`** (nicht im Git) anlegen, Vorlage **`scripts/cursor_git_env.example`**. Darin **`GITHUB_PAT=…`** (GitHub Personal Access Token mit `repo`-Recht).
+- Wenn `git_push.sh` mit Exitcode **2** endet: Nutzer kurz und konkret auf `.secrets/cursor_git.env` hinweisen (kein Moralisieren); danach Push erneut ausführen.
+
+## Keine Secrets committen
+
+- `.secrets/`, echte Tokens, `android/key.properties`, Keystores, `google-services.json` nur nach Team-Policy – Standard: **nicht** öffentlich committen.

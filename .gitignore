@@ -98,5 +98,8 @@ __pycache__/
 # Temp uploads
 .tmp.driveupload/
 
+# Cursor-Agent / lokale Geheimnisse (Git-Push aus Agent-Terminal, nie committen)
+.secrets/
+
 # Local tooling extract (ShazamKit AAR inspect)
 **/_tmp_shazamkit/

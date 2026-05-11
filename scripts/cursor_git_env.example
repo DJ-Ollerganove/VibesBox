@@ -1,0 +1,6 @@
+# Kopiere diese Datei nach:  .secrets/cursor_git.env  (Ordner .secrets/ ist in .gitignore)
+# GitHub → Settings → Developer settings → Fine-grained oder classic PAT mit repo-Berechtigung.
+#
+# Danach kann der Agent (und du) im Projektroot ausführen:  ./scripts/git_push.sh
+
+GITHUB_PAT=ghp_hier_dein_token_einfuegen
