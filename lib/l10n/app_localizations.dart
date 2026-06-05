@@ -32,6 +32,16 @@ class AppLocalizations {
   String get turkish => translate('turkish');
   String get arabic => translate('arabic');
   String get portuguese => translate('portuguese');
+  String get italian => translate('italian');
+  String get ukrainian => translate('ukrainian');
+  String get hindi => translate('hindi');
+  String get albanian => translate('albanian');
+  String get vietnamese => translate('vietnamese');
+  String get japanese => translate('japanese');
+  String get greek => translate('greek');
+  String get dutch => translate('dutch');
+  String get polish => translate('polish');
+  String get czech => translate('czech');
   String get addManualWish => translate('add_manual_wish');
   String get manualByDj => translate('manual_by_dj');
   String get pleaseEnterTitleOrArtist => translate('please_enter_title_or_artist');
@@ -193,6 +203,7 @@ class AppLocalizations {
       .replaceAll('{remaining}', remaining.toString())
       .replaceAll('{limit}', limit.toString());
   String get wish_limit_reset_next_hour => translate('wish_limit_reset_next_hour');
+  String get wish_hourly_limit_reached_body => translate('wish_hourly_limit_reached_body');
   String get wishbox_inactive_description => translate('wishbox_inactive_description');
   String get wishbox_scan_qr_first => translate('wishbox_scan_qr_first');
   String get party_code_input_hint => translate('party_code_input_hint');
@@ -205,6 +216,10 @@ class AppLocalizations {
   String get party_code_invalid_or_inactive => translate('party_code_invalid_or_inactive');
   String get party_code_invalid => translate('party_code_invalid');
   String get party_code_ended => translate('party_code_ended');
+  String partyEndedWithDj(String partyName, String djName) =>
+      translate('party_ended_with_dj')
+          .replaceAll('{partyName}', partyName)
+          .replaceAll('{djName}', djName);
   String get party_code_not_started => translate('party_code_not_started');
   String get party_code_unknown => translate('party_code_unknown');
   String get party_start_at => translate('party_start_at');
@@ -241,6 +256,8 @@ class AppLocalizations {
 
   String get contact_info_vibesbox => translate('contact_info_vibesbox');
   String get contact_free_mode_info => translate('contact_free_mode_info');
+  /// Platzhalter `{djName}` — DJ-Name fett in [ContactPage] per [Text.rich].
+  String get contactDjRecipientHintTemplate => translate('contact_dj_recipient_hint');
   String get contact_success_title => translate('contact_success_title');
   String get contact_success_body => translate('contact_success_body');
   String get contact_support_success_title => translate('contact_support_success_title');
@@ -278,7 +295,11 @@ class AppLocalizations {
   String get pwaRequestHeaderText => translate('pwa_request_header_text');
   String get byDjPrefix => translate('by_dj_prefix');
   String get partyLabel => translate('party_label');
+  String get partyInfoText => translate('party_info_text');
+  String get preWishHeaderForParty => translate('pre_wish_header_for_party');
+  String get preWishPartyStartLabel => translate('pre_wish_party_start_label');
   String get wishSentReceived => translate('wish_sent_received');
+  String get preWishSentReceived => translate('pre_wish_sent_received');
   String get close => translate('close');
   
   // Home Page
@@ -510,6 +531,10 @@ class AppLocalizations {
   String get updateVersionPatch => translate('update_version_patch');
   String get updateNewTargetVersionPreview => translate('update_new_target_version_preview');
   String get updateCheckboxQuestion => translate('update_checkbox_question');
+  String get updateAndroidSectionTitle => translate('update_android_section_title');
+  String get updateIosSectionTitle => translate('update_ios_section_title');
+  String get updateApplyGuestCheckbox => translate('update_apply_guest_checkbox');
+  String get updateApplyDjCheckbox => translate('update_apply_dj_checkbox');
   String get updateMinVersionDjAndroid => translate('update_min_version_dj_android');
   String get updateMinVersionDjIos => translate('update_min_version_dj_ios');
   String get updateMinVersionGuestAndroid => translate('update_min_version_guest_android');
@@ -633,6 +658,9 @@ class AppLocalizations {
       translate('trial_expired_dialog_message');
   String get trial_expired_dialog_ok => translate('trial_expired_dialog_ok');
   String get paywall_start_trial_button => translate('paywall_start_trial_button');
+  String get paywall_trial_confirm_title => translate('paywall_trial_confirm_title');
+  String get paywall_trial_confirm_message =>
+      translate('paywall_trial_confirm_message');
   String get pro_life_revoked => translate('pro_life_revoked');
   String get payment_source_store => translate('payment_source_store');
   String get payment_amount_credit => translate('payment_amount_credit');
@@ -808,6 +836,7 @@ class AppLocalizations {
   String get error_processing_image => translate('error_processing_image');
   String get image_too_large => translate('image_too_large');
   String get profile_picture_uploaded => translate('profile_picture_uploaded');
+  String get profile_picture_account_hint => translate('profile_picture_account_hint');
   String get error_uploading => translate('error_uploading');
   String get new_password => translate('new_password');
   String get password_requirements => translate('password_requirements');
@@ -910,6 +939,16 @@ class AppLocalizations {
   String get enter_url => translate('enter_url');
   String get url_required => translate('url_required');
   String get invalid_url => translate('invalid_url');
+  String get social_hint_account => translate('social_hint_account');
+  String get social_hint_facebook => translate('social_hint_facebook');
+  String get social_hint_instagram => translate('social_hint_instagram');
+  String get social_hint_tiktok => translate('social_hint_tiktok');
+  String get social_hint_spotify => translate('social_hint_spotify');
+  String get social_hint_soundcloud => translate('social_hint_soundcloud');
+  String get social_hint_youtube => translate('social_hint_youtube');
+  String get social_hint_whatsapp => translate('social_hint_whatsapp');
+  String get social_hint_website => translate('social_hint_website');
+  String get invalid_whatsapp_phone => translate('invalid_whatsapp_phone');
   String get social_media_saved => translate('social_media_saved');
   String get error_saving_social_media => translate('error_saving_social_media');
   String get remove_link => translate('remove_link');
@@ -961,7 +1000,50 @@ class AppLocalizations {
   String get clear_party_location => translate('clear_party_location');
   String get status_changes => translate('status_changes');
   String get wishbox_paused => translate('wishbox_paused');
+  String get wishbox_paused_guest_message => translate('wishbox_paused_guest_message');
   String get wishbox_resumed => translate('wishbox_resumed');
+
+
+
+
+  String get pre_wishes_label => translate('pre_wishes_label');
+  String get pre_wish_count_singular => translate('pre_wish_count_singular');
+  String get pre_wish_count_plural => translate('pre_wish_count_plural');
+  String get pre_wishes_overview_title => translate('pre_wishes_overview_title');
+  String get vorab_tab => translate('vorab_tab');
+  String get dj_wish_tab_vorab => translate('dj_wish_tab_vorab');
+  String get dj_wish_tab_open => translate('dj_wish_tab_open');
+  String get dj_wish_tab_played => translate('dj_wish_tab_played');
+  String get dj_wish_tab_rejected => translate('dj_wish_tab_rejected');
+  String get pre_wish_badge => translate('pre_wish_badge');
+  String get pre_wish_badge_tooltip => translate('pre_wish_badge_tooltip');
+  String get pre_wish_overview_status_open_tooltip =>
+      translate('pre_wish_overview_status_open_tooltip');
+  String get pre_wish_publish_tooltip => translate('pre_wish_publish_tooltip');
+  String get pre_wish_publish_confirm_title => translate('pre_wish_publish_confirm_title');
+  String get pre_wish_publish_confirm_body => translate('pre_wish_publish_confirm_body');
+  String get pre_wishes_auto_publish_switch =>
+      translate('pre_wishes_auto_publish_switch');
+  String get pre_wishes_auto_publish_switch_hint =>
+      translate('pre_wishes_auto_publish_switch_hint');
+  String get pre_wishes_moving_to_open_banner =>
+      translate('pre_wishes_moving_to_open_banner');
+  String get pre_wish_banner_body => translate('pre_wish_banner_body');
+  String get pre_wish_submit_blocked_deadline => translate('pre_wish_submit_blocked_deadline');
+  String get party_allow_pre_wishes => translate('party_allow_pre_wishes');
+  String get party_allow_pre_wishes_info_title => translate('party_allow_pre_wishes_info_title');
+  String get party_allow_pre_wishes_info_body => translate('party_allow_pre_wishes_info_body');
+  String get party_pre_wish_limit_label => translate('party_pre_wish_limit_label');
+  String get party_pre_wish_limit_unlimited => translate('party_pre_wish_limit_unlimited');
+  String get party_pre_wish_limit_limited => translate('party_pre_wish_limit_limited');
+  String get party_pre_wish_limit_count => translate('party_pre_wish_limit_count');
+  String pre_wish_limit_remaining(int remaining, int limit) =>
+      translate('pre_wish_limit_remaining')
+          .replaceAll('{remaining}', remaining.toString())
+          .replaceAll('{limit}', limit.toString());
+  String pre_wish_limit_reached(int limit) => translate('pre_wish_limit_reached')
+      .replaceAll('{limit}', limit.toString());
+  String get pre_wish_limit_loading => translate('pre_wish_limit_loading');
   String get party_wish_limits => translate('party_wish_limits');
   String get party_guest_limit => translate('party_guest_limit');
   String get party_user_limit => translate('party_user_limit');
@@ -1166,6 +1248,76 @@ class AppLocalizations {
   String get party_name_label_new => translate('party_name_label_new');
   String get party_name_hint => translate('party_name_hint');
   String get party_name_required => translate('party_name_required');
+  String get party_name_min_length => translate('party_name_min_length');
+  String get party_wizard_next => translate('party_wizard_next');
+  String party_wizard_step_indicator(int current, int total) =>
+      translate('party_wizard_step_indicator')
+          .replaceAll('{current}', '$current')
+          .replaceAll('{total}', '$total');
+  String party_wizard_step_number_only(int current) =>
+      translate('party_wizard_step_number_only')
+          .replaceAll('{current}', '$current');
+  String get party_floor_label => translate('party_floor_label');
+  String get party_floor_default_option => translate('party_floor_default_option');
+  String get party_floor_add_new => translate('party_floor_add_new');
+  String get party_floor_select_hint => translate('party_floor_select_hint');
+  String get party_floor_occupied_hint => translate('party_floor_occupied_hint');
+  String get party_venue_overlap_info_body =>
+      translate('party_venue_overlap_info_body');
+  String get party_public_location_coords_required =>
+      translate('party_public_location_coords_required');
+  String get party_floor_add_dialog_title =>
+      translate('party_floor_add_dialog_title');
+  String get party_floor_add_dialog_hint =>
+      translate('party_floor_add_dialog_hint');
+  String get party_floor_name_required => translate('party_floor_name_required');
+  String get guest_floor_switch_button => translate('guest_floor_switch_button');
+  String get guest_floor_picker_title => translate('guest_floor_picker_title');
+  String get guest_floor_picker_choose => translate('guest_floor_picker_choose');
+  String guest_floor_ended_redirect_message(String floorLabel) =>
+      translate('guest_floor_ended_redirect_message')
+          .replaceAll('{floorLabel}', floorLabel);
+  String get guest_floor_main_area => translate('guest_floor_main_area');
+  String guest_floor_option_label(String floorLabel, String djName) =>
+      translate('guest_floor_option_label')
+          .replaceAll('{floorLabel}', floorLabel)
+          .replaceAll('{djName}', djName);
+  String get venue_bookmarks_title => translate('venue_bookmarks_title');
+  String get venue_bookmarks_use => translate('venue_bookmarks_use');
+  String get party_floor_swap_request => translate('party_floor_swap_request');
+  String get party_floor_swap_dialog_title =>
+      translate('party_floor_swap_dialog_title');
+  String party_floor_swap_dialog_body(String djName, String floorLabel) =>
+      translate('party_floor_swap_dialog_body')
+          .replaceAll('{djName}', djName)
+          .replaceAll('{floorLabel}', floorLabel);
+  String party_floor_swap_dialog_your_floor(String floorLabel) =>
+      translate('party_floor_swap_dialog_your_floor')
+          .replaceAll('{floorLabel}', floorLabel);
+  String get party_floor_swap_sent => translate('party_floor_swap_sent');
+  String get party_floor_swap_failed => translate('party_floor_swap_failed');
+  String get party_floor_swap_incoming_title =>
+      translate('party_floor_swap_incoming_title');
+  String party_floor_swap_incoming_body(
+    String djName,
+    String yourFloor,
+    String theirFloor,
+  ) =>
+      translate('party_floor_swap_incoming_body')
+          .replaceAll('{djName}', djName)
+          .replaceAll('{yourFloor}', yourFloor)
+          .replaceAll('{theirFloor}', theirFloor);
+  String get party_floor_swap_accept => translate('party_floor_swap_accept');
+  String get party_floor_swap_reject => translate('party_floor_swap_reject');
+  String get party_floor_swap_accepted => translate('party_floor_swap_accepted');
+  String get party_floor_swap_after_save_hint =>
+      translate('party_floor_swap_after_save_hint');
+  String get party_registered_app_guest =>
+      translate('party_registered_app_guest');
+  String get party_registered_app_guest_info_title =>
+      translate('party_registered_app_guest_info_title');
+  String get party_registered_app_guest_info_body =>
+      translate('party_registered_app_guest_info_body');
   String get select_hour => translate('select_hour');
   String get select_minute => translate('select_minute');
   String get party_new => translate('party_new');
@@ -1540,6 +1692,24 @@ class AppLocalizations {
       translate('admin_stats_vibesbox_status_title');
   String get admin_stats_duplicate_limit_percent =>
       translate('admin_stats_duplicate_limit_percent');
+  String get admin_platform_totals_title =>
+      translate('admin_platform_totals_title');
+  String get admin_platform_totals_recount_hint =>
+      translate('admin_platform_totals_recount_hint');
+  String get admin_platform_totals_guests =>
+      translate('admin_platform_totals_guests');
+  String get admin_platform_totals_djs_total =>
+      translate('admin_platform_totals_djs_total');
+  String get admin_platform_totals_djs_free =>
+      translate('admin_platform_totals_djs_free');
+  String get admin_platform_totals_djs_pro =>
+      translate('admin_platform_totals_djs_pro');
+  String get admin_platform_totals_djs_pro_life =>
+      translate('admin_platform_totals_djs_pro_life');
+  String get admin_platform_totals_parties_total =>
+      translate('admin_platform_totals_parties_total');
+  String get admin_platform_totals_parties_running =>
+      translate('admin_platform_totals_parties_running');
   String get admin_duplicate_threshold_hint =>
       translate('admin_duplicate_threshold_hint');
   String get role_switch_admin_area => translate('role_switch_admin_area');
@@ -1648,12 +1818,20 @@ class AppLocalizations {
   String get admin_user_no_device_registered =>
       translate('admin_user_no_device_registered');
   String get admin_user_app_prefix => translate('admin_user_app_prefix');
+  String get admin_user_app_language_label =>
+      translate('admin_user_app_language_label');
+  String get admin_user_app_language_not_set =>
+      translate('admin_user_app_language_not_set');
+  String get admin_user_app_language_from_device_suffix =>
+      translate('admin_user_app_language_from_device_suffix');
   String get admin_device_map_key => translate('admin_device_map_key');
   String get admin_device_platform => translate('admin_device_platform');
   String get admin_device_model => translate('admin_device_model');
   String get admin_device_os_version => translate('admin_device_os_version');
   String get admin_device_app_version => translate('admin_device_app_version');
   String get admin_device_last_seen => translate('admin_device_last_seen');
+  String get admin_device_system_locale =>
+      translate('admin_device_system_locale');
   String get admin_lifetime_tooltip_active => translate('admin_lifetime_tooltip_active');
   String get admin_lifetime_tooltip_grant => translate('admin_lifetime_tooltip_grant');
   String get admin_pro_tooltip_life => translate('admin_pro_tooltip_life');
@@ -1715,6 +1893,8 @@ class AppLocalizations {
   String get paywall_plan_halfyear => translate('paywall_plan_halfyear');
   String get paywall_plan_year => translate('paywall_plan_year');
   String get paywall_tip_badge => translate('paywall_tip_badge');
+  String paywall_save_up_to_percent(int percent) =>
+      translate('paywall_save_up_to_percent').replaceAll('{percent}', '$percent');
   String get paywall_free_phase_label => translate('paywall_free_phase_label');
   String get dj_home_trial_banner_title => translate('dj_home_trial_banner_title');
   String get dj_home_display_name_fallback => translate('dj_home_display_name_fallback');
@@ -1723,6 +1903,35 @@ class AppLocalizations {
   String get dj_home_stats_row_total => translate('dj_home_stats_row_total');
   String get dj_home_stats_row_played => translate('dj_home_stats_row_played');
   String get dj_home_stats_row_party_count => translate('dj_home_stats_row_party_count');
+  String get dj_home_customize_tooltip => translate('dj_home_customize_tooltip');
+  String get dj_home_edit_title => translate('dj_home_edit_title');
+  String get dj_home_edit_hint => translate('dj_home_edit_hint');
+  String get dj_home_widget_welcome => translate('dj_home_widget_welcome');
+  String get dj_home_widget_party_status => translate('dj_home_widget_party_status');
+  String get dj_home_widget_party_status_sub => translate('dj_home_widget_party_status_sub');
+  String get dj_home_widget_stats_live => translate('dj_home_widget_stats_live');
+  String get dj_home_widget_stats_live_sub => translate('dj_home_widget_stats_live_sub');
+  String get dj_home_widget_stats_last => translate('dj_home_widget_stats_last');
+  String get dj_home_widget_stats_upcoming => translate('dj_home_widget_stats_upcoming');
+  String get dj_home_widget_stats_logins => translate('dj_home_widget_stats_logins');
+  String get dj_home_widget_stats_total => translate('dj_home_widget_stats_total');
+  String get dj_home_widget_party_carousel => translate('dj_home_widget_party_carousel');
+  String get dj_home_widget_party_history_carousel =>
+      translate('dj_home_widget_party_history_carousel');
+  String get dj_home_widget_history_recent => translate('dj_home_widget_history_recent');
+  String get dj_home_widget_open_wishes_count => translate('dj_home_widget_open_wishes_count');
+  String get dj_home_widget_pre_wishes_count => translate('dj_home_widget_pre_wishes_count');
+  String get dj_home_widget_pre_wishes_count_sub =>
+      translate('dj_home_widget_pre_wishes_count_sub');
+  String get dj_home_no_party_running => translate('dj_home_no_party_running');
+  String get dj_home_no_saved_last_party => translate('dj_home_no_saved_last_party');
+  String get dj_home_music_history_title => translate('dj_home_music_history_title');
+  String get dj_home_no_songs_yet => translate('dj_home_no_songs_yet');
+  String get dj_home_party_history_title => translate('dj_home_party_history_title');
+  String get dj_home_party_management_title => translate('dj_home_party_management_title');
+  String get dj_home_widget_pro_trial_banner => translate('dj_home_widget_pro_trial_banner');
+  String get dj_home_widget_pro_promotion => translate('dj_home_widget_pro_promotion');
+  String get dj_home_widget_pro_comparison => translate('dj_home_widget_pro_comparison');
   String get stats_piechart_waiting_for_data => translate('stats_piechart_waiting_for_data');
   String get stats_piechart_no_global_data => translate('stats_piechart_no_global_data');
   String get stats_error_unknown => translate('stats_error_unknown');
@@ -1773,6 +1982,10 @@ class AppLocalizations {
   String get settings_title => translate('settings_title');
   String get translation_settings_title => translate('translation_settings_title');
   String get translation_settings_description => translate('translation_settings_description');
+  String get settings_wishbox_suggestions_title =>
+      translate('settings_wishbox_suggestions_title');
+  String get settings_wishbox_suggestions_subtitle =>
+      translate('settings_wishbox_suggestions_subtitle');
   String get settings_text_scale_title => translate('settings_text_scale_title');
   String get settings_text_scale_subtitle => translate('settings_text_scale_subtitle');
   String get settings_text_scale_smallest => translate('settings_text_scale_smallest');
@@ -1800,6 +2013,35 @@ class AppLocalizations {
         'dj_notification_song_line',
       ).replaceAll('{title}', title).replaceAll('{artist}', artist);
   String get settings_saved => translate('settings_saved');
+  String get results_per_page => translate('results_per_page');
+  String settingsResultsPerPageSaved(int count) => translate(
+        'settings_results_per_page_saved',
+      ).replaceAll('%1\$s', '$count');
+  String get settings_grace_period_title =>
+      translate('settings_grace_period_title');
+  String get settings_grace_period_hint =>
+      translate('settings_grace_period_hint');
+  String settingsGracePeriodMinutes(int minutes) => translate(
+        'settings_grace_period_minutes',
+      ).replaceAll('%1\$s', '$minutes');
+  String settingsGracePeriodSaved(int minutes) => translate(
+        'settings_grace_period_saved',
+      ).replaceAll('%1\$s', '$minutes');
+  String get party_status_grace_period =>
+      translate('party_status_grace_period');
+  String get party_grace_countdown_wishes_still =>
+      translate('party_grace_countdown_wishes_still');
+  String get grace_period_hide_wishes_now =>
+      translate('grace_period_hide_wishes_now');
+  String get grace_period_hide_wishes_confirm =>
+      translate('grace_period_hide_wishes_confirm');
+  String get grace_period_hide_now => translate('grace_period_hide_now');
+  String get snackbar_grace_wishes_hidden =>
+      translate('snackbar_grace_wishes_hidden');
+  String get settings_results_per_page_hint =>
+      translate('settings_results_per_page_hint');
+  String get settings_guest_results_per_page_hint =>
+      translate('settings_guest_results_per_page_hint');
   String get about_word => translate('about_word');
 
   // DJ Quickstart-Guide

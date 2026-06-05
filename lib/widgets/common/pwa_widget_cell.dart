@@ -7,11 +7,14 @@ class PwaWidgetCell extends StatelessWidget {
   final Widget child;
   /// Optional: Rahmenfarbe (Standard: appOrange). Für Party-Bereich z.B. partyYellow.
   final Color? borderColor;
+  /// Optional: Innenabstand (Standard 24 px wie PWA).
+  final EdgeInsetsGeometry? padding;
 
   const PwaWidgetCell({
     super.key,
     required this.child,
     this.borderColor,
+    this.padding,
   });
 
   @override
@@ -46,7 +49,7 @@ class PwaWidgetCell extends StatelessWidget {
       ),
       // Padding: 24px wie in PWA --info-cell-padding
       child: Padding(
-        padding: const EdgeInsets.all(24.0),
+        padding: padding ?? const EdgeInsets.all(24.0),
         child: child,
       ),
     );

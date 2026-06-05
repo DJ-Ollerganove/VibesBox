@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../config/app_config.dart';
 import 'user_service.dart';
 import '../utils/debug_log.dart';
+import '../utils/wish_paths.dart';
 
 class DjDashboardStatistics {
   final int totalWishes;
@@ -83,25 +84,24 @@ class DjDashboardStatisticsService {
       int total = 0, played = 0, rejected = 0, open = 0, deleted = 0;
       for (var i = 0; i < partyIds.length; i += chunkSize) {
         final chunk = partyIds.skip(i).take(chunkSize).toList();
-        final wishesQuery = await FirebaseFirestore.instance
-            .collection('wishes')
-            .where('party_id', whereIn: chunk)
-            .get();
-        for (final doc in wishesQuery.docs) {
-          final data = doc.data();
-          total++;
-          final isDeleted = data['deleted'] as bool? ?? false;
-          if (isDeleted) {
-            deleted++;
-            continue;
-          }
-          final status = data['status'] as String?;
-          if (status == 'played') {
-            played++;
-          } else if (status == 'rejected') {
-            rejected++;
-          } else {
-            open++;
+        for (final pid in chunk) {
+          final wishesQuery = await WishPaths.partyWishes(pid).get();
+          for (final doc in wishesQuery.docs) {
+            final data = doc.data();
+            total++;
+            final isDeleted = data['deleted'] as bool? ?? false;
+            if (isDeleted) {
+              deleted++;
+              continue;
+            }
+            final status = data['status'] as String?;
+            if (status == 'played') {
+              played++;
+            } else if (status == 'rejected') {
+              rejected++;
+            } else {
+              open++;
+            }
           }
         }
       }

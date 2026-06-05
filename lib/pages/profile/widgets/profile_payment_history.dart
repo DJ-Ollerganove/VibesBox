@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../../l10n/app_localizations.dart';
+import '../../../utils/formatting_utils.dart';
 import '../../../utils/ui_constants.dart';
 
 /// Baut die Historie der Zahlungen/Abos. Block inkl. Überschrift nur sichtbar, wenn Einträge vorhanden.
@@ -57,7 +58,6 @@ class ProfilePaymentHistory extends StatelessWidget {
               itemBuilder: (context, index) {
                 final data = docs[index].data() as Map<String, dynamic>;
                 final localizations = AppLocalizations.of(context)!;
-                final locale = Localizations.localeOf(context);
 
                 final timestamp = (data['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now();
                 final amount = (data['amountGross'] as num?)?.toDouble() ?? 0.0;
@@ -70,7 +70,10 @@ class ProfilePaymentHistory extends StatelessWidget {
                 } else if (type == 'lifetime_grant' || type == 'LIFETIME_GIFT') {
                   amountText = localizations.payment_amount_gifted;
                 } else {
-                  amountText = NumberFormat.currency(locale: locale.toString(), symbol: '€').format(amount);
+                  amountText = NumberFormat.currency(
+                    locale: FormattingUtils.intlTag(context),
+                    symbol: '€',
+                  ).format(amount);
                 }
 
                 String sourceDisplay = source ?? (localizations.unknown);
@@ -78,9 +81,10 @@ class ProfilePaymentHistory extends StatelessWidget {
                 if (source == 'ADMIN_GIFT') sourceDisplay = localizations.vibesbox_pro_life;
                 if (source == 'ADMIN_REVOKE') sourceDisplay = localizations.pro_life_revoked;
 
-                final dateTimeFormat = DateFormat.yMd(locale.toString()).add_Hm();
-                final timeSuffix = (localizations.time_suffix).trim();
-                final dateTimeText = dateTimeFormat.format(timestamp) + (timeSuffix.isEmpty ? '' : ' $timeSuffix');
+                final dateTimeText = FormattingUtils.formatDateTimeYmdHmWithSuffix(
+                  timestamp,
+                  context,
+                );
 
                 return Container(
                   margin: const EdgeInsets.only(bottom: 8),

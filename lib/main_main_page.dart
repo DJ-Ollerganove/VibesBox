@@ -105,6 +105,21 @@ class _MainPageState extends State<MainPage>
   UserModel? _lastUserModelForUi;
   String? _lastNotificationLocaleTag;
 
+  /// Shell einmal erfolgreich gerendert — kein Vollbild-Lade-Overlay erneut bis Logout (auch nach Prozess-Neustart).
+  bool _shellContentReady = false;
+  String? _cachedShellRoleName;
+  String? _cachedShellViewRole;
+  static const String _prefsShellReadyUid = 'main_shell_ready_uid';
+  static const String _prefsShellRoleName = 'main_shell_role_name';
+  static const String _prefsShellViewRole = 'main_shell_view_role';
+
+  final GlobalKey _partyVerwaltungPageKey = GlobalKey();
+  final GlobalKey _djVibesBoxPageKey = GlobalKey();
+  final GlobalKey _gesperrtPageKey = GlobalKey();
+  final GlobalKey _historyPageKey = GlobalKey();
+  final GlobalKey _profilPageKey = GlobalKey();
+  final GlobalKey _settingsPageKey = GlobalKey();
+
   // Zentrale Datenverwaltung
   List<SongRequest> _currentWishesList =
       []; // Aktuelle Liste der Wünsche (wird nicht mehr verwendet)
@@ -132,6 +147,8 @@ class _MainPageState extends State<MainPage>
       if (!mounted) return;
       if (FirebaseAuth.instance.currentUser == null) return;
       try {
+        // Party-Stream und Prefs zuerst fertig — sonst feuert Autostart auf dem iPad oft zu früh.
+        await ActivePartyService.initialize();
         await PartyAutostartService().initialize();
       } catch (e) {
         debugLog('❌ PartyAutostartService.initialize: $e');
@@ -159,6 +176,7 @@ class _MainPageState extends State<MainPage>
       AppUpdateService.debugFetchAndPrintStoreVersion();
     }
     unawaited(_maybeRunPartyDataCleanupForAdmin());
+    syncFloorSwapIncomingListener();
   }
 
   /// Einmaliges [PartyCleanupService] nur mit Admin + geladenem Profil (parties-Collection).
@@ -529,6 +547,82 @@ class _MainPageState extends State<MainPage>
 
   int get currentIndex => NavigationService().currentTabIndex.value;
 
+  Future<void> _hydrateShellCacheFromPrefs() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getString(_prefsShellReadyUid) != user.uid) return;
+      final role = prefs.getString(_prefsShellRoleName)?.trim();
+      if (role == null || role.isEmpty) return;
+      if (!mounted) return;
+      setState(() {
+        _shellContentReady = true;
+        _cachedShellRoleName = role;
+        final vr = prefs.getString(_prefsShellViewRole)?.trim();
+        _cachedShellViewRole =
+            (vr != null && vr.isNotEmpty) ? vr : null;
+      });
+    } catch (e) {
+      debugLog('MainPage: _hydrateShellCacheFromPrefs: $e');
+    }
+  }
+
+  Future<void> _persistShellCache() async {
+    final user = FirebaseAuth.instance.currentUser;
+    final role = _currentRoleName ?? _cachedShellRoleName;
+    if (user == null || role == null || role.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_prefsShellReadyUid, user.uid);
+      await prefs.setString(_prefsShellRoleName, role);
+      final vr = _currentViewRole ?? _cachedShellViewRole;
+      if (vr != null && vr.isNotEmpty) {
+        await prefs.setString(_prefsShellViewRole, vr);
+      } else {
+        await prefs.remove(_prefsShellViewRole);
+      }
+    } catch (e) {
+      debugLog('MainPage: _persistShellCache: $e');
+    }
+  }
+
+  Future<void> _clearShellCache() async {
+    _shellContentReady = false;
+    _cachedShellRoleName = null;
+    _cachedShellViewRole = null;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_prefsShellReadyUid);
+      await prefs.remove(_prefsShellRoleName);
+      await prefs.remove(_prefsShellViewRole);
+    } catch (_) {}
+  }
+
+  void _markShellContentReady(String roleName, String? viewRole) {
+    _shellContentReady = true;
+    _cachedShellRoleName = roleName;
+    _cachedShellViewRole = viewRole;
+    unawaited(_persistShellCache());
+  }
+
+  void _onAppResumedDeferred() {
+    final user = FirebaseAuth.instance.currentUser;
+    debugLog('✅ App ist im Vordergrund (deferred resume)');
+    if (user != null) {
+      unawaited(AppUpdateService.logUserAppVersion());
+    }
+    unawaited(_tryConsumeVerifyDeepLinkOnResume());
+    unawaited(ActivePartyService.refreshPartyTruthOnResume());
+    unawaited(PartyAutostartService().reconcileAfterResume());
+    unawaited(ShazamService().syncForegroundAfterAppResumed());
+    _syncDjWishNotificationGate();
+    final role = _currentRoleName ?? _cachedShellRoleName;
+    if (user != null && role == 'Gast') {
+      unawaited(_tryAutoJoinStoredPartyForGuest());
+    }
+  }
+
   void _openGuestLogin() {
     if (_guestAuthStartInRegister) {
       setState(() => _guestAuthStartInRegister = false);
@@ -692,6 +786,11 @@ class _MainPageState extends State<MainPage>
           _syncDjWishNotificationGate();
         }
         if (_currentRoleName != null) {
+          if (_currentRoleName == 'DJ' ||
+              _currentRoleName == 'Admin' ||
+              _currentRoleName == 'Location') {
+            unawaited(_clearGuestPartyContextIfDjShell());
+          }
           return;
         }
       } else {
@@ -767,6 +866,14 @@ class _MainPageState extends State<MainPage>
       wantsAdminView = false;
     });
 
+    if (roleName != null && user != null) {
+      _markShellContentReady(roleName, _currentViewRole);
+    }
+
+    if (user != null && isDjRole) {
+      unawaited(_clearGuestPartyContextIfDjShell());
+    }
+
     if (roleName == 'Gast' && user != null) {
       unawaited(_tryAutoJoinStoredPartyForGuest());
     }
@@ -814,9 +921,12 @@ class _MainPageState extends State<MainPage>
           _adminOtpErrorText = null;
           _adminOtpChecking = false;
         });
+        _cachedShellViewRole = newRole;
+        unawaited(_persistShellCache());
         _clearAdminOtpInput();
         if (newRole == 'DJ') {
           await NavigationService().persistAdminViewRole(newRole);
+          unawaited(_clearGuestPartyContextIfDjShell());
         }
         return;
       }
@@ -981,6 +1091,13 @@ class _MainPageState extends State<MainPage>
   }
 
   void _onIndexChanged(int newIndex) {
+    if (_isGuestAreaRole() && GuestPreWishNavHelper.isPreWishNavMode) {
+      final historyIdx =
+          FirebaseAuth.instance.currentUser == null ? 6 : 2;
+      if (newIndex == historyIdx) {
+        newIndex = _guestWishesTabIndex();
+      }
+    }
     final oldIndex = _currentIndex;
     NavigationService().setTabIndex(newIndex);
 
@@ -1006,6 +1123,7 @@ class _MainPageState extends State<MainPage>
       if (visibleIds.isNotEmpty) {
         // Synchron zum Set hinzufügen (kein await, blockiert nicht)
         ActivePartyService.seenWishIds.addAll(visibleIds);
+        ActivePartyService.trimSeenWishIdsIfNeeded();
 
         // Speichere im Hintergrund (Fire-and-Forget, kein await)
         final user = FirebaseAuth.instance.currentUser;
@@ -1043,6 +1161,7 @@ class _MainPageState extends State<MainPage>
     WidgetsBinding.instance.addObserver(this);
     NavigationService().currentTabIndex.addListener(_onNavigationTabChanged);
     _previousUser = FirebaseAuth.instance.currentUser;
+    unawaited(_hydrateShellCacheFromPrefs());
 
     // Zentraler User-Stream: bei Änderung (z. B. role_id) Rollenname laden
     UserService().currentUser.addListener(_onUserModelChanged);
@@ -1118,10 +1237,15 @@ class _MainPageState extends State<MainPage>
           debugLog('🔐 MainPage: Logout – Dienste stoppen, Tab auf Start');
           SubscriptionSyncService.logOut();
           PartyAutostartService().dispose();
+          unawaited(PartySessionService.instance.clearSession());
+          unawaited(ActivePartyService.resetForLogout());
+          unawaited(_clearShellCache());
           NavigationService().resetToHome();
           unawaited(NavigationService().clearAdminViewRole());
           setState(() {
             _previousUser = null;
+            _currentViewRole = null;
+            _currentRoleName = null;
             _announcementCheckDone = false;
             _appColdStartDoneUid = null;
             _currentWishesList = [];
@@ -1144,8 +1268,12 @@ class _MainPageState extends State<MainPage>
             // Nach Abmeldung (z. B. von Verify-Email): Login-Tab zeigt Anmeldung + Party-Code, nicht Registrierung
             _guestAuthStartInRegister = false;
             _sessionLockedRoleId = null;
+            _lastRoleId = null;
           });
           _clearAdminOtpInput();
+          UserService().stopUserStream();
+          UserService().clearCache();
+          FloorSwapIncomingListener.instance.stop();
         }
       } else {
         _previousUser = user;
@@ -1393,62 +1521,67 @@ class _MainPageState extends State<MainPage>
   /// E-Mail-Verifizierung: [AppLinksService.tryApplyVerificationDeepLink] → `applyActionCode`.
   Future<bool> _tryHandleEmailVerificationDeepLink(Uri uri) async {
     try {
-      final applied =
+      final outcome =
           await AppLinksService.instance.tryApplyVerificationDeepLink(uri);
-      if (!applied) return false;
-      if (!mounted) return true;
-      final l = AppLocalizations.of(context)!;
-      final loc = l;
-      if (loc != null) {
-        await showDialog<void>(
-          context: context,
-          barrierDismissible: false,
-          builder: (ctx) => EmailVerificationResultDialog(
-            isSuccess: true,
-            statusText: loc.verify_success_title,
-            instructionText: loc.verify_success_instruction,
-            okLabel: loc.ok,
-            onDismiss: () => Navigator.of(ctx).pop(),
-          ),
-        );
+      if (outcome == null) return false;
+
+      if (outcome == EmailVerificationApplyOutcome.duplicateLink ||
+          outcome == EmailVerificationApplyOutcome.alreadyVerified) {
+        if (mounted) setState(() {});
+        return true;
       }
-      // Ohne setState bleibt die UI ggf. auf der Verify-Seite: authStateChangesDistinctByUid()
-      // filtert gleiche UIDs, ein Rebuild nach reload() erfolgt sonst oft nicht.
+
+      if (!mounted) return true;
+      final loc = AppLocalizations.of(context)!;
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => EmailVerificationResultDialog(
+          isSuccess: true,
+          statusText: loc.verify_success_title,
+          instructionText: loc.verify_success_instruction,
+          okLabel: loc.ok,
+          onDismiss: () => Navigator.of(ctx).pop(),
+        ),
+      );
       if (mounted) setState(() {});
     } on FirebaseAuthException catch (e, st) {
       debugLog('E-Mail-Verifizierung Deep Link: $e\n$st');
+      try {
+        await FirebaseAuth.instance.currentUser?.reload();
+      } catch (_) {}
+      if (FirebaseAuth.instance.currentUser?.emailVerified == true) {
+        if (mounted) setState(() {});
+        return true;
+      }
       if (!mounted) return true;
       final loc = AppLocalizations.of(context)!;
-      if (loc != null) {
-        await showDialog<void>(
-          context: context,
-          barrierDismissible: true,
-          builder: (ctx) => EmailVerificationResultDialog(
-            isSuccess: false,
-            statusText: loc.verify_error_title,
-            instructionText: loc.verify_error_instruction_login,
-            okLabel: loc.ok,
-            onDismiss: () => Navigator.of(ctx).pop(),
-          ),
-        );
-      }
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: true,
+        builder: (ctx) => EmailVerificationResultDialog(
+          isSuccess: false,
+          statusText: loc.verify_error_title,
+          instructionText: loc.verify_error_instruction_login,
+          okLabel: loc.ok,
+          onDismiss: () => Navigator.of(ctx).pop(),
+        ),
+      );
     } catch (e, st) {
       debugLog('E-Mail-Verifizierung Deep Link: $e\n$st');
       if (!mounted) return true;
       final loc = AppLocalizations.of(context)!;
-      if (loc != null) {
-        await showDialog<void>(
-          context: context,
-          barrierDismissible: true,
-          builder: (ctx) => EmailVerificationResultDialog(
-            isSuccess: false,
-            statusText: loc.verify_error_title,
-            instructionText: loc.verify_error_instruction_login,
-            okLabel: loc.ok,
-            onDismiss: () => Navigator.of(ctx).pop(),
-          ),
-        );
-      }
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: true,
+        builder: (ctx) => EmailVerificationResultDialog(
+          isSuccess: false,
+          statusText: loc.verify_error_title,
+          instructionText: loc.verify_error_instruction_login,
+          okLabel: loc.ok,
+          onDismiss: () => Navigator.of(ctx).pop(),
+        ),
+      );
     }
     return true;
   }
@@ -1456,6 +1589,9 @@ class _MainPageState extends State<MainPage>
   /// Beim Resume: gepufferten `/verify?oobCode=`‑Link verarbeiten (nur Verifizierung, keine Party-URLs).
   Future<void> _tryConsumeVerifyDeepLinkOnResume() async {
     if (!mounted) return;
+    try {
+      await FirebaseAuth.instance.currentUser?.reload();
+    } catch (_) {}
     final cu = FirebaseAuth.instance.currentUser;
     if (cu != null && cu.emailVerified) return;
     try {
@@ -1537,6 +1673,7 @@ class _MainPageState extends State<MainPage>
           _guestPartyJoinCount++;
           _partyDeepLinkLoading = false;
         });
+        _redirectGuestFromHistoryIfPreWishSession();
         NavigationService().setTabIndex(partyTabIndex, force: true);
       } else {
         setState(() => _partyDeepLinkLoading = false);
@@ -1581,26 +1718,55 @@ class _MainPageState extends State<MainPage>
     final storedCode = prefs.getString('party_code');
     if (storedCode == null || storedCode.trim().isEmpty) return;
 
-    final key = '${user.uid}:${storedCode.trim()}';
+    final normalizedCode = storedCode.trim();
+    final key = '${user.uid}:$normalizedCode';
     if (!force && _lastAutoJoinStoredPartyKey == key) return;
-    _lastAutoJoinStoredPartyKey = key;
 
     _autoJoinStoredPartyRunning = true;
     try {
-      final feedback = await PartySessionService.instance.validateAndJoin(
-        storedCode,
-      );
+      await PartySessionService.instance.loadFromPrefs();
+      final session = PartySessionService.instance;
+      if (session.hasSession && session.shortCode?.trim() == normalizedCode) {
+        _lastAutoJoinStoredPartyKey = key;
+        await session.hydrateIfNeeded();
+        return;
+      }
+
+      _lastAutoJoinStoredPartyKey = key;
+      final hadSession = session.hasSession;
+      final feedback = await session.validateAndJoin(storedCode);
       if (!mounted) return;
-      if (feedback == null) {
+      if (feedback == null && !hadSession) {
         setState(() {
           _guestPartyJoinCount++;
         });
+        _redirectGuestFromHistoryIfPreWishSession();
         NavigationService().setTabIndex(1, force: true);
       }
     } catch (_) {
       // Kein aggressives Error-UI beim stillen Auto-Join
     } finally {
       _autoJoinStoredPartyRunning = false;
+    }
+  }
+
+  /// Entfernt Gast-Party-Session und Party-Code aus Prefs, sobald die DJ-Shell aktiv ist.
+  /// Verhindert u. a. „Aus Party ausloggen“ und Gast-Social im DJ-Drawer.
+  Future<void> _clearGuestPartyContextIfDjShell() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    try {
+      await PartySessionService.instance.loadFromPrefs();
+      if (!PartySessionService.instance.hasSession) return;
+      await PartySessionService.instance.clearSession();
+      debugLog('MainPage: Gast-Party-Session für DJ-Bereich bereinigt.');
+      if (mounted) {
+        setState(() {
+          _guestPartyLeaveCount++;
+        });
+      }
+    } catch (e) {
+      debugLog('MainPage: _clearGuestPartyContextIfDjShell: $e');
     }
   }
 
@@ -1769,24 +1935,13 @@ class _MainPageState extends State<MainPage>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    final user = FirebaseAuth.instance.currentUser;
 
     debugLog('📱 App Lifecycle State geändert: $state');
 
     if (state == AppLifecycleState.resumed) {
-      debugLog('✅ App ist im Vordergrund');
-      if (user != null) {
-        // Cold-Start schreibt nur einmal pro Prozess; nach Store-Update o. Ä. wieder Vordergrund → Telemetrie nachziehen.
-        unawaited(AppUpdateService.logUserAppVersion());
-      }
-      unawaited(_tryConsumeVerifyDeepLinkOnResume());
-      unawaited(ActivePartyService.refreshPartyTruthOnResume());
-      unawaited(PartyAutostartService().reconcileAfterResume());
-      unawaited(ShazamService().syncForegroundAfterAppResumed());
-      _syncDjWishNotificationGate();
-      if (user != null && _currentRoleName == 'Gast') {
-        unawaited(_tryAutoJoinStoredPartyForGuest(force: true));
-      }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _onAppResumedDeferred();
+      });
     } else if (state == AppLifecycleState.detached) {
       debugLog('🛑 App wird beendet');
     }
@@ -1810,7 +1965,9 @@ class _MainPageState extends State<MainPage>
     if (_appUpdateCheckRunning) return;
     _appUpdateCheckRunning = true;
     try {
-      final r = await AppUpdateService.instance.checkForUpdate();
+      final r = await AppUpdateService.instance.checkForUpdate(
+        appRoleLabel: _currentRoleName,
+      );
       if (!mounted) return;
       if (r.result == UpdateCheckResult.forceUpdate ||
           r.result == UpdateCheckResult.optionalUpdate) {
@@ -2047,7 +2204,9 @@ class _MainPageState extends State<MainPage>
     _ensureDeferredFirestoreStreamsOnce();
 
     final user = FirebaseAuth.instance.currentUser;
-    final roleKey = user == null ? '' : (_currentRoleName ?? 'loading');
+    final roleName = _currentRoleName ?? _cachedShellRoleName;
+    final viewRole = _currentViewRole ?? _cachedShellViewRole;
+    final roleKey = user == null ? '' : (roleName ?? 'loading');
     final checkScope =
         user == null ? 'guest-loggedout' : 'auth-${user.uid}-$roleKey';
     if (_appUpdateCheckScope != checkScope) {
@@ -2058,7 +2217,7 @@ class _MainPageState extends State<MainPage>
     }
     // Globale Ankündigung: nur DJ-/Location-Shell bzw. Admin in DJ-Ansicht — nicht Gast-Rolle / Gast-Ansicht.
     if (user != null && !_announcementCheckDone) {
-      final rn = _currentRoleName;
+      final rn = roleName;
       if (rn != null) {
         if (rn == 'Gast') {
           _announcementCheckDone = true;
@@ -2075,23 +2234,26 @@ class _MainPageState extends State<MainPage>
     }
     // LOGIN-CHECK: UserModel aus UserService-Cache; [_onUserModelChanged] → setState (ohne VL um IndexedStack).
     final userModel = UserService().currentUser.value;
-    final roleName = _currentRoleName;
     // Admin-Erkennung ausschließlich über role_id (UserService/AppConfig.isAdminRole)
     final isRealAdmin = AppConfig.isAdminRole(userModel);
     // WICHTIG: Im DJ-Modus (currentViewRole == 'DJ') werden Admin-Privilegien ausgeblendet
     final isAdminMode =
         isRealAdmin &&
-        (_currentViewRole == null || _currentViewRole == 'Admin');
+        (viewRole == null || viewRole == 'Admin');
     final isDJMode =
-        _currentViewRole == 'DJ' ||
+        viewRole == 'DJ' ||
         (user != null &&
             (roleName == 'DJ' || roleName == 'Location') &&
-            _currentViewRole != 'Admin');
+            viewRole != 'Admin');
     final isGuestMode =
-        _currentViewRole == 'Gast' ||
-        (roleName == 'Gast' && _currentViewRole != 'Admin' && _currentViewRole != 'DJ');
+        viewRole == 'Gast' ||
+        (roleName == 'Gast' && viewRole != 'Admin' && viewRole != 'DJ');
     final isWaitingForProfile =
-        user != null && !isAdminMode && !isDJMode && !isGuestMode;
+        user != null &&
+        !_shellContentReady &&
+        !isAdminMode &&
+        !isDJMode &&
+        !isGuestMode;
 
     final blockAdminContent =
         user != null &&
@@ -2249,28 +2411,34 @@ class _MainPageState extends State<MainPage>
     // Admin-Bereich: inkl. Spotify-Filter. DJ-Bereich: ohne Spotify-Filter, dann Profil/Einstellungen …
     final showMasterAdminTestTab =
         AppConfig.isMasterAdminFirebaseUid(user?.uid);
+    final adminBenutzerVerwaltungTabIndex =
+        showMasterAdminTestTab ? 7 : 6;
     final List<Widget> children = (isAdminMode || isDJMode)
         ? (isAdminMode
               ? [
                   // Index 0: Home
                   HomePage(
                     key: _homePageKey,
-                    currentViewRole: _currentViewRole,
+                    currentViewRole: viewRole,
                     requests: _currentWishesList,
                     onViewRoleChanged: _handleHomeViewRoleChanged,
                   ),
-                  const PartyVerwaltungPage(),
+                  PartyVerwaltungPage(key: _partyVerwaltungPageKey),
                   DjVibesBoxPage(
+                    key: _djVibesBoxPageKey,
                     offenPageKey: _offenPageKey,
                     requests: _currentWishesList,
                     onPageOpened: _markWishesAsViewed,
                     isActive: _currentIndex == 2,
                   ),
-                  const GesperrtPage(),
-                  const HistoryPage(),
+                  GesperrtPage(key: _gesperrtPageKey),
+                  HistoryPage(key: _historyPageKey),
                   const SpotifyPage(),
                   if (showMasterAdminTestTab) const TestPage(),
-                  const BenutzerVerwaltungPage(),
+                  BenutzerVerwaltungPage(
+                    isActive:
+                        _currentIndex == adminBenutzerVerwaltungTabIndex,
+                  ),
                   const TodoPage(),
                   ImpressumPage(
                     onBack: () =>
@@ -2288,22 +2456,27 @@ class _MainPageState extends State<MainPage>
               : [
                   HomePage(
                     key: _homePageKey,
-                    currentViewRole: _currentViewRole,
+                    currentViewRole: viewRole,
                     requests: _currentWishesList,
                     onViewRoleChanged: _handleHomeViewRoleChanged,
                   ),
-                  const PartyVerwaltungPage(),
+                  PartyVerwaltungPage(key: _partyVerwaltungPageKey),
                   DjVibesBoxPage(
+                    key: _djVibesBoxPageKey,
                     offenPageKey: _offenPageKey,
                     requests: _currentWishesList,
                     onPageOpened: _markWishesAsViewed,
                     isActive: _currentIndex == 2,
                   ),
-                  const GesperrtPage(),
-                  const HistoryPage(),
-                  const ProfilPage(),
-                  const SettingsPage(),
-                  const SocialMediaPage(),
+                  GesperrtPage(key: _gesperrtPageKey),
+                  HistoryPage(key: _historyPageKey),
+                  ProfilPage(key: _profilPageKey),
+                  SettingsPage(key: _settingsPageKey),
+                  SocialMediaPage(
+                    key: ValueKey<String>(
+                      'dj_social_${user?.uid ?? 'none'}_${_guestPartyLeaveCount}',
+                    ),
+                  ),
                   const AboutPage(),
                   const QuickstartPage(),
                   ImpressumPage(
@@ -2323,7 +2496,7 @@ class _MainPageState extends State<MainPage>
               ? [
                   HomePage(
                     key: _homePageKey,
-                    currentViewRole: _currentViewRole,
+                    currentViewRole: viewRole,
                     requests: _currentWishesList,
                     onViewRoleChanged: _handleHomeViewRoleChanged,
                     onLoginRequested: _openGuestLogin,
@@ -2362,6 +2535,7 @@ class _MainPageState extends State<MainPage>
                       'history_$_guestPartyLeaveCount$_guestPartyJoinCount',
                     ),
                   ),
+                  const GuestSettingsPage(),
                   ImpressumPage(
                     onBack: () =>
                         NavigationService().setTabIndex(_previousTabIndex),
@@ -2378,7 +2552,7 @@ class _MainPageState extends State<MainPage>
               : [
                   HomePage(
                     key: _homePageKey,
-                    currentViewRole: _currentViewRole,
+                    currentViewRole: viewRole,
                     requests: _currentWishesList,
                     onViewRoleChanged: _handleHomeViewRoleChanged,
                     onLoginRequested: null,
@@ -2415,6 +2589,7 @@ class _MainPageState extends State<MainPage>
                   ),
                   const ProfilPage(),
                   const AboutPage(),
+                  const GuestSettingsPage(),
                   ImpressumPage(
                     onBack: () =>
                         NavigationService().setTabIndex(_previousTabIndex),
@@ -2454,7 +2629,11 @@ class _MainPageState extends State<MainPage>
         guestSvc.hasSession &&
         (guestSvc.partyId ?? '').isNotEmpty &&
         guestSvc.partyId != 'manual';
-    final appBarHeight = isDjArea ? 48.0 : (hasActiveParty ? 80.0 : 48.0);
+    final isPreWishGuest =
+        !isDjArea && PartySessionService.instance.isPreWishSession;
+    final appBarHeight = isDjArea
+        ? 48.0
+        : (hasActiveParty ? (isPreWishGuest ? 100.0 : 80.0) : 48.0);
 
     return _withRootBackScope(
       Stack(
@@ -2513,6 +2692,8 @@ class _MainPageState extends State<MainPage>
                   final logoSize = hasActiveParty ? 64.0 : 44.0;
                   final byPrefix = l10n.byDjPrefix;
                   final partyLabel = l10n.partyLabel;
+                  final isPreWish = svc.isPreWishSession;
+                  final partyStart = svc.partyStartAt;
                   return Padding(
                     padding: const EdgeInsets.only(
                       left: 0,
@@ -2586,10 +2767,28 @@ class _MainPageState extends State<MainPage>
                                     softWrap: true,
                                   ),
                                 if (partyName != null && partyName.isNotEmpty)
-                                  _buildPartyLineWithContour(
-                                    partyLabel,
-                                    partyName,
-                                  ),
+                                  if (isPreWish) ...[
+                                    _buildPartyLineWithContour(
+                                      l10n.preWishHeaderForParty,
+                                      partyName,
+                                      textColor: UIConstants.colorPreWish,
+                                    ),
+                                    if (partyStart != null) ...[
+                                      const SizedBox(height: 2),
+                                      _buildPartyLineWithContour(
+                                        l10n.preWishPartyStartLabel,
+                                        formatPreWishPartyStartLine(
+                                          context,
+                                          partyStart,
+                                        ),
+                                        textColor: UIConstants.colorPreWish,
+                                      ),
+                                    ],
+                                  ] else
+                                    _buildPartyLineWithContour(
+                                      partyLabel,
+                                      partyName,
+                                    ),
                               ],
                             ],
                           ),
@@ -2627,10 +2826,8 @@ class _MainPageState extends State<MainPage>
                     session?.proUntil != null;
                 String trialHeaderLine = '';
                 if (showTrialSubline && session!.proUntil != null) {
-                  final locTag = Localizations.localeOf(context).toString();
-                  final df = DateFormat.yMd(locTag).add_Hm();
                   trialHeaderLine =
-                      '${l10nHeader.trial_period_until_prefix} ${df.format(session.proUntil!)}${l10nHeader.time_suffix}';
+                      '${l10nHeader.trial_period_until_prefix} ${FormattingUtils.formatDateForLocale(session.proUntil!, context)}';
                 }
                 return LayoutBuilder(
                   builder: (context, constraints) {
@@ -2750,7 +2947,7 @@ class _MainPageState extends State<MainPage>
               builder: (context, currentLocale, _) {
                 final localizations = AppLocalizations.of(context)!;
 
-                return PopupMenuButton<String>(
+                return IconButton(
                   icon: const Icon(
                     Icons.language,
                     size: 22,
@@ -2761,58 +2958,12 @@ class _MainPageState extends State<MainPage>
                     horizontal: 4,
                     vertical: 8,
                   ),
-                  onSelected: (String languageCode) {
-                    LocaleHelper.saveLocale(languageCode);
-                  },
-                  itemBuilder: (BuildContext context) {
-                    // Sprachnamen Englisch; Emoji-Flaggen (it/uk als Unicode-Escape)
-                    final languages = [
-                      {'code': 'de', 'flag': '🇩🇪', 'name': 'German'},
-                      {'code': 'en', 'flag': '🇬🇧', 'name': 'English'},
-                      {'code': 'fr', 'flag': '🇫🇷', 'name': 'French'},
-                      {'code': 'ru', 'flag': '🇷🇺', 'name': 'Russian'},
-                      {'code': 'zh', 'flag': '🇨🇳', 'name': 'Chinese'},
-                      {'code': 'es', 'flag': '🇪🇸', 'name': 'Spanish'},
-                      {'code': 'tr', 'flag': '🇹🇷', 'name': 'Turkish'},
-                      // {'code': 'ar', 'flag': '🇸🇦', 'name': 'العربية'},
-                      {'code': 'pt', 'flag': '🇵🇹', 'name': 'Portuguese'},
-                      {'code': 'it', 'flag': '\u{1F1EE}\u{1F1F9}', 'name': 'Italian'},
-                      {'code': 'uk', 'flag': '\u{1F1FA}\u{1F1E6}', 'name': 'Ukrainian'},
-                      {'code': 'hi', 'flag': '\u{1F1EE}\u{1F1F3}', 'name': 'Hindi'},
-                    ];
-
-                    // Englische Namen, vollständig alphabetisch (A–Z)
-                    final sortedLanguages = List<Map<String, String>>.from(
-                      languages,
-                    )..sort(
-                        (a, b) => (a['name'] as String)
-                            .toLowerCase()
-                            .compareTo((b['name'] as String).toLowerCase()),
-                      );
-
-                    return sortedLanguages.map((lang) {
-                      final code = lang['code'] as String;
-                      final flag = lang['flag'] as String;
-                      final name = lang['name'] as String;
-                      final isCurrent = code == currentLocale.languageCode;
-
-                      return PopupMenuItem<String>(
-                        value: code,
-                        child: Row(
-                          children: [
-                            Text(flag, style: const TextStyle(fontSize: 20)),
-                            const SizedBox(width: 12),
-                            Flexible(child: Text(name)),
-                            if (isCurrent)
-                              const Icon(
-                                Icons.check,
-                                color: Colors.green,
-                                size: 20,
-                              ),
-                          ],
-                        ),
-                      );
-                    }).toList();
+                  onPressed: () {
+                    showLanguagePickerDialog(
+                      context,
+                      currentLanguageCode: currentLocale.languageCode,
+                      onLanguageSelected: LocaleHelper.saveLocale,
+                    );
                   },
                 );
               },
@@ -2983,7 +3134,11 @@ class _MainPageState extends State<MainPage>
   }
 
   /// Party-Zeile mit grünem Text und schwarzer Kontur für Lesbarkeit auf blau-lila Verlauf.
-  Widget _buildPartyLineWithContour(String label, String name) {
+  Widget _buildPartyLineWithContour(
+    String label,
+    String name, {
+    Color textColor = UIConstants.appOrange,
+  }) {
     const fontSize = 13.0;
     const height = 1.2;
     final strokePaint = Paint()
@@ -3020,25 +3175,25 @@ class _MainPageState extends State<MainPage>
           overflow: TextOverflow.clip,
           softWrap: true,
         ),
-        // Orangefarbener Text (Vordergrund)
+        // Text (Vordergrund)
         Text.rich(
           TextSpan(
             children: [
               TextSpan(
                 text: '$label ',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: fontSize,
                   fontWeight: FontWeight.normal,
-                  color: UIConstants.appOrange,
+                  color: textColor,
                   height: height,
                 ),
               ),
               TextSpan(
                 text: name,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: fontSize,
                   fontWeight: FontWeight.bold,
-                  color: UIConstants.appOrange,
+                  color: textColor,
                   height: height,
                 ),
               ),
@@ -3059,6 +3214,22 @@ class _MainPageState extends State<MainPage>
         await ActivePartyService.initialize();
       },
     );
+  }
+
+  bool _isGuestAreaRole() {
+    final role = _currentRoleName;
+    return role != 'DJ' && role != 'Admin' && role != 'Location';
+  }
+
+  int _guestWishesTabIndex() =>
+      FirebaseAuth.instance.currentUser == null ? 2 : 1;
+
+  void _redirectGuestFromHistoryIfPreWishSession() {
+    if (!_isGuestAreaRole() || !GuestPreWishNavHelper.isPreWishNavMode) return;
+    final historyIdx = FirebaseAuth.instance.currentUser == null ? 6 : 2;
+    if (_currentIndex == historyIdx) {
+      NavigationService().setTabIndex(_guestWishesTabIndex());
+    }
   }
 
   /// Gast-Navigation: Menüpunkt ohne Rahmen (saubere Text-Navigation).
@@ -3114,6 +3285,11 @@ class _MainPageState extends State<MainPage>
         (user != null &&
             (roleName == 'DJ' || roleName == 'Location') &&
             _currentViewRole != 'Admin');
+    final isGuestMode =
+        _currentViewRole == 'Gast' ||
+        (roleName == 'Gast' &&
+            _currentViewRole != 'Admin' &&
+            _currentViewRole != 'DJ');
     // DJ-Shell: kein Spotify-Filter in der Navigation — Indizes 5–8 = Profil … Über.
     const djProfilIndex = 5;
     const djSettingsIndex = 6;
@@ -3842,39 +4018,44 @@ class _MainPageState extends State<MainPage>
                             Icons.music_note,
                             'VibesBox',
                           ),
-                          _guestNavTile(
-                            context,
-                            localizations,
-                            6,
-                            Icons.history,
-                            localizations.history,
-                          ),
-                          _guestNavTile(
-                            context,
-                            localizations,
-                            4,
-                            Icons.share,
-                            localizations.socialMedia,
-                          ),
-                          _guestNavTile(
-                            context,
-                            localizations,
-                            3,
-                            Icons.contact_mail,
-                            localizations.contact,
-                            onTapOverride: () {
-                              if (_currentIndex != 3) {
-                                WidgetsBinding.instance.addPostFrameCallback((
-                                  _,
-                                ) {
-                                  _contactFormKey.currentState
-                                      ?.resetSuccessMessage();
-                                });
-                              }
-                              _onIndexChanged(3);
-                              Navigator.pop(context);
-                            },
-                          ),
+                          if (!GuestPreWishNavHelper.isPreWishNavMode)
+                            _guestNavTile(
+                              context,
+                              localizations,
+                              6,
+                              Icons.history,
+                              localizations.history,
+                            ),
+                          if (!GuestPreWishNavHelper.isPreWishNavMode ||
+                              GuestPreWishNavHelper.isProDj)
+                            _guestNavTile(
+                              context,
+                              localizations,
+                              4,
+                              Icons.share,
+                              localizations.socialMedia,
+                            ),
+                          if (!GuestPreWishNavHelper.isPreWishNavMode ||
+                              GuestPreWishNavHelper.isProDj)
+                            _guestNavTile(
+                              context,
+                              localizations,
+                              3,
+                              Icons.contact_mail,
+                              localizations.contact,
+                              onTapOverride: () {
+                                if (_currentIndex != 3) {
+                                  WidgetsBinding.instance.addPostFrameCallback((
+                                    _,
+                                  ) {
+                                    _contactFormKey.currentState
+                                        ?.resetSuccessMessage();
+                                  });
+                                }
+                                _onIndexChanged(3);
+                                Navigator.pop(context);
+                              },
+                            ),
                         ],
                       ),
                     ),
@@ -3888,17 +4069,9 @@ class _MainPageState extends State<MainPage>
                     _guestNavTile(
                       context,
                       localizations,
-                      -1,
+                      7,
                       Icons.settings,
                       localizations.settings_title,
-                      onTapOverride: () {
-                        Navigator.pop(context);
-                        Navigator.of(context).push<void>(
-                          MaterialPageRoute<void>(
-                            builder: (_) => const GuestSettingsPage(),
-                          ),
-                        );
-                      },
                     ),
                   ] else ...[
                     // Eingeloggt: VibesBox, History, Social Media, Kontakt, Deine Wünsche (orange Rahmen), Profil, Über
@@ -3951,110 +4124,115 @@ class _MainPageState extends State<MainPage>
                               Navigator.pop(context);
                             },
                           ),
-                          ListTile(
-                            dense: true,
-                            visualDensity: VisualDensity.compact,
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 0,
-                            ),
-                            leading: Icon(
-                              Icons.history,
-                              size: 20,
-                              color: _currentIndex == 2
-                                  ? UIConstants.appOrange
-                                  : Colors.white,
-                            ),
-                            title: Text(
-                              localizations.history,
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.white,
-                                fontWeight: _currentIndex == 2
-                                    ? FontWeight.bold
-                                    : FontWeight.normal,
+                          if (!GuestPreWishNavHelper.isPreWishNavMode)
+                            ListTile(
+                              dense: true,
+                              visualDensity: VisualDensity.compact,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 0,
                               ),
-                            ),
-                            selected: _currentIndex == 2,
-                            selectedTileColor: UIConstants.appOrange
-                                .withValues(alpha: 0.2),
-                            onTap: () {
-                              NavigationService().setTabIndex(2);
-                              Navigator.pop(context);
-                            },
-                          ),
-                          ListTile(
-                            dense: true,
-                            visualDensity: VisualDensity.compact,
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 0,
-                            ),
-                            leading: Icon(
-                              Icons.share,
-                              size: 20,
-                              color: _currentIndex == 3
-                                  ? UIConstants.appOrange
-                                  : Colors.white,
-                            ),
-                            title: Text(
-                              localizations.socialMedia,
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.white,
-                                fontWeight: _currentIndex == 3
-                                    ? FontWeight.bold
-                                    : FontWeight.normal,
+                              leading: Icon(
+                                Icons.history,
+                                size: 20,
+                                color: _currentIndex == 2
+                                    ? UIConstants.appOrange
+                                    : Colors.white,
                               ),
-                            ),
-                            selected: _currentIndex == 3,
-                            selectedTileColor: UIConstants.appOrange
-                                .withValues(alpha: 0.2),
-                            onTap: () {
-                              NavigationService().setTabIndex(3);
-                              Navigator.pop(context);
-                            },
-                          ),
-                          ListTile(
-                            dense: true,
-                            visualDensity: VisualDensity.compact,
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 0,
-                            ),
-                            leading: Icon(
-                              Icons.contact_mail,
-                              size: 20,
-                              color: _currentIndex == 4
-                                  ? UIConstants.appOrange
-                                  : Colors.white,
-                            ),
-                            title: Text(
-                              localizations.contact,
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.white,
-                                fontWeight: _currentIndex == 4
-                                    ? FontWeight.bold
-                                    : FontWeight.normal,
+                              title: Text(
+                                localizations.history,
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.white,
+                                  fontWeight: _currentIndex == 2
+                                      ? FontWeight.bold
+                                      : FontWeight.normal,
+                                ),
                               ),
+                              selected: _currentIndex == 2,
+                              selectedTileColor: UIConstants.appOrange
+                                  .withValues(alpha: 0.2),
+                              onTap: () {
+                                NavigationService().setTabIndex(2);
+                                Navigator.pop(context);
+                              },
                             ),
-                            selected: _currentIndex == 4,
-                            selectedTileColor: UIConstants.appOrange
-                                .withValues(alpha: 0.2),
-                            onTap: () {
-                              if (_currentIndex != 4) {
-                                WidgetsBinding.instance.addPostFrameCallback((
-                                  _,
-                                ) {
-                                  _contactFormKey.currentState
-                                      ?.resetSuccessMessage();
-                                });
-                              }
-                              NavigationService().setTabIndex(4);
-                              Navigator.pop(context);
-                            },
-                          ),
+                          if (!GuestPreWishNavHelper.isPreWishNavMode ||
+                              GuestPreWishNavHelper.isProDj)
+                            ListTile(
+                              dense: true,
+                              visualDensity: VisualDensity.compact,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 0,
+                              ),
+                              leading: Icon(
+                                Icons.share,
+                                size: 20,
+                                color: _currentIndex == 3
+                                    ? UIConstants.appOrange
+                                    : Colors.white,
+                              ),
+                              title: Text(
+                                localizations.socialMedia,
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.white,
+                                  fontWeight: _currentIndex == 3
+                                      ? FontWeight.bold
+                                      : FontWeight.normal,
+                                ),
+                              ),
+                              selected: _currentIndex == 3,
+                              selectedTileColor: UIConstants.appOrange
+                                  .withValues(alpha: 0.2),
+                              onTap: () {
+                                NavigationService().setTabIndex(3);
+                                Navigator.pop(context);
+                              },
+                            ),
+                          if (!GuestPreWishNavHelper.isPreWishNavMode ||
+                              GuestPreWishNavHelper.isProDj)
+                            ListTile(
+                              dense: true,
+                              visualDensity: VisualDensity.compact,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 0,
+                              ),
+                              leading: Icon(
+                                Icons.contact_mail,
+                                size: 20,
+                                color: _currentIndex == 4
+                                    ? UIConstants.appOrange
+                                    : Colors.white,
+                              ),
+                              title: Text(
+                                localizations.contact,
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.white,
+                                  fontWeight: _currentIndex == 4
+                                      ? FontWeight.bold
+                                      : FontWeight.normal,
+                                ),
+                              ),
+                              selected: _currentIndex == 4,
+                              selectedTileColor: UIConstants.appOrange
+                                  .withValues(alpha: 0.2),
+                              onTap: () {
+                                if (_currentIndex != 4) {
+                                  WidgetsBinding.instance.addPostFrameCallback((
+                                    _,
+                                  ) {
+                                    _contactFormKey.currentState
+                                        ?.resetSuccessMessage();
+                                  });
+                                }
+                                NavigationService().setTabIndex(4);
+                                Navigator.pop(context);
+                              },
+                            ),
                           ListTile(
                             dense: true,
                             visualDensity: VisualDensity.compact,
@@ -4162,23 +4340,25 @@ class _MainPageState extends State<MainPage>
                       leading: Icon(
                         Icons.settings,
                         size: 20,
-                        color: Colors.white,
+                        color: _currentIndex == 8
+                            ? UIConstants.appOrange
+                            : Colors.white,
                       ),
                       title: Text(
                         localizations.settings_title,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 14,
                           color: Colors.white,
-                          fontWeight: FontWeight.normal,
+                          fontWeight: _currentIndex == 8
+                              ? FontWeight.bold
+                              : FontWeight.normal,
                         ),
                       ),
+                      selected: _currentIndex == 8,
+                      selectedTileColor: UIConstants.appOrange.withValues(alpha: 0.2),
                       onTap: () {
+                        NavigationService().setTabIndex(8);
                         Navigator.pop(context);
-                        Navigator.of(context).push<void>(
-                          MaterialPageRoute<void>(
-                            builder: (_) => const GuestSettingsPage(),
-                          ),
-                        );
                       },
                     ),
                   ],
@@ -4251,7 +4431,8 @@ class _MainPageState extends State<MainPage>
                     },
                   ),
                 ] else ...[
-                  FutureBuilder<bool>(
+                  if (isGuestMode)
+                    FutureBuilder<bool>(
                     future: PartySessionService.instance.loadFromPrefs().then(
                       (_) => PartySessionService.instance.hasSession,
                     ),
@@ -4316,12 +4497,17 @@ class _MainPageState extends State<MainPage>
                     onTap: () async {
                       Navigator.pop(context);
                       await SubscriptionSyncService.logOut();
-                      UserService().stopUserStream();
-                      UserService().clearCache();
                       ProFeatureGuard.invalidateCache();
                       await SavedLoginEmailStore.clear();
+                      await PartySessionService.instance.clearSession();
+                      await ActivePartyService.resetForLogout();
+                      // Zuerst Auth beenden — sonst bleibt [_currentViewRole] „DJ“:
+                      // [_onUserModelChanged] macht bei user!=null && userModel==null ein frühes return.
                       await FirebaseAuth.instance.signOut();
+                      UserService().stopUserStream();
+                      UserService().clearCache();
                       NavigationService().resetToHome();
+                      unawaited(NavigationService().clearAdminViewRole());
                     },
                   ),
                 ],

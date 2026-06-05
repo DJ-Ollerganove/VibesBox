@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../models/song_request.dart';
 import '../services/duplicate_check_service.dart';
+import 'debug_log.dart';
 import 'text_utils.dart';
 
 /// Reihenfolge der **Gruppen** nach dem neuesten zutreffenden Zeitpunkt (nicht nur Wunsch-Erstellung).
@@ -17,10 +18,175 @@ enum WishGroupListSort {
 /// Helper-Klasse für die Gruppierung von Musikwünschen
 /// Gruppiert Wünsche nach normalisiertem Titel/Interpret (inkl. Remix-Zusätze), Anzeige bleibt Original-Titel
 class WishGroupingHelper {
+  /// Shadow-Dokumente bei Dubletten-Absendung (`is_duplicate: true`, siehe PWA/Gast-Listen).
+  /// Nur das Original-Dokument gehört in DJ-Tabellen — sonst erscheint derselbe Song zweimal.
+  static List<SongRequest> withoutDuplicateShadowDocuments(
+    Iterable<SongRequest> requests,
+  ) {
+    return requests.where((r) => r.isDuplicate != true).toList();
+  }
+
+  /// Jede Firestore-[SongRequest.id] darf in der UI nur in **einer** Gruppe vorkommen.
+  /// Verhindert doppelte Zeilen mit derselben Dokument-ID (Snapshot/Gruppierungs-Grenzfall).
+  static List<Map<String, dynamic>> groupsWithUniqueDocumentIds(
+    List<Map<String, dynamic>> groups,
+    Map<String, List<String>> docIdsByGroupKey,
+  ) {
+    final seenDocIds = <String>{};
+    final unique = <Map<String, dynamic>>[];
+    for (final entry in groups) {
+      final key = entry['key'] as String;
+      final ids = docIdsByGroupKey[key] ?? const <String>[];
+      final overlap = ids.where((id) => id.isNotEmpty && seenDocIds.contains(id));
+      if (overlap.isNotEmpty) {
+        debugLog(
+          '⚠️ WishGroupingHelper: Gruppe übersprungen (docId bereits in Liste: ${overlap.join(", ")}, key=$key)',
+        );
+        continue;
+      }
+      for (final id in ids) {
+        if (id.isNotEmpty) seenDocIds.add(id);
+      }
+      unique.add(entry);
+    }
+    return unique;
+  }
+
   static Timestamp? _laterTimestamp(Timestamp? a, Timestamp? b) {
     if (a == null) return b;
     if (b == null) return a;
     return a.toDate().isAfter(b.toDate()) ? a : b;
+  }
+
+  static String _groupKeyForRequest(
+    SongRequest request,
+    List<String> ignoredKeywords,
+    String? sessionPartyId,
+  ) {
+    final titleForKey =
+        normalizeTextForDuplicateCheck(request.displayTitle, ignoredKeywords);
+    final artistForKey =
+        normalizeTextForDuplicateCheck(request.artist ?? '', ignoredKeywords);
+    final partyForGroupKey =
+        (sessionPartyId != null && sessionPartyId.trim().isNotEmpty)
+            ? sessionPartyId.trim()
+            : (request.partyId ?? '').trim();
+    return '$titleForKey|$artistForKey|$partyForGroupKey';
+  }
+
+  /// Zeiten aus Shadow-Dokumenten (`is_duplicate: true`): Schlüssel `groupKey|Person`.
+  static Map<String, Timestamp> _shadowTimestampsByPerson(
+    Iterable<SongRequest> requests,
+    List<String> ignoredKeywords,
+    String? sessionPartyId,
+  ) {
+    final map = <String, Timestamp>{};
+    for (final r in requests) {
+      if (r.isDuplicate != true || r.createdAt == null) continue;
+      final person = (r.name ?? '').trim();
+      if (person.isEmpty) continue;
+      final groupKey = _groupKeyForRequest(r, ignoredKeywords, sessionPartyId);
+      final key = '$groupKey|$person';
+      final existing = map[key];
+      if (existing == null ||
+          r.createdAt!.toDate().isAfter(existing.toDate())) {
+        map[key] = r.createdAt!;
+      }
+    }
+    return map;
+  }
+
+  /// Korrigiert Uhrzeiten in der Gruppe (Shadow-Docs + gespeicherte `createdAt_list`).
+  static void _applyPerPersonTimestamps(
+    Map<String, dynamic> group,
+    String groupKey,
+    Map<String, Timestamp> shadowTsByPerson,
+  ) {
+    final rb = List<String>.from((group['requested_by'] as List?) ?? []);
+    if (rb.isEmpty) return;
+
+    final cal = List<Timestamp>.from(
+      (group['createdAt_list'] as List?)?.whereType<Timestamp>() ?? [],
+    );
+    final fallback = group['createdAt'] as Timestamp?;
+
+    while (cal.length < rb.length) {
+      if (cal.isNotEmpty) {
+        cal.add(cal.last);
+      } else if (fallback != null) {
+        cal.add(fallback);
+      }
+    }
+
+    for (var i = 0; i < rb.length; i++) {
+      final person = rb[i].toString().trim();
+      if (person.isEmpty) continue;
+      final shadow = shadowTsByPerson['$groupKey|$person'];
+      if (shadow != null) {
+        cal[i] = shadow;
+      }
+    }
+    group['createdAt_list'] = cal;
+  }
+
+  /// Namen ohne leere Einträge, Reihenfolge bleibt, exakte Duplikate entfernt.
+  static List<String> dedupeNamesPreserveOrder(List<String> names) {
+    final out = <String>[];
+    for (final raw in names) {
+      final n = raw.trim();
+      if (n.isEmpty || out.contains(n)) continue;
+      out.add(n);
+    }
+    return out;
+  }
+
+  /// Alle Wünscher eines Dokuments: Ersteller (`name`) zuerst, dann `requested_by`.
+  /// Wichtig nach Duplikat-Updates: dort steht oft nur der neue Name in `requested_by`,
+  /// der ursprüngliche Wünscher bleibt in `name` — ohne `name` würde z. B. „Jens“ durch „Nele“ ersetzt.
+  static List<String> namesForRequest(SongRequest request) {
+    final out = <String>[];
+    final name = (request.name ?? '').trim();
+    if (name.isNotEmpty) out.add(name);
+    for (final raw in request.requestedBy ?? const <String>[]) {
+      final n = raw.trim();
+      if (n.isNotEmpty && !out.contains(n)) out.add(n);
+    }
+    return out;
+  }
+
+  /// Weitere Dokumente in derselben Gruppe: nur noch nicht in der Gruppe vorhandene Namen.
+  static List<String> _namesToAddWhenMerging(
+    SongRequest request,
+    List<String> alreadyInGroup,
+  ) {
+    return namesForRequest(request)
+        .where((n) => !alreadyInGroup.contains(n))
+        .toList();
+  }
+
+  /// `requested_by` und `createdAt_list` parallel bereinigen (nach Merge-Artefakten).
+  static void _normalizeGroupWisherLists(Map<String, dynamic> group) {
+    final rb = List<String>.from((group['requested_by'] as List?) ?? []);
+    final cal = List<Timestamp>.from(
+      (group['createdAt_list'] as List?)?.whereType<Timestamp>() ?? [],
+    );
+    final dedupedRb = <String>[];
+    final dedupedCal = <Timestamp>[];
+    final fallbackTs = group['createdAt'] as Timestamp?;
+    for (var i = 0; i < rb.length; i++) {
+      final n = rb[i].toString().trim();
+      if (n.isEmpty || dedupedRb.contains(n)) continue;
+      dedupedRb.add(n);
+      if (i < cal.length) {
+        dedupedCal.add(cal[i]);
+      } else if (dedupedCal.isNotEmpty) {
+        dedupedCal.add(dedupedCal.last);
+      } else if (fallbackTs != null) {
+        dedupedCal.add(fallbackTs);
+      }
+    }
+    group['requested_by'] = dedupedRb;
+    group['createdAt_list'] = dedupedCal;
   }
 
   /// Zeitstempel eines einzelnen Wunsches für die Gruppen-Sortierung (je Modus).
@@ -49,26 +215,27 @@ class WishGroupingHelper {
     List<SongRequest> sortedRequests, {
     WishGroupListSort listSort = WishGroupListSort.byWishCreatedAt,
     String? sessionPartyId,
+    /// Alle Dokumente inkl. `is_duplicate`-Shadows — für korrekte Uhrzeiten pro Person.
+    List<SongRequest>? allRequestsForTimestamps,
   }) {
     final Map<String, Map<String, dynamic>> groupedWishes = {};
     final Map<String, List<String>> groupedDocIds = {};
     final Map<String, SongRequest> groupedFirstRequests = {};
     final ignoredKeywords = DuplicateCheckService.getCachedIgnoredKeywords();
+    final shadowTsByPerson = _shadowTimestampsByPerson(
+      allRequestsForTimestamps ?? sortedRequests,
+      ignoredKeywords,
+      sessionPartyId,
+    );
 
     for (final request in sortedRequests) {
-      // Nur für den Gruppenschlüssel: normalisieren (Klammern, Mix-Begriffe, Umlaute, Sonderzeichen)
-      final titleForKey = normalizeTextForDuplicateCheck(request.displayTitle, ignoredKeywords);
-      final artistForKey = normalizeTextForDuplicateCheck(request.artist ?? '', ignoredKeywords);
-      final partyForGroupKey = (sessionPartyId != null && sessionPartyId.trim().isNotEmpty)
-          ? sessionPartyId.trim()
-          : (request.partyId ?? '').trim();
-      final groupKey = '$titleForKey|$artistForKey|$partyForGroupKey';
+      final groupKey =
+          _groupKeyForRequest(request, ignoredKeywords, sessionPartyId);
       
       if (!groupedWishes.containsKey(groupKey)) {
         // Erste Wunsch für diesen Song - erstelle Gruppeneintrag
-        final requestedBy = request.requestedBy ?? [];
         final name = request.name ?? '';
-        final namesToShow = requestedBy.isNotEmpty ? requestedBy : (name.isNotEmpty ? [name] : []);
+        final namesToShow = namesForRequest(request);
         final greetings = List<Map<String, dynamic>>.from(
           (request.greetings ?? []).map((g) => {
             'name': g['name'] ?? '',
@@ -80,10 +247,13 @@ class WishGroupingHelper {
           greetings.add({'name': name, 'greeting': greeting});
         }
         
-        // createdAt_list: ein Eintrag pro Name (parallel zu requested_by), neueste zuerst (Sortierung der Gruppe)
-        final createdAtList = request.createdAt != null
-            ? List<Timestamp>.filled(namesToShow.length, request.createdAt!)
-            : <Timestamp>[];
+        // createdAt_list: parallel zu requested_by; Shadow-Docs liefern fehlende Zeiten (z. B. Nele).
+        final createdAtList = _createdAtListForNames(
+          names: namesToShow,
+          request: request,
+          groupKey: groupKey,
+          shadowTsByPerson: shadowTsByPerson,
+        );
 
         groupedWishes[groupKey] = {
           'title': request.displayTitle,
@@ -108,19 +278,26 @@ class WishGroupingHelper {
           'rejectedAt': request.rejectedAt,
           'auto_rejected_by_block': request.autoRejectedByBlock ?? false,
           'auto_recognized': request.autoRecognized ?? false,
+          'is_pre_wish': request.isPreWish == true,
+          'pre_wish_published': request.preWishPublished == true,
         };
         groupedDocIds[groupKey] = [request.id];
         groupedFirstRequests[groupKey] = request;
       } else {
         final idsForGroup = groupedDocIds[groupKey]!;
         if (idsForGroup.contains(request.id)) {
+          debugLog(
+            '⚠️ WishGroupingHelper: ${request.id} bereits in Gruppe $groupKey — übersprungen',
+          );
           continue;
         }
         // Weitere Wunsch für diesen Song - füge Daten hinzu
         final group = groupedWishes[groupKey]!;
-        final requestedBy = request.requestedBy ?? [];
         final name = request.name ?? '';
-        final namesToShow = requestedBy.isNotEmpty ? requestedBy : (name.isNotEmpty ? [name] : []);
+        final namesToAdd = _namesToAddWhenMerging(
+          request,
+          List<String>.from(group['requested_by'] as List),
+        );
         final greetings = List<Map<String, dynamic>>.from(
           (request.greetings ?? []).map((g) => {
             'name': g['name'] ?? '',
@@ -136,9 +313,14 @@ class WishGroupingHelper {
         final existingRequestedBy = List<String>.from(group['requested_by'] as List);
         final existingCreatedAtList = List<Timestamp>.from((group['createdAt_list'] as List?) ?? []);
         final newCreatedAt = request.createdAt;
-        for (final n in namesToShow) {
+        for (final n in namesToAdd) {
           existingRequestedBy.add(n);
-          if (newCreatedAt != null) existingCreatedAtList.add(newCreatedAt);
+          final shadow = shadowTsByPerson['$groupKey|$n'];
+          if (shadow != null) {
+            existingCreatedAtList.add(shadow);
+          } else if (newCreatedAt != null) {
+            existingCreatedAtList.add(newCreatedAt);
+          }
         }
 
         final existingGreetings = List<Map<String, dynamic>>.from(group['greetings'] as List);
@@ -190,6 +372,13 @@ class WishGroupingHelper {
           group['is_favorite'] = false;
         }
 
+        if (request.isPreWish == true) {
+          group['is_pre_wish'] = true;
+        }
+        if (request.preWishPublished == true) {
+          group['pre_wish_published'] = true;
+        }
+
         // Auto-Erkennung (Shazam): mindestens ein Wunsch der Gruppe automatisch abgehakt
         if (request.autoRecognized == true) {
           group['auto_recognized'] = true;
@@ -224,7 +413,10 @@ class WishGroupingHelper {
     }
 
     // Badge & duplicate_count: exakt parallel zu Uhrzeiten-Liste (createdAt_list) bzw. requested_by
-    for (final g in groupedWishes.values) {
+    for (final entry in groupedWishes.entries) {
+      final g = entry.value;
+      _applyPerPersonTimestamps(g, entry.key, shadowTsByPerson);
+      _normalizeGroupWisherLists(g);
       final cal = (g['createdAt_list'] as List?) ?? [];
       final rb = (g['requested_by'] as List?) ?? [];
       final n = cal.isNotEmpty
@@ -273,5 +465,44 @@ class WishGroupingHelper {
       'firstRequests': groupedFirstRequests,
       'docIds': groupedDocIds,
     };
+  }
+
+  /// Erstellt [createdAt_list] für die Namen eines Dokuments (Shadow > Firestore-Liste > createdAt).
+  static List<Timestamp> _createdAtListForNames({
+    required List<String> names,
+    required SongRequest request,
+    required String groupKey,
+    required Map<String, Timestamp> shadowTsByPerson,
+  }) {
+    if (names.isEmpty) return [];
+
+    final docList = request.createdAtList;
+    final owner = (request.name ?? '').trim();
+    final out = <Timestamp>[];
+
+    for (var i = 0; i < names.length; i++) {
+      final person = names[i];
+      final shadow = shadowTsByPerson['$groupKey|$person'];
+      if (shadow != null) {
+        out.add(shadow);
+        continue;
+      }
+      if (docList != null && i < docList.length) {
+        out.add(docList[i]);
+        continue;
+      }
+      if (docList != null && person == owner && docList.isNotEmpty) {
+        out.add(docList.first);
+        continue;
+      }
+      if (person == owner && request.createdAt != null) {
+        out.add(request.createdAt!);
+        continue;
+      }
+      if (request.createdAt != null) {
+        out.add(request.createdAt!);
+      }
+    }
+    return out;
   }
 }

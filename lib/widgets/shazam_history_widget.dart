@@ -3,6 +3,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 
+import '../utils/formatting_utils.dart';
+
 /// Widget für Shazam-History
 /// Zeigt alle erfolgreichen Shazam-Matches aus Firestore (Sammlung shazam_history)
 class ShazamHistoryWidget extends StatelessWidget {
@@ -107,7 +109,11 @@ class ShazamHistoryWidget extends StatelessWidget {
                       String dateTimeText = '-';
                       if (timestamp != null) {
                         final date = timestamp.toDate();
-                        dateTimeText = DateFormat('dd.MM.yyyy HH:mm').format(date);
+                        dateTimeText =
+                            FormattingUtils.formatDateTimeCommaBetweenDateAndTime(
+                          date,
+                          context,
+                        );
                       }
 
                       return Container(

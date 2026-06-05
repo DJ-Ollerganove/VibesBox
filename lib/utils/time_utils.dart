@@ -1,4 +1,4 @@
-/// Hilfsmethoden für zeitbasierte Fenster (z. B. 2-Stunden-Blöcke für Wunsch-Limits).
+/// Hilfsmethoden für zeitbasierte Fenster (z. B. 2-Stunden-Blöcke; **volle Kalenderstunde** für Gast-Wünsche).
 ///
 /// Blöcke sind feste 2-Stunden-Fenster: 0–1, 2–3, 4–5, …, 22–23 (gerade Stunde = Blockstart).
 /// Beispiel: 15:30 → Block 14:00–15:59:59; 16:05 → Block 16:00–17:59:59.
@@ -49,5 +49,26 @@ abstract final class TimeUtils {
   /// Gibt [true] zurück, wenn [a] und [b] im selben 2-Stunden-Fenster liegen.
   static bool isSameTwoHourBlock(DateTime a, DateTime b) {
     return getTwoHourBlockRange(a).blockStart == getTwoHourBlockRange(b).blockStart;
+  }
+
+  /// Aktuelle **volle Kalenderstunde** (lokal): [start] inkl., [endExclusive] exkl.
+  /// (z. B. 14:37 → von 14:00:00 bis vor 15:00:00).
+  static ({DateTime start, DateTime endExclusive}) getCurrentFullHourRange(
+    DateTime dateTime,
+  ) {
+    final local = dateTime.toLocal();
+    final start = DateTime(local.year, local.month, local.day, local.hour, 0, 0, 0);
+    return (
+      start: start,
+      endExclusive: start.add(const Duration(hours: 1)),
+    );
+  }
+
+  /// Erste volle Stunde **strikt nach** [now] (lokal), z. B. 13:05 → 14:00:00,
+  /// 14:00:00.000 → 15:00:00 (für Hinweise „ab nächster voller Stunde“).
+  static DateTime nextFullHourAfterNow(DateTime now) {
+    final local = now.toLocal();
+    final floor = DateTime(local.year, local.month, local.day, local.hour, 0, 0, 0);
+    return floor.add(const Duration(hours: 1));
   }
 }

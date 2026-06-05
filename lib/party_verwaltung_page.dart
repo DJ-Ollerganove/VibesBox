@@ -886,25 +886,34 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
                     // GEZIELTE LÖSCH-LOGIK: Prüfe mehrere Bedingungen
                     // 1. User muss der Ersteller sein (created_by)
                     // 2. Party muss noch nicht gestartet haben (start_time_posix > jetzt)
-                    // 3. lifecycle_status muss "active" oder "upcoming" sein
+                    // 3. active/upcoming wie bisher; Standby/Kontingent-Überschreitung (Free-DJ): ebenfalls löschbar
                     final user = FirebaseAuth.instance.currentUser;
                     final createdBy = data['created_by'] as String?;
                     final isOwner = user != null && createdBy == user.uid;
                     
                     // Zeit-Check: Party darf noch nicht gestartet haben
                     final nowUnixSeconds = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
-                    final partyNotStarted = startTimePosix != null && startTimePosix > 0 && nowUnixSeconds < startTimePosix;
+                    final partyNotStarted =
+                        startTimePosix > 0 && nowUnixSeconds < startTimePosix;
                     
-                    // Status-Check: Party muss lifecycle_status "active" oder "upcoming" haben
-                    // Nutze die bereits vorhandene Variable lifecycleStatus (deklariert in Zeile 709)
-                    final isUpcoming = lifecycleStatus == 'active' || lifecycleStatus == 'upcoming';
+                    // Status-Check: normale Bearbeitung/Löschen wie bisher für active/upcoming.
+                    // Standby (Free-DJ-Kontingent) oder rein berechnetes Kontingent-Überschreiten: nur Löschen
+                    // (noch nicht gestartet), gleiche Server-Regeln in [_deleteParty].
+                    final isUpcomingLifecycle =
+                        lifecycleStatus == 'active' || lifecycleStatus == 'upcoming';
+                    final isStandbyLifecycle = lifecycleStatus == 'standby';
+                    final canDelete = isOwner &&
+                        partyNotStarted &&
+                        (isUpcomingLifecycle ||
+                            isStandbyLifecycle ||
+                            quotaExceededIds.contains(partyId));
                     
-                    // canDelete ist nur true, wenn ALLE Bedingungen erfüllt sind
-                    final canDelete = isOwner && partyNotStarted && isUpcoming;
-                    
+                    final allowPreWishes = data['allow_pre_wishes'] == true;
+
                     return SettingsPartyCard(
                       partyId: partyId,
                       partyName: partyName,
+                      allowPreWishes: allowPreWishes,
                       startDate: startDate,
                       endDate: endDate,
                       partyCode: partyCode,
@@ -1046,7 +1055,7 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
                           padding: const EdgeInsets.symmetric(vertical: 32),
                           child: Center(
                             child: Text(
-                              'Aktuell sind keine weiteren Partys geplant.',
+                              localizations.no_further_parties_planned,
                               style: TextStyle(
                                 color: Colors.grey[400],
                                 fontSize: 14,

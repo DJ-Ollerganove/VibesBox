@@ -1,6 +1,7 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
@@ -465,7 +466,11 @@ class _LocationMapPickerPageState extends State<LocationMapPickerPage> {
               myLocationEnabled: _locationPermissionGranted,
               myLocationButtonEnabled: true,
               zoomControlsEnabled: true,
-              style: _darkMapStyle,
+              // iOS zeigte vereinzelt nur ein graues Kartenfeld.
+              // Für Stabilität dort ohne Custom-Style rendern.
+              style: defaultTargetPlatform == TargetPlatform.iOS
+                  ? null
+                  : _darkMapStyle,
             ),
           // Info-Box unten (mit Safe-Area-Padding für Geräte mit Home-Indikator)
           Positioned(

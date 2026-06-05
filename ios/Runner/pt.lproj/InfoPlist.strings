@@ -1,0 +1,10 @@
+/* Localização Info.plist – VibesBox */
+"NSLocalNetworkUsageDescription" = "Para o Flutter e o Xcode se ligarem à app (p. ex., Hot Reload durante o desenvolvimento), o VibesBox precisa de aceder a dispositivos na sua rede local.";
+"NSMicrophoneUsageDescription" = "O VibesBox precisa do microfone para analisar a música em reprodução e reconhecê-la.";
+"NSAppleMusicUsageDescription" = "O VibesBox pode acessar sua biblioteca multimídia para vincular o reconhecimento musical ao Apple Music.";
+"NSCameraUsageDescription" = "O VibesBox precisa da câmara para ler códigos QR e tirar fotografias.";
+"NSPhotoLibraryUsageDescription" = "Precisamos de acesso às suas fotos para escolher a imagem de perfil e usar imagens de festas.";
+"NSPhotoLibraryAddUsageDescription" = "Guardamos imagens (códigos QR ou fotos de festas) na sua biblioteca quando você autorizar.";
+"NSLocationWhenInUseUsageDescription" = "Usamos a sua localização para centrar o mapa no local da festa.";
+"NSCalendarsUsageDescription" = "Necessário para exportar datas de festas para o seu calendário.";
+"NSFaceIDUsageDescription" = "O Face ID protege as definições de administrador para que só você aceda a opções sensíveis.";

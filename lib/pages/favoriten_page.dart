@@ -258,9 +258,13 @@ class _FavoritenPageState extends State<FavoritenPage> {
                           );
                         }
                         // Gruppiere Wünsche
-                        final openWishes = snapshot.data!.docs.map((doc) {
-                          return SongRequest.fromDocument(doc);
-                        }).toList() as List<SongRequest>;
+                        final allOpenWishes = snapshot.data!.docs
+                            .map(SongRequest.fromDocument)
+                            .toList();
+                        final openWishes =
+                            WishGroupingHelper.withoutDuplicateShadowDocuments(
+                          allOpenWishes,
+                        );
                         // Sortiere nach createdAt (neueste zuerst)
                         openWishes.sort((a, b) {
                       final tsA = a.createdAt;
@@ -278,6 +282,7 @@ class _FavoritenPageState extends State<FavoritenPage> {
                                   _currentPartyId!.isNotEmpty)
                               ? _currentPartyId
                               : null,
+                      allRequestsForTimestamps: allOpenWishes,
                     );
                     final allGroupedList = groupedResult['groups'] as List<Map<String, dynamic>>;
                     final groupedFirstRequests = groupedResult['firstRequests'] as Map<String, SongRequest>;

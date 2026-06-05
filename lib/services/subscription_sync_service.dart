@@ -3,8 +3,9 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:purchases_flutter/purchases_flutter.dart';
 
 import '../models/user_model.dart';
-import 'user_service.dart';
 import 'party_limit_service.dart';
+import 'pro_free_check.dart';
+import 'user_service.dart';
 import 'trial_expiry_service.dart';
 import 'revenue_cat_bootstrap.dart';
 import '../utils/debug_log.dart';
@@ -17,6 +18,37 @@ class SubscriptionSyncService {
 
   /// Letzte erfolgreich an RevenueCat gebundene UID (verhindert doppeltes [Purchases.logIn] pro Session).
   static String? _lastLinkedRcUid;
+
+  /// Erster sinnvoller `free_period_start`, wenn er in Firestore noch fehlt (kein blindes [DateTime.now],
+  /// sonst würde z. B. ein App-Start am 12.5. den Abrechnungs-Stichtag auf den 12. legen statt auf den
+  /// echten Free-Beginn nach Pro/Trial-Ende bzw. Kulanz).
+  static DateTime _inferFirstFreePeriodStartForFirestore(Map<String, dynamic>? data) {
+    final fallback = DateTime.now();
+    if (data == null) return fallback;
+
+    final plan = (data['planType'] as String?)?.trim().toLowerCase();
+    final trialTs = data['trialUntil'] as Timestamp?;
+    final trialEnd = trialTs?.toDate();
+    if (plan == 'trial' && trialEnd != null) {
+      final l = trialEnd.toLocal();
+      final d = DateTime(l.year, l.month, l.day);
+      return d.add(const Duration(days: 1));
+    }
+
+    final proTs = data['proUntil'] as Timestamp?;
+    final pro = proTs?.toDate();
+    if (pro != null && pro.year < 2099) {
+      return ProFreeCheck.computeFreePeriodStartAfterProGrace(pro);
+    }
+
+    final ca = data['created_at'] as Timestamp?;
+    if (ca != null) {
+      final c = ca.toDate().toLocal();
+      return DateTime(c.year, c.month, 1);
+    }
+
+    return fallback;
+  }
 
   /// Verknüpft RevenueCat mit der Firebase-UID (nach Login).
   /// Nur auf Mobile (Android/iOS) – auf Web wird nichts ausgeführt.
@@ -124,8 +156,11 @@ class SubscriptionSyncService {
         'isPro': false,
       };
       if (mayWriteFreePeriodStart) {
-        updatePayload['free_period_start'] = Timestamp.now();
-        debugLog('💳 SubscriptionSync: auf Free gesetzt (free_period_start = jetzt).');
+        final inferred = _inferFirstFreePeriodStartForFirestore(data);
+        updatePayload['free_period_start'] = Timestamp.fromDate(inferred);
+        debugLog(
+          '💳 SubscriptionSync: auf Free gesetzt (free_period_start = $inferred, nicht „jetzt“ am Gerät).',
+        );
       } else {
         debugLog('💳 SubscriptionSync: bereits Free mit Stichtag – free_period_start unverändert.');
       }

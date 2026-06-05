@@ -15,6 +15,8 @@ class SongRequest {
   final String? djId;
   final String? djCode;
   final Timestamp? createdAt;
+  /// Parallel zu [requestedBy]: Zeitpunkt pro Person (nach Duplikat-Updates in Firestore).
+  final List<Timestamp>? createdAtList;
   final String? name;
   final List<String>? requestedBy;
   final Map<String, bool>? isRegisteredUsers;
@@ -36,6 +38,8 @@ class SongRequest {
   final bool? isSeen; // Read-Status: false = ungelesen (weißer Rahmen), true = gelesen (hellblauer Rahmen)
   final bool? isFavorite; // Favoriten-Markierung
   final bool? isDjWish; // Von DJ hinzugefügter Wunsch
+  final bool? isPreWish; // Vor Partybeginn abgeschickt (Gast)
+  final bool? preWishPublished; // DJ hat Wunsch in „Offen“ freigegeben
 
   SongRequest({
     required this.id,
@@ -47,6 +51,7 @@ class SongRequest {
     this.djId,
     this.djCode,
     this.createdAt,
+    this.createdAtList,
     this.name,
     this.requestedBy,
     this.isRegisteredUsers,
@@ -68,6 +73,8 @@ class SongRequest {
     this.isSeen,
     this.isFavorite,
     this.isDjWish,
+    this.isPreWish,
+    this.preWishPublished,
   });
 
   /// Hilfsmethode: Parst Timestamp aus dynamic (unterstützt played_at/playedAt, rejected_at/rejectedAt)
@@ -94,6 +101,16 @@ class SongRequest {
         }
       }
       
+      List<Timestamp>? createdAtListParsed;
+      try {
+        final calValue = data['createdAt_list'];
+        if (calValue is List) {
+          createdAtListParsed = calValue.whereType<Timestamp>().toList();
+        }
+      } catch (e) {
+        debugLog('⚠️ Fehler beim Parsen von createdAt_list: $e');
+      }
+
       // Sichere Liste-Konvertierung für requested_by
       List<String>? requestedByList;
       try {
@@ -155,6 +172,7 @@ class SongRequest {
         djId: data['djId']?.toString(),
         djCode: data['dj_code']?.toString(),
         createdAt: data['createdAt'] is Timestamp ? data['createdAt'] as Timestamp : null,
+        createdAtList: createdAtListParsed,
         name: data['name'] != null ? unescapeHtml(data['name'].toString()) : null,
         requestedBy: requestedByList,
         isRegisteredUsers: isRegisteredUsersMap,
@@ -179,6 +197,8 @@ class SongRequest {
         isSeen: data['isSeen'] is bool ? (data['isSeen'] as bool) : null,
         isFavorite: data['is_favorite'] == true,
         isDjWish: data['is_dj_wish'] == true,
+        isPreWish: data['is_pre_wish'] == true,
+        preWishPublished: data['pre_wish_published'] == true,
       );
     } catch (e, stackTrace) {
       debugLog('❌ KRITISCHER FEHLER beim Parsen von SongRequest: $e');

@@ -57,10 +57,20 @@ class AppConfig {
   /// App-Schriftfaktor (0.8 / 0.9 / 1.0 / 1.1 / 1.2), persistent in [TextScaleService].
   static double get userTextScaleFactor => TextScaleService.instance.factor;
 
-  /// RevenueCat SDK (Google Play `goog_…`; iOS ggf. separater `appl_…` per Build-Define).
-  static const String revenueCatApiKey = String.fromEnvironment(
+  /// RevenueCat: **Google Play** (`goog_…`), nur Android — Auswahl in
+  /// `lib/services/revenue_cat_api_key_io.dart` via `Platform.isAndroid`.
+  /// Überschreiben: `--dart-define=REVENUECAT_API_KEY=...`
+  static const String revenueCatApiKeyAndroid = String.fromEnvironment(
     'REVENUECAT_API_KEY',
     defaultValue: 'goog_sSzleukMHbvskClLmpQULcJTDmH',
+  );
+
+  /// RevenueCat: **App Store / TestFlight** (`appl_…`), nur iOS — dort `Platform.isIOS`
+  /// in `revenue_cat_api_key_io.dart`.
+  /// Überschreiben: `--dart-define=REVENUECAT_API_KEY_IOS=...`
+  static const String revenueCatApiKeyIos = String.fromEnvironment(
+    'REVENUECAT_API_KEY_IOS',
+    defaultValue: 'appl_LvJImjthIhVHFMPDskoHYIFzeIj',
   );
   
   // E-Mail Adressen
@@ -182,10 +192,10 @@ class AppConfig {
     debugLog('✅ AppConfig: adminDjId manuell gesetzt: $djId');
   }
   
-  // PWA URL Builder - Helper für Party-Code URLs
-  // Format: https://vibesbox.app/?code=PARTYCODE
+  // PWA URL Builder - QR & Links öffnen direkt die Wunschbox (/vb/)
+  // Format: https://vibesbox.app/vb/?code=PARTYCODE
   static String buildPwaUrlWithCode(String partyCode) {
-    return '$pwaUrl/?code=$partyCode';
+    return '$pwaUrl/vb/?code=$partyCode';
   }
   
   /// Firestore-Rollen-ID für "Admin" (wird in main() via getRoleIdByName('Admin') gesetzt).

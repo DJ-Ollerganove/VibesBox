@@ -19,8 +19,13 @@ import 'duplicate_check_service.dart';
 import 'pro_feature_guard.dart';
 import '../utils/text_utils.dart';
 import '../utils/debug_log.dart';
+import 'app_diagnostic_log_service.dart';
+import '../utils/pre_wish_helper.dart';
+import '../utils/wish_paths.dart';
 import '../utils/notification_display_text.dart';
 import '../l10n/locale_helper.dart';
+import '../utils/ios_stable_device_id.dart';
+import '../models/user_model.dart';
 
 /// Status für Shazam-Scanning
 enum ShazamScanStatus {
@@ -192,6 +197,15 @@ class ShazamService {
   double get micSensitivity => _micSensitivity;
   double get recognitionThreshold => _recognitionThreshold;
   bool get showStatusNotificationEnabled => _showStatusNotification;
+
+  /// Synchronisiert die Statusleisten-Option aus [UserModel] (Geräte-gemergte Werte aus [UserService]).
+  Future<void> syncShowStatusNotificationFromUserModel(UserModel user) async {
+    final auth = FirebaseAuth.instance.currentUser;
+    if (auth == null || auth.uid != user.id) return;
+    final next = user.showStatusNotification;
+    if (next == _showStatusNotification) return;
+    await setShowStatusNotificationEnabled(next);
+  }
 
   /// Free-DJ: Intelligente Steuerung hart auf false (auch wenn DB anders steht).
   bool get effectiveSmartThresholdEnabled =>
@@ -1045,6 +1059,7 @@ class ShazamService {
     }
 
     debugLog('🚀 Starte Shazam Auto-Scanning...');
+    diagLog('SHAZAM', 'Auto-Scanning start (Intervall ${effectiveScanIntervalSeconds}s)');
 
     // Einstellungen früh laden, bevor über Notification-Sichtbarkeit entschieden wird.
     await loadScanInterval();
@@ -1149,6 +1164,7 @@ class ShazamService {
   /// Stoppt das automatische Scanning
   Future<void> stopAutoScanning() async {
     debugLog('🛑 Stoppe Shazam Auto-Scanning...');
+    diagLog('SHAZAM', 'Auto-Scanning Stopp');
     // Zuerst nativen Lauf abbrechen, damit `recognize` nicht offen bleibt und
     // [_performScanInFlight] zuverlässig frei wird.
     try {
@@ -1277,8 +1293,10 @@ class ShazamService {
           resolved = info.fingerprint.trim();
         }
       } else if (Platform.isIOS) {
-        final info = await plugin.iosInfo;
-        resolved = (info.identifierForVendor ?? '').trim();
+        resolved = await getStableIosDeviceId(
+          mirrorPrefsKey: 'recognition_device_id',
+          fallback: fallback,
+        );
       }
       if (resolved.isEmpty) resolved = fallback;
       await prefs.setString('recognition_device_id', resolved);
@@ -1501,7 +1519,11 @@ class ShazamService {
 
       // Führe Shazam-Scan durch (Free-DJ: intelligente Steuerung immer false)
       Map<dynamic, dynamic>? result;
+      // Party-Kontext **unmittelbar vor** Native-Recognize: verhindert Wunsch-Schreibungen,
+      // wenn erst während des Scans eine Party „dazukommt“ (langer ShazamKit-Lauf).
+      String? partyIdWhenNativeRecognizeStarted;
       try {
+        partyIdWhenNativeRecognizeStarted = ActivePartyService.currentPartyId;
         result = await _channel
             .invokeMethod<Map<dynamic, dynamic>>('recognize', {
               'token': token,
@@ -1541,9 +1563,30 @@ class ShazamService {
             final errorMessage =
                 result['error_message'] as String? ??
                 'Apple Developer Token ungültig oder abgelaufen';
-            debugLog('❌ Shazam Token-Fehler: $errorMessage');
-            debugLog('💡 Bitte prüfe die Cloud Function getAppleMusicToken.');
+            debugLog('❌ Shazam: $errorMessage');
+            // iOS: ShazamKit-Fehler 202 — fast immer fehlende App-ID-Capability, nicht das Music-JWT.
+            if (!kIsWeb && Platform.isIOS) {
+              debugLog(
+                '💡 iOS: developer.apple.com → Identifiers → diese App-ID → Capability „ShazamKit“ '
+                'einschalten → Xcode Signing/Provisioning neu ziehen. Ohne Entitlement erkennt '
+                'ShazamKit keine Songs.',
+              );
+              _showGlobalSnack(errorMessage, backgroundColor: Colors.red.shade900);
+              _updateStatus(ShazamScanStatus.error);
+              _handleNoMatchOrError();
+              return;
+            }
+            debugLog('💡 Android: Apple-Music-Developer-Token prüfen (Callable getAppleMusicToken).');
             _clearAppleTokenCache();
+            _updateStatus(ShazamScanStatus.error);
+            _handleNoMatchOrError();
+            return;
+          }
+          if (error == 'PERMISSION_DENIED') {
+            final msg =
+                result['error_message'] as String? ??
+                'Mikrofon-Berechtigung verweigert (iOS).';
+            debugLog('❌ Musikerkennung: $msg');
             _updateStatus(ShazamScanStatus.error);
             _handleNoMatchOrError();
             return;
@@ -1571,15 +1614,42 @@ class ShazamService {
             }
             _resultController.add(songData);
 
-            // Wunsch-Abgleich nur mit vollständigen Metadaten (Titel + Interpret)
-            final hasActiveParty = await _hasActiveParty();
-            if (hasActiveParty &&
+            // Wunsch-Abgleich nur mit vollständigen Metadaten (Titel + Interpret).
+            // Zusätzlich: Party muss schon **vor** Native-Recognize bestanden haben und unverändert
+            // geblieben sein; plus Firestore-Lauf-Check (keine Zuordnung zu später gestarteter Party).
+            final boundParty = partyIdWhenNativeRecognizeStarted;
+            final currentParty = ActivePartyService.currentPartyId;
+            final hasStablePartyContext =
+                boundParty != null &&
+                boundParty.isNotEmpty &&
+                boundParty != 'manual' &&
+                boundParty == currentParty &&
                 title.trim().isNotEmpty &&
-                artist.trim().isNotEmpty) {
-              await _checkAndUpdateWishes(title, artist);
-            } else if (!hasActiveParty) {
+                artist.trim().isNotEmpty;
+
+            if (hasStablePartyContext) {
+              final runningOk =
+                  await ActivePartyService.isPartyIdRunningNowForCurrentDj(
+                    boundParty,
+                  );
+              if (runningOk) {
+                await _checkAndUpdateWishes(title, artist, partyId: boundParty);
+              } else {
+                debugLog(
+                  'Musikerkennung: kein Wunsch-Abgleich – Party läuft laut Firestore nicht '
+                  'oder Kontext ungültig (partyId=$boundParty, Label: $label)',
+                );
+              }
+            } else if (boundParty == null ||
+                boundParty.isEmpty ||
+                boundParty == 'manual') {
               debugLog(
-                '🧪 Testmodus: Song erkannt, aber keine aktive Party: $label',
+                '🧪 Testmodus: Song erkannt ohne Party-Kontext zum Scan-Start: $label',
+              );
+            } else if (title.trim().isNotEmpty && artist.trim().isNotEmpty) {
+              debugLog(
+                'Musikerkennung: kein Wunsch-Abgleich – Party-Kontext hat sich während des Scans '
+                'geändert (Start: $boundParty, jetzt: $currentParty, Label: $label)',
               );
             }
 
@@ -1603,8 +1673,9 @@ class ShazamService {
         // Fremdübernahme nach nur wenigen Minuten ohne Session-Heartbeat).
         unawaited(_pingRecognitionLeaseFromPartyHeartbeatAsync());
       }
-    } catch (e) {
+    } catch (e, st) {
       debugLog('Fehler beim Shazam-Scan: $e');
+      diagLog('SHAZAM', 'Scan-Fehler: $e\n$st');
       _updateStatus(ShazamScanStatus.error);
       _handleNoMatchOrError();
     } finally {
@@ -1612,132 +1683,176 @@ class ShazamService {
     }
   }
 
-  /// Echte laufende Party (nicht Testmodus `manual`) — nur für Wunsch-Abgleich / Firestore.
-  Future<bool> _hasActiveParty() async {
-    try {
-      final partyId = ActivePartyService.currentPartyId;
-      return partyId != null &&
-          partyId.isNotEmpty &&
-          partyId != 'manual';
-    } catch (e) {
-      debugLog('⚠️ Fehler beim Prüfen der aktiven Party: $e');
-      return false;
-    }
-  }
-
   /// Prüft erkannte Songs gegen Wunschliste und aktualisiert Status automatisch
   /// Nutzt duplicate_threshold für Ähnlichkeitsprüfung
-  Future<void> _checkAndUpdateWishes(String title, String artist) async {
+  Future<void> _checkAndUpdateWishes(
+    String title,
+    String artist, {
+    required String partyId,
+  }) async {
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) return;
 
-      // Aktive Party-ID nur aus zentraler Session
-      final partyId = ActivePartyService.currentPartyId;
-      if (partyId == null || partyId.isEmpty) {
-        return; // Keine aktive Party
+      if (partyId.isEmpty || partyId == 'manual') {
+        return;
       }
 
-      // Lade duplicate_threshold aus Admin-Einstellungen
-      double threshold = 0.85; // Fallback
-      try {
-        final settingsDoc = await FirebaseFirestore.instance
-            .collection('party_settings')
-            .doc('current')
-            .get();
-
-        if (settingsDoc.exists) {
-          final settingsData = settingsDoc.data();
-          final thresholdValue = settingsData?['duplicate_threshold'];
-          if (thresholdValue != null) {
-            if (thresholdValue is double) {
-              threshold = thresholdValue;
-            } else if (thresholdValue is num) {
-              threshold = thresholdValue.toDouble();
-            }
-            debugLog(
-              '🔍 Wunsch-Abgleich mit Threshold: ${(threshold * 100).toStringAsFixed(1)}%',
-            );
-          }
-        }
-      } catch (e) {
-        debugLog(
-          '⚠️ Fehler beim Laden des Schwellenwerts für Wunsch-Abgleich: $e',
-        );
-      }
-
-      // Lade pending Wünsche für die aktive Party
-      final wishesSnapshot = await FirebaseFirestore.instance
-          .collection('wishes')
-          .where('party_id', isEqualTo: partyId)
-          .where('status', isEqualTo: 'pending')
-          .get();
-
-      if (wishesSnapshot.docs.isEmpty) {
-        return; // Keine pending Wünsche
-      }
-
-      // Gleiche Normalisierung wie Gruppierung/Duplikat-Check (NFC, Whitespace, Klammern, Mix-Begriffe)
+      final threshold = await _loadWishMatchThreshold();
       final ignored = DuplicateCheckService.getCachedIgnoredKeywords();
       final normalizedTitle = normalizeTextForDuplicateCheck(title, ignored);
       final normalizedArtist = normalizeTextForDuplicateCheck(artist, ignored);
 
-      // Prüfe jeden pending Wunsch
-      for (final wishDoc in wishesSnapshot.docs) {
-        final wishData = wishDoc.data();
-        final wishTitle = (wishData['title'] as String? ?? '').trim();
-        final wishArtist = (wishData['artist'] as String? ?? '').trim();
+      final wishesSnapshot = await WishPaths.partyWishes(partyId)
+          .where('status', isEqualTo: 'pending')
+          .limit(80)
+          .get();
 
-        if (wishTitle.isEmpty || wishArtist.isEmpty) continue;
-
-        final canonWishTitle = normalizeTextForDuplicateCheck(wishTitle, ignored);
-        final canonWishArtist = normalizeTextForDuplicateCheck(wishArtist, ignored);
-
-        // Berechne Ähnlichkeit mit string_similarity (beide Seiten gleich normalisiert)
-        final titleSimilarity = StringSimilarity.compareTwoStrings(
-          normalizedTitle,
-          canonWishTitle,
-        );
-        final artistSimilarity = StringSimilarity.compareTwoStrings(
-          normalizedArtist,
-          canonWishArtist,
-        );
-
-        // Durchschnittliche Ähnlichkeit
-        final avgSimilarity = (titleSimilarity + artistSimilarity) / 2.0;
-
-        // Wenn Ähnlichkeit >= Threshold: Match gefunden
-        if (avgSimilarity >= threshold) {
-          debugLog(
-            '✅ Wunsch-Match gefunden: "$wishTitle - $wishArtist" (Ähnlichkeit: ${(avgSimilarity * 100).toStringAsFixed(1)}%, Threshold: ${(threshold * 100).toStringAsFixed(1)}%)',
-          );
-
-          // Aktualisiere Status von pending zu played
-          await wishDoc.reference.update({
-            'status': 'played',
-            'auto_recognized': true, // Kennzeichnung für automatische Erkennung
-            'recognized_at':
-                FieldValue.serverTimestamp(), // Zeitstempel der Erkennung
-            'played_at': FieldValue.serverTimestamp(),
-            'playedAt': FieldValue.serverTimestamp(),
-          });
-
-          // Sende Benachrichtigung an Stream (für Snackbar im Footer)
-          if (!_wishMatchController.isClosed) {
-            _wishMatchController.add({
-              'title': wishTitle,
-              'artist': wishArtist,
-            });
-          }
-
-          // Nur ersten Match verarbeiten (um mehrere Updates zu vermeiden)
-          break;
-        }
+      if (wishesSnapshot.docs.isEmpty) {
+        return;
       }
+
+      // 1) Offene Wunschbox (wie Tab „Offen“ — ohne reine Vorab-Queue)
+      final matchedOpen = await _tryMatchRecognizedSongInDocs(
+        wishesSnapshot.docs,
+        normalizedTitle: normalizedTitle,
+        normalizedArtist: normalizedArtist,
+        ignored: ignored,
+        threshold: threshold,
+        includeQueuedPreWish: false,
+      );
+      if (matchedOpen) return;
+
+      // 2) Vorab-Queue — nur wenn mindestens ein noch nicht freigegebener Vorab-Wunsch existiert
+      if (!_snapshotHasQueuedPreWish(wishesSnapshot)) {
+        final extraPreSnap = await WishPaths.partyWishes(partyId)
+            .where('status', isEqualTo: 'pending')
+            .where('is_pre_wish', isEqualTo: true)
+            .limit(40)
+            .get();
+        if (!_snapshotHasQueuedPreWish(extraPreSnap)) {
+          return;
+        }
+        await _tryMatchRecognizedSongInDocs(
+          extraPreSnap.docs,
+          normalizedTitle: normalizedTitle,
+          normalizedArtist: normalizedArtist,
+          ignored: ignored,
+          threshold: threshold,
+          includeQueuedPreWish: true,
+        );
+        return;
+      }
+
+      await _tryMatchRecognizedSongInDocs(
+        wishesSnapshot.docs,
+        normalizedTitle: normalizedTitle,
+        normalizedArtist: normalizedArtist,
+        ignored: ignored,
+        threshold: threshold,
+        includeQueuedPreWish: true,
+      );
     } catch (e) {
       debugLog('❌ Fehler beim Abgleich mit Wunschliste: $e');
-      // Fehler nicht weiterwerfen, damit Scan weiterläuft
     }
+  }
+
+  bool _snapshotHasQueuedPreWish(QuerySnapshot<Map<String, dynamic>> snap) {
+    for (final doc in snap.docs) {
+      if (PreWishHelper.isQueuedPreWish(doc.data())) return true;
+    }
+    return false;
+  }
+
+  Future<double> _loadWishMatchThreshold() async {
+    double threshold = 0.85;
+    try {
+      final settingsDoc = await FirebaseFirestore.instance
+          .collection('party_settings')
+          .doc('current')
+          .get();
+
+      if (settingsDoc.exists) {
+        final thresholdValue = settingsDoc.data()?['duplicate_threshold'];
+        if (thresholdValue is double) {
+          threshold = thresholdValue;
+        } else if (thresholdValue is num) {
+          threshold = thresholdValue.toDouble();
+        }
+        debugLog(
+          '🔍 Wunsch-Abgleich mit Threshold: ${(threshold * 100).toStringAsFixed(1)}%',
+        );
+      }
+    } catch (e) {
+      debugLog(
+        '⚠️ Fehler beim Laden des Schwellenwerts für Wunsch-Abgleich: $e',
+      );
+    }
+    return threshold;
+  }
+
+  /// [includeQueuedPreWish] false = nur Offen-Tab; true = nur reine Vorab-Queue.
+  Future<bool> _tryMatchRecognizedSongInDocs(
+    Iterable<QueryDocumentSnapshot<Map<String, dynamic>>> docs, {
+    required String normalizedTitle,
+    required String normalizedArtist,
+    required List<String> ignored,
+    required double threshold,
+    required bool includeQueuedPreWish,
+  }) async {
+    for (final wishDoc in docs) {
+      final wishData = wishDoc.data();
+      final isQueued = PreWishHelper.isQueuedPreWish(wishData);
+      if (includeQueuedPreWish) {
+        if (!isQueued) continue;
+      } else if (isQueued) {
+        continue;
+      }
+
+      final wishTitle = (wishData['title'] as String? ?? '').trim();
+      final wishArtist = (wishData['artist'] as String? ?? '').trim();
+      if (wishTitle.isEmpty || wishArtist.isEmpty) continue;
+
+      final canonWishTitle = normalizeTextForDuplicateCheck(wishTitle, ignored);
+      final canonWishArtist =
+          normalizeTextForDuplicateCheck(wishArtist, ignored);
+
+      final titleSimilarity = StringSimilarity.compareTwoStrings(
+        normalizedTitle,
+        canonWishTitle,
+      );
+      final artistSimilarity = StringSimilarity.compareTwoStrings(
+        normalizedArtist,
+        canonWishArtist,
+      );
+      final avgSimilarity = (titleSimilarity + artistSimilarity) / 2.0;
+
+      if (avgSimilarity < threshold) continue;
+
+      debugLog(
+        '✅ Wunsch-Match gefunden (${includeQueuedPreWish ? 'Vorab' : 'Offen'}): '
+        '"$wishTitle - $wishArtist" '
+        '(${(avgSimilarity * 100).toStringAsFixed(1)}%, '
+        'Threshold: ${(threshold * 100).toStringAsFixed(1)}%)',
+      );
+
+      await wishDoc.reference.update({
+        'status': 'played',
+        'auto_recognized': true,
+        'recognized_at': FieldValue.serverTimestamp(),
+        'played_at': FieldValue.serverTimestamp(),
+        'playedAt': FieldValue.serverTimestamp(),
+      });
+
+      if (!_wishMatchController.isClosed) {
+        _wishMatchController.add({
+          'title': wishTitle,
+          'artist': wishArtist,
+        });
+      }
+      return true;
+    }
+    return false;
   }
 
   /// Gibt gecachtes JWT zurück, solange es laut Serverablauf (oder Fallback 25 min) noch gültig ist.
@@ -1769,6 +1884,24 @@ class ShazamService {
     }
 
     return _currentToken;
+  }
+
+  void _showGlobalSnack(String message, {Color backgroundColor = Colors.deepOrange}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final messenger = appRootScaffoldMessengerKey.currentState;
+      if (messenger == null) {
+        debugLog('⚠️ ShazamService: SnackBar – ScaffoldMessenger noch nicht verfügbar.');
+        return;
+      }
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: backgroundColor,
+          duration: const Duration(seconds: 10),
+        ),
+      );
+    });
   }
 
   /// Orangefarbene SnackBar über den root-[ScaffoldMessenger] (sichtbar auf jedem Tab).

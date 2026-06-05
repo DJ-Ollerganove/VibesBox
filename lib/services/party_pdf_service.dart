@@ -695,6 +695,7 @@ class PartyPdfService {
     String? profileImageUrl,
     String? localeLanguageCode,
     void Function()? onBeforeLayoutPdf,
+    String? exportFileName,
   }) async {
     // Sicherstellen, dass das Logo geladen ist (für Auto-Login Fälle)
     await UserService.ensureDjLogoCached();
@@ -778,6 +779,7 @@ class PartyPdfService {
     await Printing.layoutPdf(
       onLayout: (PdfPageFormat format) async => pdf.save(),
       format: PdfPageFormat.a4.landscape,
+      name: exportFileName ?? 'VibesBox_Party',
     );
   }
 
@@ -803,6 +805,7 @@ class PartyPdfService {
     String? profileImageUrl,
     String? localeLanguageCode,
     void Function()? onBeforeLayoutPdf,
+    String? exportFileName,
   }) async {
     await UserService.ensureDjLogoCached();
     final pwaUrl = AppConfig.buildPwaUrlWithCode(partyCode);
@@ -891,6 +894,7 @@ class PartyPdfService {
     await Printing.layoutPdf(
       onLayout: (PdfPageFormat format) async => pdf.save(),
       format: PdfPageFormat.a4.landscape,
+      name: exportFileName ?? 'VibesBox_Party',
     );
   }
 
@@ -916,6 +920,7 @@ class PartyPdfService {
     String? profileImageUrl,
     String? localeLanguageCode,
     void Function()? onBeforeLayoutPdf,
+    String? exportFileName,
   }) async {
     // Sicherstellen, dass das Logo geladen ist (für Auto-Login Fälle)
     await UserService.ensureDjLogoCached();
@@ -1006,6 +1011,7 @@ class PartyPdfService {
     onBeforeLayoutPdf?.call();
     await Printing.layoutPdf(
       onLayout: (PdfPageFormat format) async => pdf.save(),
+      name: exportFileName ?? 'VibesBox_Party',
     );
   }
 
@@ -1031,6 +1037,7 @@ class PartyPdfService {
     String? profileImageUrl,
     String? localeLanguageCode,
     void Function()? onBeforeLayoutPdf,
+    String? exportFileName,
   }) async {
     // Sicherstellen, dass das Logo geladen ist (für Auto-Login Fälle)
     await UserService.ensureDjLogoCached();
@@ -1098,6 +1105,7 @@ class PartyPdfService {
     onBeforeLayoutPdf?.call();
     await Printing.layoutPdf(
       onLayout: (PdfPageFormat format) async => pdf.save(),
+      name: exportFileName ?? 'VibesBox_Party',
     );
   }
 

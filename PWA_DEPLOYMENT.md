@@ -12,7 +12,7 @@ Um die Lesbarkeit des Codes für Dritte weiter zu erschweren:
 
 1. **Build-Schritt einrichten (optional):**  
    Vor `firebase deploy --only hosting` die JS-Dateien minifizieren:
-   - z.B. mit **Terser**: `npx terser public/vb/translations.js -o public/vb/translations.min.js -c -m` und im HTML `translations.min.js` einbinden.
+   - z.B. mit **Terser**: `npx terser public/vb/app.js -o public/vb/app.min.js -c -m` (oder `lang/de.js` usw.) und im HTML die minifizierte Version einbinden.
    - Für **inline Scripts** in `index.html`: Build-Pipeline (z.B. Vite, Rollup) mit Terser-Plugin oder manuell kritische Blöcke minifizieren.
 
 2. **Firebase Hosting:**  

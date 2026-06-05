@@ -1,0 +1,10 @@
+/* Info.plist 本地化 – VibesBox */
+"NSLocalNetworkUsageDescription" = "为使 Flutter 与 Xcode 能连接本应用（例如在开发时使用热重载），VibesBox 需要访问您本地网络中的设备。";
+"NSMicrophoneUsageDescription" = "VibesBox 需要访问麦克风以分析正在播放的音乐并进行识别。";
+"NSAppleMusicUsageDescription" = "VibesBox 可访问您的媒体资料库，以将音乐识别与 Apple Music 功能关联。";
+"NSCameraUsageDescription" = "VibesBox 需要使用相机扫描二维码和拍摄照片。";
+"NSPhotoLibraryUsageDescription" = "我们需要访问您的照片，以便您选择个人头像并使用派对相关图片。";
+"NSPhotoLibraryAddUsageDescription" = "在您同意时，我们会将二维码或派对照片等图像保存到您的照片图库。";
+"NSLocationWhenInUseUsageDescription" = "我们需要使用您的位置信息，以便将地图居中显示在您的派对地点。";
+"NSCalendarsUsageDescription" = "用于将派对日期导出到您的日历。";
+"NSFaceIDUsageDescription" = "面容 ID 用于保护管理员设置，确保只有您能访问敏感选项。";

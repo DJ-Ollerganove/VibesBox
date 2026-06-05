@@ -11,8 +11,10 @@ import '../l10n/app_localizations.dart';
 import '../services/active_party_service.dart';
 import '../services/party_autostart_service.dart';
 import '../services/shazam_service.dart';
+import '../utils/ios_microphone_settings.dart';
 import '../services/user_service.dart';
 import '../utils/party_helper.dart';
+import '../utils/wish_paths.dart';
 import '../utils/role_helper.dart' show hasRole, hasAnyRole;
 import '../utils/ui_constants.dart';
 import '../utils/debug_log.dart';
@@ -34,11 +36,9 @@ class _ShazamFooterState extends State<ShazamFooter> {
   String? _currentPartyId;
   StreamSubscription<ShazamScanStatus>? _statusSubscription;
   StreamSubscription<Map<String, dynamic>?>? _resultSubscription;
-  StreamSubscription<double>? _rmsSubscription;
   StreamSubscription<Map<String, String>>? _wishMatchSubscription;
   bool _isDJOrAdmin = false;
   bool _isCheckingRole = true;
-  double _currentRms = 0.0;
   bool _isScanning = false;
   bool _isTestMode = false; // True wenn keine aktive Party (Testmodus)
 
@@ -106,26 +106,8 @@ class _ShazamFooterState extends State<ShazamFooter> {
       }
     });
 
-    
-    // Höre auf RMS-Werte für kompakte Pegelanzeige (immer aktiv, auch wenn nicht gescannt wird)
-    _rmsSubscription = _shazamService.rmsStream.listen(
-      (rms) {
-        if (mounted) {
-          setState(() {
-            _currentRms = rms.clamp(0.0, 1.0);
-          });
-        }
-      },
-      onError: (error) {
-        if (mounted) {
-          setState(() {
-            _currentRms = 0.0;
-          });
-        }
-      },
-      cancelOnError: false,
-    );
-    
+    // RMS nur über StreamBuilder unten (kein zweites Abo auf rmsStream).
+
     // Höre auf automatisch verschobene Wünsche (für Snackbar-Benachrichtigung)
     _wishMatchSubscription = _shazamService.wishMatchStream.listen((match) {
       if (mounted && context.mounted) {
@@ -182,7 +164,6 @@ class _ShazamFooterState extends State<ShazamFooter> {
     );
     _statusSubscription?.cancel();
     _resultSubscription?.cancel();
-    _rmsSubscription?.cancel();
     _wishMatchSubscription?.cancel();
     super.dispose();
   }
@@ -216,9 +197,10 @@ class _ShazamFooterState extends State<ShazamFooter> {
 
       if (songTitle == null || songArtist == null) return;
 
-      final wishesSnapshot = await FirebaseFirestore.instance
-          .collection('wishes')
-          .where('status', isEqualTo: 'open')
+      final partyId = _currentPartyId;
+      if (partyId == null || partyId.isEmpty || partyId == 'manual') return;
+      final wishesSnapshot = await WishPaths.partyWishes(partyId)
+          .where('status', isEqualTo: 'pending')
           .get();
 
       bool isMatched = false;
@@ -340,7 +322,7 @@ class _ShazamFooterState extends State<ShazamFooter> {
             );
             
             if (shouldOpenSettings == true) {
-              await openAppSettings();
+              await openIosMicrophonePrivacyOrAppSettings();
             }
           }
           return; // Beende hier - Switch bleibt auf false

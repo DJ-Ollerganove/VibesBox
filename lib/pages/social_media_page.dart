@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -9,12 +11,14 @@ import '../utils/social_platform_icons.dart';
 import '../widgets/common/pwa_widget_cell.dart';
 import '../config/app_config.dart';
 import '../services/user_service.dart';
+import '../services/navigation_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../main.dart' show themeModeNotifier;
 import '../l10n/app_localizations.dart';
 import '../widgets/free_feature_locked.dart';
 import '../widgets/heartbeat_pulse_dot.dart';
 import '../utils/ui_constants.dart';
+import '../utils/social_link_input_helper.dart';
 import '../utils/network_image_url.dart';
 import '../helpers/security_helper.dart';
 import '../utils/debug_log.dart';
@@ -54,10 +58,15 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
   Map<String, String> _socialMediaLinks = {};
   List<String> _linkOrder = [];
   final Map<String, TextEditingController> _urlControllers = {};
+  /// iOS: hängenbleibendes Drag-Feedback vermeiden – Grid nach Drag neu aufbauen.
+  int _socialGridEpoch = 0;
+  bool _isDraggingSocial = false;
+  VoidCallback? _tabNavListener;
   bool get _isDarkMode => themeModeNotifier.value == ThemeMode.dark;
 
-  /// Free/Pro/Trial: UI sofort bei Firestore- oder Session-Update neu zeichnen.
+  /// Free/Pro/Trial: UI bei Firestore- oder Session-Update neu zeichnen.
   VoidCallback? _subscriptionTierListener;
+  VoidCallback? _sessionProUiListener;
 
   // Verfügbare Social Media Portale
   static const List<SocialMediaPlatform> _availablePlatforms = [
@@ -115,10 +124,19 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
   void initState() {
     super.initState();
     _subscriptionTierListener = () {
+      if (!mounted) return;
+      setState(() {});
+      unawaited(_loadSocialMediaLinks());
+    };
+    _sessionProUiListener = () {
       if (mounted) setState(() {});
     };
     UserService().currentUser.addListener(_subscriptionTierListener!);
-    UserService().sessionProStatus.addListener(_subscriptionTierListener!);
+    UserService().sessionProStatus.addListener(_sessionProUiListener!);
+    _tabNavListener = () {
+      if (_isDraggingSocial) _finishSocialDrag();
+    };
+    NavigationService().currentTabIndex.addListener(_tabNavListener!);
     _loadSocialMediaLinks();
   }
 
@@ -126,7 +144,12 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
   void dispose() {
     if (_subscriptionTierListener != null) {
       UserService().currentUser.removeListener(_subscriptionTierListener!);
-      UserService().sessionProStatus.removeListener(_subscriptionTierListener!);
+    }
+    if (_sessionProUiListener != null) {
+      UserService().sessionProStatus.removeListener(_sessionProUiListener!);
+    }
+    if (_tabNavListener != null) {
+      NavigationService().currentTabIndex.removeListener(_tabNavListener!);
     }
     for (var controller in _urlControllers.values) {
       controller.dispose();
@@ -134,19 +157,30 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
     super.dispose();
   }
 
-  /// Lädt Daten: In Party → DJ-Links aus Session (egal ob angemeldet).
-  /// Gast ohne Party: Session-Koffer (leer) → gleiche Ansicht wie unangemeldet (VibesBox).
-  /// DJ/Admin ohne Party: eigene Links aus Firestore zum Bearbeiten.
+  /// Lädt Daten: **Gast** mit Party → DJ-Links aus Session-Koffer.
+  /// **Gast** ohne Party: leerer Koffer → VibesBox-Standard wie unangemeldet.
+  /// **DJ / Location / Admin** (nicht Gast-Rolle): eigene Links aus Firestore inkl. Bearbeiten.
   Future<void> _loadSocialMediaLinks() async {
     await PartySessionService.instance.loadFromPrefs();
-    final hasSession = PartySessionService.instance.hasSession;
     final user = FirebaseAuth.instance.currentUser;
+    final userModel = UserService().currentUser.value;
+
+    // DJ / Location / Admin: immer eigene Firestore-Links — niemals Gast-Party-Session
+    // (sonst bleiben alte Gast-Daten aus Prefs sichtbar, obwohl die DJ-Shell aktiv ist).
+    if (user != null &&
+        userModel != null &&
+        !AppConfig.isGuestRole(userModel)) {
+      await _loadFromFirestoreForDj(user.uid);
+      return;
+    }
+
+    final hasSession = PartySessionService.instance.hasSession;
     if (hasSession) {
       await _loadFromSessionKoffer();
       return;
     }
     final isLoggedInGuest =
-        user != null && AppConfig.isGuestRole(UserService().currentUser.value);
+        user != null && AppConfig.isGuestRole(userModel);
     if (isLoggedInGuest) {
       await _loadFromSessionKoffer();
       return;
@@ -209,7 +243,9 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
           }
         }
         for (final e in _socialMediaLinks.entries) {
-          _urlControllers[e.key] = TextEditingController(text: e.value);
+          _urlControllers[e.key] = TextEditingController(
+            text: SocialLinkInputHelper.storedToDisplay(e.key, e.value),
+          );
         }
         _isLoading = false;
       });
@@ -228,9 +264,11 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
       for (var entry in _urlControllers.entries) {
         final url = entry.value.text.trim();
         if (url.isNotEmpty) {
-          // ✅ Normalisiere URL: https:// hinzufügen, http:// zu https:// konvertieren
-          final normalizedUrl = _normalizeUrl(url, entry.key);
-          linksToSave[entry.key] = normalizedUrl;
+          final normalizedUrl =
+              SocialLinkInputHelper.inputToStored(entry.key, url);
+          if (normalizedUrl.isNotEmpty) {
+            linksToSave[entry.key] = normalizedUrl;
+          }
         }
       }
 
@@ -354,43 +392,37 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
     }
   }
 
-  // ✅ URL-Normalisierung: Stellt sicher, dass alle URLs mit https:// beginnen
-  String _normalizeUrl(String input, String platformId) {
-    final trimmed = input.trim();
+  String _getSocialInputHint(String platformId, AppLocalizations localizations) {
+    switch (platformId) {
+      case 'facebook':
+        return localizations.social_hint_facebook;
+      case 'instagram':
+        return localizations.social_hint_instagram;
+      case 'tiktok':
+        return localizations.social_hint_tiktok;
+      case 'spotify':
+        return localizations.social_hint_spotify;
+      case 'soundcloud':
+        return localizations.social_hint_soundcloud;
+      case 'youtube':
+        return localizations.social_hint_youtube;
+      case 'whatsapp':
+        return localizations.social_hint_whatsapp;
+      case 'website':
+        return localizations.social_hint_website;
+      default:
+        return localizations.social_hint_account;
+    }
+  }
 
-    // ✅ WhatsApp-Spezialfall: Wenn reine Telefonnummer, formatiere zu wa.me Link
+  TextInputType _socialInputKeyboardType(String platformId) {
     if (platformId == 'whatsapp') {
-      // Prüfe, ob es bereits ein wa.me Link ist
-      if (trimmed.startsWith('https://wa.me/') ||
-          trimmed.startsWith('http://wa.me/')) {
-        return trimmed.replaceFirst('http://', 'https://');
-      }
-
-      // Prüfe, ob es eine reine Telefonnummer ist (nur Ziffern, +, Leerzeichen, Bindestriche, Klammern)
-      final phoneRegex = RegExp(r'^[\d\s\+\-\(\)]+$');
-      if (phoneRegex.hasMatch(trimmed)) {
-        // Extrahiere nur die Ziffern
-        final numbersOnly = trimmed.replaceAll(RegExp(r'[^\d]'), '');
-        if (numbersOnly.length >= 8) {
-          return 'https://wa.me/$numbersOnly';
-        }
-      }
+      return TextInputType.phone;
     }
-
-    // ✅ Normale URL-Behandlung
-    // Wenn bereits https://, behalte es
-    if (trimmed.startsWith('https://')) {
-      return trimmed;
+    if (platformId == 'website') {
+      return TextInputType.url;
     }
-
-    // Wenn http://, ersetze durch https://
-    if (trimmed.startsWith('http://')) {
-      return trimmed.replaceFirst('http://', 'https://');
-    }
-
-    // Wenn kein Protokoll vorhanden, füge https:// hinzu
-    // Keine automatischen Änderungen (kein www., etc.) - respektiere exakt die Eingabe des DJs
-    return 'https://$trimmed';
+    return TextInputType.text;
   }
 
   Future<void> _openLink(String url, String iconName) async {
@@ -439,9 +471,15 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
     });
   }
 
-  Widget _buildReorderableGrid(AppLocalizations localizations) {
-    // Sammle alle Links, die angezeigt werden sollen
-    // Verwendet _linkOrder, wenn vorhanden, sonst alle Keys aus _socialMediaLinks
+  void _finishSocialDrag() {
+    if (!mounted || !_isDraggingSocial) return;
+    setState(() {
+      _isDraggingSocial = false;
+      _socialGridEpoch++;
+    });
+  }
+
+  List<String> _visibleSocialLinkIds() {
     final linksToShow = _linkOrder.isNotEmpty
         ? _linkOrder
               .where(
@@ -453,18 +491,42 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
         : _socialMediaLinks.keys
               .where((id) => _socialMediaLinks[id]!.trim().isNotEmpty)
               .toList();
-
-    // Füge Links hinzu, die in _socialMediaLinks sind, aber nicht in _linkOrder
     for (var key in _socialMediaLinks.keys) {
       if (_socialMediaLinks[key]!.trim().isNotEmpty &&
           !linksToShow.contains(key)) {
         linksToShow.add(key);
       }
     }
+    return linksToShow;
+  }
+
+  void _reorderSocialLink(String draggedId, String targetId) {
+    if (draggedId == targetId) return;
+    final visible = _visibleSocialLinkIds();
+    final from = visible.indexOf(draggedId);
+    final to = visible.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+
+    setState(() {
+      visible.removeAt(from);
+      visible.insert(to, draggedId);
+      final baseOrder = _linkOrder.isNotEmpty
+          ? List<String>.from(_linkOrder)
+          : _socialMediaLinks.keys.toList();
+      final hidden =
+          baseOrder.where((id) => !visible.contains(id)).toList();
+      _linkOrder = [...visible, ...hidden];
+    });
+    unawaited(_saveOrder());
+  }
+
+  Widget _buildReorderableGrid(AppLocalizations localizations) {
+    final linksToShow = _visibleSocialLinkIds();
 
     // Erstelle ein Grid-Layout mit 2 Spalten basierend auf der tatsächlichen
     // verfügbaren Breite im aktuellen Container (nicht Screen-Breite).
     return LayoutBuilder(
+      key: ValueKey('social_grid_$_socialGridEpoch'),
       builder: (context, constraints) {
         const spacing = 12.0;
         final itemWidth = (constraints.maxWidth - spacing) / 2;
@@ -472,9 +534,7 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
         return Wrap(
           spacing: spacing,
           runSpacing: 12,
-          children: linksToShow.asMap().entries.map((entry) {
-            final index = entry.key;
-            final id = entry.value;
+          children: linksToShow.map((id) {
             // Finde die Plattform, die dieser ID entspricht
             final platform = _availablePlatforms.firstWhere(
               (p) => p.id.toLowerCase() == id.toLowerCase(),
@@ -492,7 +552,7 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
             return SizedBox(
               width: itemWidth,
               child: _buildDraggableSocialIcon(
-                key: ValueKey(id),
+                key: ValueKey('social_link_${id}_$_socialGridEpoch'),
                 icon: platform.icon,
                 url: _socialMediaLinks[id]!,
                 name: id,
@@ -501,19 +561,8 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
                   platform.displayNameKey,
                   localizations,
                 ),
-                index: index,
                 itemWidth: itemWidth,
-                onReorder: (oldIndex, newIndex) {
-                  setState(() {
-                    if (newIndex > oldIndex) {
-                      newIndex -= 1;
-                    }
-                    final item = _linkOrder.removeAt(oldIndex);
-                    _linkOrder.insert(newIndex, item);
-                    // Speichere die neue Reihenfolge
-                    _saveOrder();
-                  });
-                },
+                onDropOn: (draggedId) => _reorderSocialLink(draggedId, id),
               ),
             );
           }).toList(),
@@ -529,9 +578,8 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
     required String name,
     required Color color,
     required String displayName,
-    required int index,
     required double itemWidth,
-    required Function(int, int) onReorder,
+    required ValueChanged<String> onDropOn,
   }) {
     final isPressed = _pressedIcon == name;
     final backgroundColor = _isDarkMode
@@ -541,11 +589,21 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
         ? (isPressed ? color : Colors.grey.shade400)
         : (isPressed ? color : Colors.grey.shade300);
 
-    return LongPressDraggable<int>(
+    return LongPressDraggable<String>(
       key: key,
-      data: index,
+      data: name,
+      rootOverlay: true,
+      maxSimultaneousDrags: 1,
+      onDragStarted: () {
+        if (!mounted) return;
+        setState(() => _isDraggingSocial = true);
+      },
+      onDragCompleted: _finishSocialDrag,
+      onDraggableCanceled: (_, __) => _finishSocialDrag(),
+      onDragEnd: (_) => _finishSocialDrag(),
       feedback: Material(
-        elevation: 4,
+        type: MaterialType.transparency,
+        elevation: 8,
         borderRadius: BorderRadius.circular(12),
         child: Container(
           width: itemWidth,
@@ -567,7 +625,7 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
         ),
       ),
       childWhenDragging: Opacity(
-        opacity: 0.3,
+        opacity: 0.25,
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
           decoration: BoxDecoration(
@@ -586,13 +644,11 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
           ),
         ),
       ),
-      onDragEnd: (details) {
-        // Wird durch DragTarget behandelt
-      },
-      child: DragTarget<int>(
-        onWillAcceptWithDetails: (details) => details.data != index,
+      child: DragTarget<String>(
+        onWillAcceptWithDetails: (details) => details.data != name,
         onAcceptWithDetails: (details) {
-          onReorder(details.data, index);
+          onDropOn(details.data);
+          _finishSocialDrag();
         },
         builder: (context, candidateData, rejectedData) {
           return Semantics(
@@ -756,9 +812,13 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
     return p.isNotEmpty && p != 'manual';
   }
 
-  /// Öffentliche VibesBox-Kanäle (@vibesbox.app, Facebook, Web): nur ohne Party-Kontext.
-  bool _showVibesboxDefaultSocial(PartySessionService svc) =>
-      !_hasActivePartyId(svc);
+  /// Öffentliche VibesBox-Kanäle: nur **ohne** aktive Party **oder** in Party mit **Free-DJ**
+  /// (`djPlan == free`). Nicht bei Pro/Trial in Party (dort: DJ-Links oder Hinweis „keine Links“).
+  bool _showGuestVibesboxChannels(PartySessionService svc) {
+    if (!_hasActivePartyId(svc)) return true;
+    final plan = (svc.djPlan ?? '').toLowerCase().trim();
+    return plan == 'free';
+  }
 
   /// True, wenn die geladene Gast-Session mindestens einen aufrufbaren DJ-Link enthält.
   bool _guestHasDjSocialLinks() {
@@ -1047,8 +1107,10 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
                                   platform.displayNameKey,
                                   localizations,
                                 ),
-                                hintText:
-                                    localizations.enter_url,
+                                hintText: _getSocialInputHint(
+                                  platform.id,
+                                  localizations,
+                                ),
                                 border: const OutlineInputBorder(),
                                 suffixIcon: _isEditing && hasLink
                                     ? IconButton(
@@ -1067,35 +1129,38 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
                               textAlign: isRtl
                                   ? TextAlign.right
                                   : TextAlign.left,
-                              keyboardType: TextInputType.url,
+                              keyboardType:
+                                  _socialInputKeyboardType(platform.id),
                               validator: (value) {
-                                // ✅ Flexiblere Validierung: Erlaubt auch URLs ohne Protokoll
-                                // Die Normalisierung fügt automatisch https:// hinzu
                                 if (_isEditing &&
                                     value != null &&
-                                    value.trim().isNotEmpty) {
-                                  final trimmed = value.trim();
-                                  // WhatsApp-Spezialfall: Erlaube auch Telefonnummern
+                                    value.trim().isNotEmpty &&
+                                    !SocialLinkInputHelper.isValidInput(
+                                      platform.id,
+                                      value,
+                                    )) {
                                   if (platform.id == 'whatsapp') {
-                                    // WhatsApp: Erlaube URLs, wa.me Links oder Telefonnummern
-                                    final isUrl =
-                                        trimmed.startsWith('http://') ||
-                                        trimmed.startsWith('https://') ||
-                                        trimmed.startsWith('wa.me/');
-                                    final isPhoneNumber = RegExp(
-                                      r'^[\d\s\+\-\(\)]+$',
-                                    ).hasMatch(trimmed);
-                                    if (!isUrl && !isPhoneNumber) {
-                                      return localizations.invalid_url;
-                                    }
+                                    return localizations.invalid_whatsapp_phone;
                                   }
-                                  // Andere Plattformen: Erlaube URLs mit oder ohne Protokoll
-                                  // Die Normalisierung wird https:// hinzufügen
-                                  // Keine strenge Validierung mehr - alles wird akzeptiert und normalisiert
+                                  return localizations.invalid_url;
                                 }
                                 return null;
                               },
                               onChanged: (value) {
+                                if (platform.id == 'whatsapp') {
+                                  final digits = value.replaceAll(
+                                    RegExp(r'\D'),
+                                    '',
+                                  );
+                                  if (digits != value) {
+                                    controller.value = controller.value.copyWith(
+                                      text: digits,
+                                      selection: TextSelection.collapsed(
+                                        offset: digits.length,
+                                      ),
+                                    );
+                                  }
+                                }
                                 final sanitized = SecurityHelper.sanitize(
                                   value,
                                   maxLength: 300,
@@ -1258,11 +1323,16 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
                       final showDjLogo = inParty ? svc.isPro : false;
                       final djProSocial =
                           inParty ? svc.isDjProPlanForSocialLinks : false;
+                      // DJ-Name + „Vernetze Dich mit …“ nur bei Pro-DJ in aktiver Party
+                      // (Free-DJ in Party: VibesBox-Kanäle; Pro in Party: DJ-Branding nur mit Pro-Links.)
+                      final showDjSocialBranding = hasSession &&
+                          inParty &&
+                          svc.isDjProPlanForSocialLinks;
                       return Center(
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            if (hasSession)
+                            if (showDjSocialBranding)
                               Padding(
                                 padding: const EdgeInsets.only(bottom: 24),
                                 child: _buildSocialBranding(
@@ -1274,17 +1344,13 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
                                   svc.djName,
                                 ),
                               ),
-                            if (_showVibesboxDefaultSocial(svc))
+                            if (_showGuestVibesboxChannels(svc))
                               _buildGuestVibesboxSection(
                                 localizations,
                                 isRtl,
                               )
-                            else if (!djProSocial)
-                              _buildGuestVibesboxSection(
-                                localizations,
-                                isRtl,
-                              )
-                            else if (_guestHasDjSocialLinks())
+                            else if (djProSocial &&
+                                _guestHasDjSocialLinks())
                               _buildScenarioC(localizations)
                             else
                               _buildGuestPartyNoDjSocialMessage(
@@ -1369,7 +1435,18 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
                               for (var entry in _socialMediaLinks.entries) {
                                 if (!_urlControllers.containsKey(entry.key)) {
                                   _urlControllers[entry.key] =
-                                      TextEditingController(text: entry.value);
+                                      TextEditingController(
+                                    text: SocialLinkInputHelper.storedToDisplay(
+                                      entry.key,
+                                      entry.value,
+                                    ),
+                                  );
+                                } else {
+                                  _urlControllers[entry.key]!.text =
+                                      SocialLinkInputHelper.storedToDisplay(
+                                    entry.key,
+                                    entry.value,
+                                  );
                                 }
                               }
                             });

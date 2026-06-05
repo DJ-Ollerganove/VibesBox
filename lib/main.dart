@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -25,7 +26,9 @@ import 'package:flutter/foundation.dart' show debugPrint, kIsWeb, kDebugMode;
 
 import 'app_navigator_keys.dart';
 import 'services/app_local_notifications.dart';
+import 'services/dj_wish_fcm_service.dart';
 import 'services/dj_wish_notification_service.dart';
+import 'services/floor_swap_incoming_listener.dart';
 
 import 'dart:async';
 
@@ -90,6 +93,8 @@ import 'widgets/email_verification_result_dialog.dart';
 import 'widgets/deep_state_newspaper.dart';
 
 import 'l10n/locale_helper.dart';
+import 'l10n/generated/language_registry.g.dart';
+import 'widgets/language_menu_grid.dart';
 
 import 'l10n/app_localizations.dart';
 
@@ -97,6 +102,9 @@ import 'config/app_config.dart';
 import 'services/text_scale_service.dart';
 import 'constants/app_assets.dart';
 
+import 'utils/guest_pre_wish_nav_helper.dart';
+import 'utils/pre_wish_party_start_format.dart';
+import 'utils/formatting_utils.dart';
 import 'utils/ui_constants.dart';
 import 'utils/network_image_url.dart';
 import 'utils/role_helper.dart';
@@ -129,6 +137,7 @@ import 'models/song_request.dart';
 import 'models/user_model.dart';
 import 'utils/auth_stream_utils.dart';
 import 'utils/debug_log.dart';
+import 'services/app_diagnostic_log_service.dart';
 
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:timezone/data/latest_all.dart' as tz_data;
@@ -492,6 +501,13 @@ Future<void> main() async {
   await NavigationService().hydrateNavigationFromPrefs();
 
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
+  // Nach Firebase: Diagnose-Log-Hooks (FirebaseAuth in Fehlerpfaden).
+  await AppDiagnosticLogService.instance.install();
+
+  if (!kIsWeb) {
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+  }
   // Diese App (iOS/Android): Firestore-Standard = lokale Persistenz auf dem Gerät.
   // Die eingebettete Web-PWA (vb/) nutzt separat memoryLocalCache — kein gemeinsamer
   // Multi-Tab-Listener; Konflikte zwischen beiden Clients entstehen nicht.
@@ -606,10 +622,17 @@ Future<void> main() async {
   // Party-Daten-Cleanup: nur für eingeloggte Admins aus [MainPage._runColdStartServicesForUser]
   // (kein parties.get() ohne Berechtigung beim App-Start).
 
+  // Plugin muss fertig initialisiert sein, bevor Firestore [show] auslösen kann (Race vermeiden).
   if (!kIsWeb) {
-    unawaited(initializeAppLocalNotifications());
+    await initializeAppLocalNotifications();
   }
+  DjWishNotificationService.instance.registerPushSubsystemSync(
+    DjWishFcmService.instance.syncTokenForCurrentUserIfEligible,
+  );
   DjWishNotificationService.instance.attach();
+  if (!kIsWeb) {
+    unawaited(DjWishFcmService.instance.ensureDartListenersAttached());
+  }
 
   runApp(const UserScopeWrapper());
 }
@@ -623,10 +646,26 @@ class UserScopeWrapper extends StatefulWidget {
 }
 
 class _UserScopeWrapperState extends State<UserScopeWrapper> {
+  void _syncShazamStatusFromUserService() {
+    final u = UserService().currentUser.value;
+    if (u == null) return;
+    unawaited(ShazamService().syncShowStatusNotificationFromUserModel(u));
+  }
+
   @override
   void initState() {
     super.initState();
     UserService().startUserStream();
+    UserService().currentUser.addListener(_syncShazamStatusFromUserService);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncShazamStatusFromUserService();
+    });
+  }
+
+  @override
+  void dispose() {
+    UserService().currentUser.removeListener(_syncShazamStatusFromUserService);
+    super.dispose();
   }
 
   @override

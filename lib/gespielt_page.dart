@@ -3,12 +3,11 @@ import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'main.dart' show buildFirebaseErrorWidget;
 import '../utils/ui_constants.dart';
-import '../services/active_party_service.dart';
 import '../models/song_request.dart';
 import '../widgets/empty_list_message.dart';
 import '../widgets/sticky_pagination_layout.dart';
 import '../widgets/wish_card.dart';
-import '../widgets/no_active_party_display.dart';
+import '../widgets/dj_wish_party_scope.dart';
 import '../widgets/pro_promotion_banner.dart';
 import '../services/user_service.dart';
 import '../services/duplicate_check_service.dart';
@@ -16,6 +15,7 @@ import '../services/results_per_page_service.dart';
 import '../services/history_pagination_service.dart';
 import '../utils/wish_grouping_helper.dart';
 import '../services/wish_management_service.dart';
+import '../utils/wish_party_filter.dart';
 import 'utils/debug_log.dart';
 
 class GespieltPage extends StatefulWidget {
@@ -44,10 +44,6 @@ class _GespieltPageState extends State<GespieltPage> {
     return _cachedPlayedWishesStream!;
   }
 
-  void _tearDownPlayedStream() {
-    _cachedPlayedStreamPartyId = null;
-    _cachedPlayedWishesStream = null;
-  }
 
   @override
   void initState() {
@@ -65,37 +61,22 @@ class _GespieltPageState extends State<GespieltPage> {
                 totalPages: 1,
                 onPrevious: null,
                 onNext: null,
-                child: ValueListenableBuilder<ActivePartyInfo?>(
-                  valueListenable: ActivePartyService.storedSessionNotifier,
-                  builder: (context, info, _) {
-                    final activePartyId = info?.partyId;
-                    if (activePartyId != null && activePartyId.isNotEmpty && activePartyId != _currentPartyId) {
+                child: DjWishPartyScope(
+                  builder: (context, activePartyId) {
+                    if (activePartyId != _currentPartyId) {
                       WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (mounted) setState(() => _currentPartyId = activePartyId);
-                      });
-                    } else if (activePartyId == null || activePartyId.isEmpty) {
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (mounted) setState(() => _currentPartyId = null);
+                        if (mounted) {
+                          setState(() => _currentPartyId = activePartyId);
+                        }
                       });
                     }
-                    if (activePartyId == null || activePartyId.isEmpty) {
-                      _tearDownPlayedStream();
-                      return const KeyedSubtree(
-                        key: ValueKey<String>('none'),
-                        child: Stack(
-                          children: [
-                            Positioned.fill(
-                              child: Center(child: NoActivePartyDisplay()),
-                            ),
-                          ],
-                        ),
-                      );
-                    }
-                    return KeyedSubtree(
-                      key: ValueKey<String>(activePartyId),
-                      child: StreamBuilder<QuerySnapshot>(
-                        stream: _playedWishesStreamForParty(activePartyId),
-                        builder: (context, snapshot) => _buildWishesListWithPartyId(context, snapshot, activePartyId),
+                    return StreamBuilder<QuerySnapshot>(
+                      stream: _playedWishesStreamForParty(activePartyId),
+                      builder: (context, snapshot) =>
+                          _buildWishesListWithPartyId(
+                        context,
+                        snapshot,
+                        activePartyId,
                       ),
                     );
                   },
@@ -149,9 +130,9 @@ class _GespieltPageState extends State<GespieltPage> {
                         // SICHERHEITS-PRÜFUNG: Filter nach party_id
                         final partyFilteredDocs = wishesDocs.where((doc) {
                           final data = doc.data() as Map<String, dynamic>;
-                          final docPartyId = data['party_id'] as String?;
-                          final matches = docPartyId == partyId;
+                          final matches = wishDocDataMatchesPartyId(data, partyId);
                           if (kDebugMode && !matches) {
+                            final docPartyId = data['party_id'] ?? data['partyId'];
                             debugLog('🚫 PARTY-FILTER: Dokument ${doc.id} gehört zu Party "$docPartyId", erwartet "$partyId" - wird ausgeschlossen');
                           }
                           return matches;
@@ -204,8 +185,14 @@ class _GespieltPageState extends State<GespieltPage> {
                           );
                         }
 
+                        // Shadow-Docs nur für Uhrzeiten, nicht als eigene Zeile (wie Offen).
+                        final primaryPlayedWishes =
+                            WishGroupingHelper.withoutDuplicateShadowDocuments(
+                          playedWishes,
+                        );
+
                         // Sortiere nach Spiel-/Status-Datum (neueste zuerst), s. [SongRequest.sortTimestampPlayed]
-                        final sortedWishes = playedWishes.toList()
+                        final sortedWishes = primaryPlayedWishes.toList()
                           ..sort((a, b) =>
                               b.sortTimestampPlayed.compareTo(a.sortTimestampPlayed));
 
@@ -214,6 +201,7 @@ class _GespieltPageState extends State<GespieltPage> {
                           sortedWishes,
                           listSort: WishGroupListSort.byPlayedTimestamp,
                           sessionPartyId: partyId,
+                          allRequestsForTimestamps: playedWishes,
                         );
                         final allGroupedList = groupedResult['groups'] as List<Map<String, dynamic>>;
                         final groupedDocIds = groupedResult['docIds'] as Map<String, List<String>>;
@@ -274,7 +262,8 @@ class _GespieltPageState extends State<GespieltPage> {
                                     if (isFree && index % 6 == 5) {
                                       return const ProPromotionBanner();
                                     }
-                                    final dataIndex = index - (index ~/ 6);
+                                    final dataIndex =
+                                        isFree ? index - (index ~/ 6) : index;
                                     final groupEntry = paginatedGroupedList[dataIndex];
                                     final groupKey = groupEntry['key'] as String;
                                     final data = groupEntry['data'] as Map<String, dynamic>;

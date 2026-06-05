@@ -21,7 +21,7 @@ class ContactPage extends StatefulWidget {
 
 class _ContactPageState extends State<ContactPage> {
   late final GlobalKey<ContactFormState> _formKey;
-  late final Future<({bool hasSession, bool isPro})> _sessionFuture;
+  late final Future<({bool hasSession, bool isPro, String? djName})> _sessionFuture;
   VoidCallback? _tabNavListener;
   int _lastNavIndexSeen = -999999;
 
@@ -55,18 +55,83 @@ class _ContactPageState extends State<ContactPage> {
     super.dispose();
   }
 
-  /// Liefert Session-Infos für Gast-Kontakt.
-  Future<({bool hasSession, bool isPro})> _loadSessionAndDjPlan() async {
+  /// Liefert Session-Infos für Gast-Kontakt (inkl. DJ-Name für Hinweistext bei Pro-Party).
+  Future<({bool hasSession, bool isPro, String? djName})> _loadSessionAndDjPlan() async {
     try {
       await PartySessionService.instance.loadFromPrefs();
       final svc = PartySessionService.instance;
       if (!svc.hasSession) {
-        return (hasSession: false, isPro: false);
+        return (hasSession: false, isPro: false, djName: null);
       }
-      return (hasSession: true, isPro: svc.isPro);
+      final rawName = svc.djName?.trim();
+      final djName = (rawName != null && rawName.isNotEmpty) ? rawName : null;
+      return (hasSession: true, isPro: svc.isPro, djName: djName);
     } catch (_) {
-      return (hasSession: false, isPro: false);
+      return (hasSession: false, isPro: false, djName: null);
     }
+  }
+
+  List<InlineSpan> _djRecipientHintSpans(
+    String template,
+    String djName,
+    TextStyle base,
+    TextStyle nameStyle,
+  ) {
+    if (!template.contains('{djName}')) {
+      return [TextSpan(text: template, style: base)];
+    }
+    final parts = template.split('{djName}');
+    final out = <InlineSpan>[];
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i].isNotEmpty) {
+        out.add(TextSpan(text: parts[i], style: base));
+      }
+      if (i < parts.length - 1) {
+        out.add(TextSpan(text: djName, style: nameStyle));
+      }
+    }
+    return out;
+  }
+
+  Widget _buildDjRecipientHint(
+    BuildContext context,
+    AppLocalizations l,
+    String djName,
+    bool isRtl,
+  ) {
+    final template = l.contactDjRecipientHintTemplate;
+    final baseStyle = Theme.of(context).textTheme.bodyMedium?.copyWith(
+          fontSize: 13,
+          height: 1.45,
+          color: const Color(0xFFE5F0FF).withValues(alpha: 0.95),
+        ) ??
+        const TextStyle(
+          fontSize: 13,
+          height: 1.45,
+          color: Color(0xFFE5F0FF),
+        );
+    final nameStyle = baseStyle.copyWith(
+      fontWeight: FontWeight.w600,
+      color: Colors.white,
+    );
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E325A).withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: const Color(0xFF93C5FF).withValues(alpha: 0.25),
+        ),
+      ),
+      child: Text.rich(
+        TextSpan(
+          children: _djRecipientHintSpans(template, djName, baseStyle, nameStyle),
+        ),
+        textAlign: isRtl ? TextAlign.right : TextAlign.start,
+        textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
+      ),
+    );
   }
 
   @override
@@ -120,14 +185,17 @@ class _ContactPageState extends State<ContactPage> {
                 child: Column(
                   crossAxisAlignment: isRtl ? CrossAxisAlignment.end : CrossAxisAlignment.stretch,
                   children: [
-                    FutureBuilder<({bool hasSession, bool isPro})>(
+                    FutureBuilder<({bool hasSession, bool isPro, String? djName})>(
                       future: _sessionFuture,
                       builder: (context, snapshot) {
                         final data = snapshot.data;
                         final hasSession = data?.hasSession == true;
                         final isPro = data?.isPro == true;
+                        final djName = data?.djName;
                         final isVibesboxSupportMode = !hasSession;
                         final showLockedContact = hasSession && !isPro;
+                        final showDjRecipientHint =
+                            hasSession && isPro && (djName != null && djName.isNotEmpty);
 
                         return Column(
                           crossAxisAlignment: isRtl
@@ -181,12 +249,20 @@ class _ContactPageState extends State<ContactPage> {
                                       isRtl ? TextAlign.right : TextAlign.start,
                                 ),
                               )
-                            else
+                            else ...[
+                              if (showDjRecipientHint)
+                                _buildDjRecipientHint(
+                                  context,
+                                  localizations,
+                                  djName,
+                                  isRtl,
+                                ),
                               ContactForm(
                                 formKey: _formKey,
                                 enabled: true,
                                 isVibesboxSupportMode: isVibesboxSupportMode,
                               ),
+                            ],
                           ],
                         );
                       },

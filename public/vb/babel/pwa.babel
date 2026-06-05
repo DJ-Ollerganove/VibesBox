@@ -1,0 +1,21 @@
+{
+  "name": "VibesBox PWA",
+  "version": "1.0",
+  "languages": [
+    { "code": "de", "name": "German", "file": "locales/de.json" },
+    { "code": "en", "name": "English", "file": "locales/en.json" },
+    { "code": "fr", "name": "French", "file": "locales/fr.json" },
+    { "code": "ru", "name": "Russian", "file": "locales/ru.json" },
+    { "code": "zh", "name": "Chinese", "file": "locales/zh.json" },
+    { "code": "es", "name": "Spanish", "file": "locales/es.json" },
+    { "code": "tr", "name": "Turkish", "file": "locales/tr.json" },
+    { "code": "pt", "name": "Portuguese", "file": "locales/pt.json" },
+    { "code": "it", "name": "Italian", "file": "locales/it.json" },
+    { "code": "uk", "name": "Ukrainian", "file": "locales/uk.json" },
+    { "code": "hi", "name": "Hindi", "file": "locales/hi.json" },
+    { "code": "ar", "name": "Arabic", "file": "locales/ar.json" },
+    { "code": "sq", "name": "Albanian", "file": "locales/sq.json" }
+  ],
+  "sourceLanguage": "de",
+  "fallbackLanguage": "de"
+}

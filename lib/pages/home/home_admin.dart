@@ -15,12 +15,12 @@ import '../../services/navigation_service.dart';
 import '../../utils/ui_constants.dart';
 import '../../helpers/security_helper.dart';
 import '../../widgets/home_cells/global_announcement_card.dart';
-import '../../widgets/home_cells/admin_user_role_stats_card.dart';
+import '../../widgets/home_cells/admin_platform_totals_card.dart';
 import '../../widgets/home_cells/login_counter_card.dart';
 import '../../widgets/home_cells/stats_pie_chart_card.dart';
 import '../../widgets/home_statistics_cards.dart';
 import '../../utils/debug_log.dart';
-import '../../services/statistics_service.dart';
+import '../../services/admin_platform_totals_service.dart';
 import '../../services/announcement_languages_service.dart';
 import '../../services/duplicate_check_service.dart';
 
@@ -61,14 +61,22 @@ class _HomeAdminState extends State<HomeAdmin> {
   /// Erhöhen bei "Erneut versuchen" in StatsPieChartCard, damit der Stream neu gestartet wird.
   int _statsRetryKey = 0;
 
-  AdminUserRoleStatistics _adminUserRoleStats = AdminUserRoleStatistics.empty;
+  AdminPlatformTotals _platformTotals = AdminPlatformTotals.empty;
+  bool _loadingPlatformTotals = true;
 
   double _duplicateThreshold = 0.85;
   final TextEditingController _thresholdController = TextEditingController();
-  final TextEditingController _versionMajorController = TextEditingController();
-  final TextEditingController _versionMinorController = TextEditingController();
-  final TextEditingController _versionPatchController = TextEditingController();
-  final TextEditingController _currentVersionController =
+  final TextEditingController _androidVersionMajorController =
+      TextEditingController();
+  final TextEditingController _androidVersionMinorController =
+      TextEditingController();
+  final TextEditingController _androidVersionPatchController =
+      TextEditingController();
+  final TextEditingController _iosVersionMajorController =
+      TextEditingController();
+  final TextEditingController _iosVersionMinorController =
+      TextEditingController();
+  final TextEditingController _iosVersionPatchController =
       TextEditingController();
   final TextEditingController _pdfFooterController = TextEditingController();
   final TextEditingController _newLangCodeController = TextEditingController();
@@ -88,9 +96,12 @@ class _HomeAdminState extends State<HomeAdmin> {
     super.initState();
     widget.reloadListenable.addListener(_reload);
     _setupPartiesListener();
-    _versionMajorController.addListener(_onVersionFieldChanged);
-    _versionMinorController.addListener(_onVersionFieldChanged);
-    _versionPatchController.addListener(_onVersionFieldChanged);
+    _androidVersionMajorController.addListener(_onVersionFieldChanged);
+    _androidVersionMinorController.addListener(_onVersionFieldChanged);
+    _androidVersionPatchController.addListener(_onVersionFieldChanged);
+    _iosVersionMajorController.addListener(_onVersionFieldChanged);
+    _iosVersionMinorController.addListener(_onVersionFieldChanged);
+    _iosVersionPatchController.addListener(_onVersionFieldChanged);
     PackageInfo.fromPlatform().then((info) {
       if (mounted)
         setState(
@@ -100,6 +111,7 @@ class _HomeAdminState extends State<HomeAdmin> {
     _preferredStartView = NavigationService.instance.preferredStartView;
     unawaited(_loadPreferredStartView());
     _reload();
+    unawaited(_refreshPlatformTotals());
   }
 
   void _onVersionFieldChanged() => setState(() {});
@@ -635,13 +647,18 @@ class _HomeAdminState extends State<HomeAdmin> {
     widget.reloadListenable.removeListener(_reload);
     _partiesSub?.cancel();
     _thresholdController.dispose();
-    _versionMajorController.removeListener(_onVersionFieldChanged);
-    _versionMinorController.removeListener(_onVersionFieldChanged);
-    _versionPatchController.removeListener(_onVersionFieldChanged);
-    _versionMajorController.dispose();
-    _versionMinorController.dispose();
-    _versionPatchController.dispose();
-    _currentVersionController.dispose();
+    _androidVersionMajorController.removeListener(_onVersionFieldChanged);
+    _androidVersionMinorController.removeListener(_onVersionFieldChanged);
+    _androidVersionPatchController.removeListener(_onVersionFieldChanged);
+    _iosVersionMajorController.removeListener(_onVersionFieldChanged);
+    _iosVersionMinorController.removeListener(_onVersionFieldChanged);
+    _iosVersionPatchController.removeListener(_onVersionFieldChanged);
+    _androidVersionMajorController.dispose();
+    _androidVersionMinorController.dispose();
+    _androidVersionPatchController.dispose();
+    _iosVersionMajorController.dispose();
+    _iosVersionMinorController.dispose();
+    _iosVersionPatchController.dispose();
     _pdfFooterController.dispose();
     _newLangCodeController.dispose();
     _newLangNameController.dispose();
@@ -661,16 +678,26 @@ class _HomeAdminState extends State<HomeAdmin> {
   }
 
   Future<void> _reload() async {
-    setState(() => _loading = true);
+    final showSpinner = _loading;
+    if (showSpinner) {
+      setState(() => _loading = true);
+    }
     await _loadWishboxStatus();
     await _loadGlobalDuplicateThreshold();
     await _loadMinVersions();
     await _loadPdfFooterText();
-    final userStats = await StatisticsService.loadAdminUserRoleStatistics();
+    unawaited(_refreshPlatformTotals());
+    if (!mounted) return;
+    setState(() => _loading = false);
+  }
+
+  Future<void> _refreshPlatformTotals() async {
+    setState(() => _loadingPlatformTotals = true);
+    final totals = await AdminPlatformTotalsService.refreshOnAdminOpen();
     if (!mounted) return;
     setState(() {
-      _adminUserRoleStats = userStats;
-      _loading = false;
+      _platformTotals = totals;
+      _loadingPlatformTotals = false;
     });
   }
 
@@ -691,6 +718,22 @@ class _HomeAdminState extends State<HomeAdmin> {
     return [major, minor, patch];
   }
 
+  /// Gemeinsame Semver-Zeile für eine Plattform, wenn DJ- und Gast-Zelle aktiv sind.
+  static String _pickSharedTargetForPlatform(
+    String djCell,
+    String guestCell,
+    String base,
+  ) {
+    final djOn = djCell != base;
+    final gOn = guestCell != base;
+    if (!djOn && !gOn) return base;
+    if (djOn && !gOn) return djCell;
+    if (!djOn && gOn) return guestCell;
+    return AppUpdateService.compareVersions(djCell, guestCell) >= 0
+        ? djCell
+        : guestCell;
+  }
+
   Future<void> _loadMinVersions() async {
     try {
       final versions = await AppUpdateService.instance.getMinVersions();
@@ -700,22 +743,17 @@ class _HomeAdminState extends State<HomeAdmin> {
       final vDjI = versions['min_version_dj_ios'] ?? base;
       final vGA = versions['min_version_guest_android'] ?? base;
       final vGI = versions['min_version_guest_ios'] ?? base;
-      final currentVersion = versions['current_version'] ?? base;
-      String targetVersion = base;
-      if (vDjA != base)
-        targetVersion = vDjA;
-      else if (vDjI != base)
-        targetVersion = vDjI;
-      else if (vGA != base)
-        targetVersion = vGA;
-      else if (vGI != base)
-        targetVersion = vGI;
-      final parts = _parseVersionParts(targetVersion);
+      final androidTarget = _pickSharedTargetForPlatform(vDjA, vGA, base);
+      final iosTarget = _pickSharedTargetForPlatform(vDjI, vGI, base);
+      final androidParts = _parseVersionParts(androidTarget);
+      final iosParts = _parseVersionParts(iosTarget);
       setState(() {
-        _versionMajorController.text = parts[0];
-        _versionMinorController.text = parts[1];
-        _versionPatchController.text = parts[2];
-        _currentVersionController.text = currentVersion;
+        _androidVersionMajorController.text = androidParts[0];
+        _androidVersionMinorController.text = androidParts[1];
+        _androidVersionPatchController.text = androidParts[2];
+        _iosVersionMajorController.text = iosParts[0];
+        _iosVersionMinorController.text = iosParts[1];
+        _iosVersionPatchController.text = iosParts[2];
         _enableMinVersionDjAndroid = vDjA != base;
         _enableMinVersionDjIos = vDjI != base;
         _enableMinVersionGuestAndroid = vGA != base;
@@ -727,33 +765,59 @@ class _HomeAdminState extends State<HomeAdmin> {
   Future<void> _saveMinVersions() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
-    final major = _versionMajorController.text.trim();
-    final minor = _versionMinorController.text.trim();
-    final patch = _versionPatchController.text.trim();
-    final target = (major.isEmpty || minor.isEmpty || patch.isEmpty)
-        ? AppUpdateService.defaultMinVersion
-        : '$major.$minor.$patch';
-    final currentVersion = SecurityHelper.sanitize(
-      _currentVersionController.text,
-      maxLength: 20,
-    ).trim();
+    String composeTarget(
+      TextEditingController majorC,
+      TextEditingController minorC,
+      TextEditingController patchC,
+    ) {
+      final major = majorC.text.trim();
+      final minor = minorC.text.trim();
+      final patch = patchC.text.trim();
+      if (major.isEmpty || minor.isEmpty || patch.isEmpty) {
+        return AppUpdateService.defaultMinVersion;
+      }
+      return '$major.$minor.$patch';
+    }
+
+    final targetAndroid = composeTarget(
+      _androidVersionMajorController,
+      _androidVersionMinorController,
+      _androidVersionPatchController,
+    );
+    final targetIos = composeTarget(
+      _iosVersionMajorController,
+      _iosVersionMinorController,
+      _iosVersionPatchController,
+    );
     final base = AppUpdateService.defaultMinVersion;
-    // Keys exakt wie in AppUpdateService.getMinVersions() erwartet
+    String maxSemver(String a, String b) =>
+        AppUpdateService.compareVersions(a, b) >= 0 ? a : b;
+    var djAgg = base;
+    if (_enableMinVersionDjAndroid) {
+      djAgg = maxSemver(djAgg, targetAndroid);
+    }
+    if (_enableMinVersionDjIos) {
+      djAgg = maxSemver(djAgg, targetIos);
+    }
+    var guestAgg = base;
+    if (_enableMinVersionGuestAndroid) {
+      guestAgg = maxSemver(guestAgg, targetAndroid);
+    }
+    if (_enableMinVersionGuestIos) {
+      guestAgg = maxSemver(guestAgg, targetIos);
+    }
+    final fallbackCurrent = maxSemver(targetAndroid, targetIos);
+    // Keys exakt wie in AppUpdateService / Firestore admin_config/app_update
     final data = <String, dynamic>{
-      'min_version_dj_android': _enableMinVersionDjAndroid ? target : base,
-      'min_version_dj_ios': _enableMinVersionDjIos ? target : base,
-      'min_version_guest_android': _enableMinVersionGuestAndroid
-          ? target
-          : base,
-      'min_version_guest_ios': _enableMinVersionGuestIos ? target : base,
-      'min_version_dj': _enableMinVersionDjAndroid || _enableMinVersionDjIos
-          ? target
-          : base,
-      'min_version_guest':
-          _enableMinVersionGuestAndroid || _enableMinVersionGuestIos
-              ? target
-              : base,
-      'current_version': currentVersion.isNotEmpty ? currentVersion : target,
+      'min_version_dj_android':
+          _enableMinVersionDjAndroid ? targetAndroid : base,
+      'min_version_dj_ios': _enableMinVersionDjIos ? targetIos : base,
+      'min_version_guest_android':
+          _enableMinVersionGuestAndroid ? targetAndroid : base,
+      'min_version_guest_ios': _enableMinVersionGuestIos ? targetIos : base,
+      'min_version_dj': djAgg,
+      'min_version_guest': guestAgg,
+      'current_version': fallbackCurrent,
       'updated_at': FieldValue.serverTimestamp(),
     };
     try {
@@ -930,22 +994,102 @@ class _HomeAdminState extends State<HomeAdmin> {
     } catch (_) {}
   }
 
+  Widget _adminSemverDigitRow({
+    required BuildContext context,
+    required TextEditingController major,
+    required TextEditingController minor,
+    required TextEditingController patch,
+    required InputDecoration fieldDecoration,
+    required List<TextInputFormatter> versionInputFormatters,
+    required String majorLabel,
+    required String minorLabel,
+    required String patchLabel,
+  }) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        SizedBox(
+          width: 52,
+          child: TextField(
+            controller: major,
+            decoration: fieldDecoration.copyWith(
+              hintText: '0',
+              semanticCounterText: majorLabel,
+            ),
+            style: const TextStyle(color: Colors.white, fontSize: 16),
+            maxLength: 2,
+            textAlign: TextAlign.center,
+            keyboardType: TextInputType.number,
+            inputFormatters: versionInputFormatters,
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: Text(
+            '.',
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: Colors.orange,
+                  fontWeight: FontWeight.bold,
+                ),
+          ),
+        ),
+        SizedBox(
+          width: 52,
+          child: TextField(
+            controller: minor,
+            decoration: fieldDecoration.copyWith(
+              hintText: '0',
+              semanticCounterText: minorLabel,
+            ),
+            style: const TextStyle(color: Colors.white, fontSize: 16),
+            maxLength: 2,
+            textAlign: TextAlign.center,
+            keyboardType: TextInputType.number,
+            inputFormatters: versionInputFormatters,
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: Text(
+            '.',
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: Colors.orange,
+                  fontWeight: FontWeight.bold,
+                ),
+          ),
+        ),
+        SizedBox(
+          width: 52,
+          child: TextField(
+            controller: patch,
+            decoration: fieldDecoration.copyWith(
+              hintText: '0',
+              semanticCounterText: patchLabel,
+            ),
+            style: const TextStyle(color: Colors.white, fontSize: 16),
+            maxLength: 2,
+            textAlign: TextAlign.center,
+            keyboardType: TextInputType.number,
+            inputFormatters: versionInputFormatters,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildAppUpdateMatrixCard(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
     final title = l10n.updateMatrixTitle;
-    final subtitle = l10n.updateMatrixSubtitle;
-    final milestoneHint = l10n.updateMilestoneHint;
     final targetLabel = l10n.updateTargetVersionLabel;
     final majorLabel = l10n.updateVersionMajor;
     final minorLabel = l10n.updateVersionMinor;
     final patchLabel = l10n.updateVersionPatch;
-    final checkboxQuestion = l10n.updateCheckboxQuestion;
-    final djAndroid = l10n.updateMinVersionDjAndroid;
-    final djIos = l10n.updateMinVersionDjIos;
-    final guestAndroid = l10n.updateMinVersionGuestAndroid;
-    final guestIos = l10n.updateMinVersionGuestIos;
+    final androidSectionTitle = l10n.updateAndroidSectionTitle;
+    final iosSectionTitle = l10n.updateIosSectionTitle;
+    final roleGuestShort = l10n.updateApplyGuestCheckbox;
+    final roleDjShort = l10n.updateApplyDjCheckbox;
     final saveLabel = l10n.updateSaveButton;
-    final currentVersionLabel = l10n.updateCurrentVersionLabel;
     final versionInputFormatters = [
       FilteringTextInputFormatter.deny(RegExp(r'[<>]')),
       FilteringTextInputFormatter.digitsOnly,
@@ -967,18 +1111,18 @@ class _HomeAdminState extends State<HomeAdmin> {
           .snapshots(),
       builder: (context, snapshot) {
         final data = snapshot.data?.data() ?? const <String, dynamic>{};
-        final liveVersion =
-            (data['current_version'] as String?)?.trim().isNotEmpty == true
-            ? (data['current_version'] as String).trim()
-            : (data['min_version_dj_android'] as String?)?.trim().isNotEmpty ==
-                true
-            ? (data['min_version_dj_android'] as String).trim()
-            : ((data['min_version_guest_android'] as String?)
-                          ?.trim()
-                          .isNotEmpty ==
-                      true
-                  ? (data['min_version_guest_android'] as String).trim()
-                  : AppUpdateService.defaultMinVersion);
+        final base = AppUpdateService.defaultMinVersion;
+        String liveCell(String? raw) {
+          final t = (raw ?? '').trim();
+          if (t.isEmpty) return '—';
+          final n = AppUpdateService.normalizeSemver(t);
+          return n == base ? '—' : n;
+        }
+        final liveLine =
+            'LIVE admin_config/app_update — Android: $roleDjShort ${liveCell(data['min_version_dj_android'] as String?)}, '
+            '$roleGuestShort ${liveCell(data['min_version_guest_android'] as String?)} | '
+            'iOS: $roleDjShort ${liveCell(data['min_version_dj_ios'] as String?)}, '
+            '$roleGuestShort ${liveCell(data['min_version_guest_ios'] as String?)}';
         return Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -998,22 +1142,7 @@ class _HomeAdminState extends State<HomeAdmin> {
               ),
               const SizedBox(height: 8),
               Text(
-                subtitle,
-                style: Theme.of(
-                  context,
-                ).textTheme.bodySmall?.copyWith(color: Colors.white70),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                milestoneHint,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Colors.white54,
-                  fontSize: 12,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'LIVE admin_config/app_update: $liveVersion',
+                liveLine,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: Colors.orange,
                   fontSize: 12,
@@ -1022,29 +1151,13 @@ class _HomeAdminState extends State<HomeAdmin> {
               ),
               const SizedBox(height: 12),
               Text(
-                currentVersionLabel,
-                style: Theme.of(
-                  context,
-                ).textTheme.bodySmall?.copyWith(color: Colors.white70),
+                androidSectionTitle,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Colors.orange,
+                      fontWeight: FontWeight.w600,
+                    ),
               ),
-              const SizedBox(height: 6),
-              TextField(
-                controller: _currentVersionController,
-                inputFormatters: [
-                  FilteringTextInputFormatter.deny(RegExp(r'[<>]')),
-                  LengthLimitingTextInputFormatter(20),
-                ],
-                decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
-                  focusedBorder: OutlineInputBorder(
-                    borderSide: BorderSide(color: Colors.orange),
-                  ),
-                  hintText: 'z.B. 22 oder 1.2.3',
-                  isDense: true,
-                ),
-                style: const TextStyle(color: Colors.white, fontSize: 14),
-              ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 4),
               Text(
                 targetLabel,
                 style: Theme.of(
@@ -1052,117 +1165,134 @@ class _HomeAdminState extends State<HomeAdmin> {
                 ).textTheme.bodySmall?.copyWith(color: Colors.white70),
               ),
               const SizedBox(height: 6),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  SizedBox(
-                    width: 52,
-                    child: TextField(
-                      controller: _versionMajorController,
-                      decoration: versionFieldDecoration.copyWith(
-                        hintText: '0',
-                        semanticCounterText: majorLabel,
-                      ),
-                      style: const TextStyle(color: Colors.white, fontSize: 16),
-                      maxLength: 2,
-                      textAlign: TextAlign.center,
-                      keyboardType: TextInputType.number,
-                      inputFormatters: versionInputFormatters,
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: Text(
-                      '.',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: Colors.orange,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 52,
-                    child: TextField(
-                      controller: _versionMinorController,
-                      decoration: versionFieldDecoration.copyWith(
-                        hintText: '0',
-                        semanticCounterText: minorLabel,
-                      ),
-                      style: const TextStyle(color: Colors.white, fontSize: 16),
-                      maxLength: 2,
-                      textAlign: TextAlign.center,
-                      keyboardType: TextInputType.number,
-                      inputFormatters: versionInputFormatters,
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: Text(
-                      '.',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: Colors.orange,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 52,
-                    child: TextField(
-                      controller: _versionPatchController,
-                      decoration: versionFieldDecoration.copyWith(
-                        hintText: '0',
-                        semanticCounterText: patchLabel,
-                      ),
-                      style: const TextStyle(color: Colors.white, fontSize: 16),
-                      maxLength: 2,
-                      textAlign: TextAlign.center,
-                      keyboardType: TextInputType.number,
-                      inputFormatters: versionInputFormatters,
-                    ),
-                  ),
-                ],
+              _adminSemverDigitRow(
+                context: context,
+                major: _androidVersionMajorController,
+                minor: _androidVersionMinorController,
+                patch: _androidVersionPatchController,
+                fieldDecoration: versionFieldDecoration,
+                versionInputFormatters: versionInputFormatters,
+                majorLabel: majorLabel,
+                minorLabel: minorLabel,
+                patchLabel: patchLabel,
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 6),
               Builder(
                 builder: (context) {
-                  final maj = _versionMajorController.text.trim().isEmpty
+                  final maj = _androidVersionMajorController.text
+                          .trim()
+                          .isEmpty
                       ? '0'
-                      : _versionMajorController.text.trim();
-                  final min = _versionMinorController.text.trim().isEmpty
+                      : _androidVersionMajorController.text.trim();
+                  final min = _androidVersionMinorController.text
+                          .trim()
+                          .isEmpty
                       ? '0'
-                      : _versionMinorController.text.trim();
-                  final pat = _versionPatchController.text.trim().isEmpty
+                      : _androidVersionMinorController.text.trim();
+                  final pat = _androidVersionPatchController.text
+                          .trim()
+                          .isEmpty
                       ? '0'
-                      : _versionPatchController.text.trim();
+                      : _androidVersionPatchController.text.trim();
                   final nextBuild = _currentBuildNumber + 1;
                   final previewVersion = '$maj.$min.$pat+$nextBuild';
                   final previewLabel = l10n.updateNewTargetVersionPreview
                       .replaceAll('{version}', previewVersion);
                   return Text(
-                    previewLabel,
+                    '${l10n.updateAndroidSectionTitle}: $previewLabel',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Colors.orange,
-                      fontSize: 12,
-                    ),
+                          color: Colors.orange,
+                          fontSize: 12,
+                        ),
                   );
                 },
               ),
-              const SizedBox(height: 12),
-              Text(
-                checkboxQuestion,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Colors.white70,
-                  fontWeight: FontWeight.w500,
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                value: _enableMinVersionGuestAndroid,
+                onChanged: (v) =>
+                    setState(() => _enableMinVersionGuestAndroid = v ?? false),
+                title: Text(
+                  roleGuestShort,
+                  style: const TextStyle(color: Colors.white),
                 ),
+                activeColor: Colors.orange,
+                checkColor: Colors.black,
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
               ),
-              const SizedBox(height: 6),
               CheckboxListTile(
                 value: _enableMinVersionDjAndroid,
                 onChanged: (v) =>
                     setState(() => _enableMinVersionDjAndroid = v ?? false),
                 title: Text(
-                  djAndroid,
+                  roleDjShort,
+                  style: const TextStyle(color: Colors.white),
+                ),
+                activeColor: Colors.orange,
+                checkColor: Colors.black,
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+              const SizedBox(height: 14),
+              Text(
+                iosSectionTitle,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Colors.orange,
+                      fontWeight: FontWeight.w600,
+                    ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                targetLabel,
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: Colors.white70),
+              ),
+              const SizedBox(height: 6),
+              _adminSemverDigitRow(
+                context: context,
+                major: _iosVersionMajorController,
+                minor: _iosVersionMinorController,
+                patch: _iosVersionPatchController,
+                fieldDecoration: versionFieldDecoration,
+                versionInputFormatters: versionInputFormatters,
+                majorLabel: majorLabel,
+                minorLabel: minorLabel,
+                patchLabel: patchLabel,
+              ),
+              const SizedBox(height: 6),
+              Builder(
+                builder: (context) {
+                  final maj = _iosVersionMajorController.text.trim().isEmpty
+                      ? '0'
+                      : _iosVersionMajorController.text.trim();
+                  final min = _iosVersionMinorController.text.trim().isEmpty
+                      ? '0'
+                      : _iosVersionMinorController.text.trim();
+                  final pat = _iosVersionPatchController.text.trim().isEmpty
+                      ? '0'
+                      : _iosVersionPatchController.text.trim();
+                  final nextBuild = _currentBuildNumber + 1;
+                  final previewVersion = '$maj.$min.$pat+$nextBuild';
+                  final previewLabel = l10n.updateNewTargetVersionPreview
+                      .replaceAll('{version}', previewVersion);
+                  return Text(
+                    '${l10n.updateIosSectionTitle}: $previewLabel',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Colors.orange,
+                          fontSize: 12,
+                        ),
+                  );
+                },
+              ),
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                value: _enableMinVersionGuestIos,
+                onChanged: (v) =>
+                    setState(() => _enableMinVersionGuestIos = v ?? false),
+                title: Text(
+                  roleGuestShort,
                   style: const TextStyle(color: Colors.white),
                 ),
                 activeColor: Colors.orange,
@@ -1174,31 +1304,8 @@ class _HomeAdminState extends State<HomeAdmin> {
                 value: _enableMinVersionDjIos,
                 onChanged: (v) =>
                     setState(() => _enableMinVersionDjIos = v ?? false),
-                title: Text(djIos, style: const TextStyle(color: Colors.white)),
-                activeColor: Colors.orange,
-                checkColor: Colors.black,
-                contentPadding: EdgeInsets.zero,
-                controlAffinity: ListTileControlAffinity.leading,
-              ),
-              CheckboxListTile(
-                value: _enableMinVersionGuestAndroid,
-                onChanged: (v) =>
-                    setState(() => _enableMinVersionGuestAndroid = v ?? false),
                 title: Text(
-                  guestAndroid,
-                  style: const TextStyle(color: Colors.white),
-                ),
-                activeColor: Colors.orange,
-                checkColor: Colors.black,
-                contentPadding: EdgeInsets.zero,
-                controlAffinity: ListTileControlAffinity.leading,
-              ),
-              CheckboxListTile(
-                value: _enableMinVersionGuestIos,
-                onChanged: (v) =>
-                    setState(() => _enableMinVersionGuestIos = v ?? false),
-                title: Text(
-                  guestIos,
+                  roleDjShort,
                   style: const TextStyle(color: Colors.white),
                 ),
                 activeColor: Colors.orange,
@@ -1287,6 +1394,12 @@ class _HomeAdminState extends State<HomeAdmin> {
                     ? 'admin'
                     : 'user',
               ),
+              const SizedBox(height: 16),
+              AdminPlatformTotalsCard(
+                totals: _platformTotals,
+                isLoading: _loadingPlatformTotals,
+                cardBuilder: widget.cardBuilder,
+              ),
               const SizedBox(height: 20),
               _buildPreferredStartViewCard(context),
               const SizedBox(height: 20),
@@ -1294,11 +1407,6 @@ class _HomeAdminState extends State<HomeAdmin> {
               const SizedBox(height: 20),
               LoginCounterCard(
                 loginCount: loginCount,
-                cardBuilder: widget.cardBuilder,
-              ),
-              const SizedBox(height: 12),
-              AdminUserRoleStatsCard(
-                stats: _adminUserRoleStats,
                 cardBuilder: widget.cardBuilder,
               ),
               if (_loading)

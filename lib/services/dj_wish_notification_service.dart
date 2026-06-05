@@ -14,15 +14,28 @@ import '../utils/notification_display_text.dart';
 import 'active_party_service.dart';
 import 'app_local_notifications.dart';
 import 'user_service.dart';
+import '../utils/wish_paths.dart';
 
 /// Lokale DJ-Benachrichtigungen für neue Wünsche (kein Admin-Dashboard).
 ///
-/// Filter: `party_id` = aktive Session, `dj_id` = Firebase-UID, `status` = pending.
-/// Deduplizierung: [\_notifiedWishIds] im Speicher.
-class DjWishNotificationService {
+/// Schnellpfad **Vordergrund**: Firestore-Snapshot (gleiche Query wie „Offen“, ohne `dj_id`).
+/// Schnellpfad **Hintergrund / App zu**: FCM ([DjWishFcmService] + Cloud Function) —
+/// Firestore-Listener ist dann gedrosselt / eingeschlafen.
+///
+/// Dedupe: [consumeWishNotificationSlot] — ein Wish-Doc höchstens eine sichtbare Notification.
+///
+/// iOS-Ton: [iosWishNotificationSound] = gleiche Quelle wie Android `res/raw/notification.mp3`,
+/// konvertiert nach `ios/Runner/notification.caf` (Bundling in Xcode).
+class DjWishNotificationService with WidgetsBindingObserver {
   DjWishNotificationService._();
   static final DjWishNotificationService instance =
       DjWishNotificationService._();
+
+  /// Für FCM-Fallback-Titel (öffentlich für [DjWishFcmService] ohne Duplikat-String).
+  static const String fallbackWishTitleStatic = 'VibesBox: Neuer Songwunsch';
+
+  /// Bundled unter `ios/Runner/` — gleicher Inhalt wie Android `notification.mp3`.
+  static const String iosWishNotificationSound = 'notification.caf';
 
   bool _attached = false;
   bool _shellGate = false;
@@ -34,6 +47,15 @@ class DjWishNotificationService {
   bool _pendingPrime = true;
   String? _subKey;
 
+  AppLifecycleState _lifecycleState = AppLifecycleState.resumed;
+
+  /// Optional: FCM-Token sync (gesetzt aus `main.dart`, vermeidet Import-Zyklus).
+  Future<void> Function()? _pushSubsystemSync;
+
+  void registerPushSubsystemSync(Future<void> Function()? fn) {
+    _pushSubsystemSync = fn;
+  }
+
   /// Nur DJ-Shell / Admin-als-DJ — nicht im Admin-Dashboard.
   void setShellGate({required bool allow}) {
     if (_shellGate == allow) return;
@@ -44,6 +66,7 @@ class DjWishNotificationService {
   void attach() {
     if (_attached) return;
     _attached = true;
+    WidgetsBinding.instance.addObserver(this);
     _recomputeListener = _recomputeSubscription;
     UserService().currentUser.addListener(_recomputeListener!);
     ActivePartyService.storedSessionNotifier.addListener(_recomputeListener!);
@@ -53,9 +76,15 @@ class DjWishNotificationService {
     _recomputeSubscription();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _lifecycleState = state;
+  }
+
   void dispose() {
     if (!_attached) return;
     _attached = false;
+    WidgetsBinding.instance.removeObserver(this);
     if (_recomputeListener != null) {
       UserService().currentUser.removeListener(_recomputeListener!);
       ActivePartyService.storedSessionNotifier.removeListener(
@@ -75,6 +104,13 @@ class DjWishNotificationService {
     _pendingPrime = true;
   }
 
+  /// Nur eine sichtbare Mitteilung pro Wunsch-Dokument (Firestore vs. FCM).
+  bool consumeWishNotificationSlot(String wishDocId) {
+    if (_notifiedWishIds.contains(wishDocId)) return false;
+    _notifiedWishIds.add(wishDocId);
+    return true;
+  }
+
   void _recomputeSubscription() {
     if (!_attached) return;
     if (!_shellGate) {
@@ -92,9 +128,9 @@ class DjWishNotificationService {
       _cancelWishSub();
       return;
     }
-    final djId = user.uid;
-    final key = '$partyId|$djId';
+    final key = partyId;
     if (_subKey == key && _wishSub != null) {
+      unawaited(_pushSubsystemSync?.call());
       return;
     }
     _cancelWishSub();
@@ -102,13 +138,10 @@ class DjWishNotificationService {
     _pendingPrime = true;
 
     debugLog(
-      '🔔 DjWishNotificationService: Stream party_id=$partyId dj_id=$djId',
+      '🔔 DjWishNotificationService: Stream party_id=$partyId (pending, ohne dj_id-Filter)',
     );
 
-    _wishSub = FirebaseFirestore.instance
-        .collection('wishes')
-        .where('party_id', isEqualTo: partyId)
-        .where('dj_id', isEqualTo: djId)
+    _wishSub = WishPaths.partyWishes(partyId)
         .where('status', isEqualTo: 'pending')
         .snapshots()
         .listen(
@@ -117,27 +150,63 @@ class DjWishNotificationService {
             debugLog('❌ DjWishNotificationService Stream: $e');
           },
         );
+
+    unawaited(_pushSubsystemSync?.call());
   }
 
   Future<void> _onWishSnapshot(
     QuerySnapshot<Map<String, dynamic>> snapshot,
   ) async {
     if (_pendingPrime) {
+      if (snapshot.metadata.isFromCache && snapshot.docs.isEmpty) {
+        return;
+      }
       for (final d in snapshot.docs) {
         _notifiedWishIds.add(d.id);
       }
       _pendingPrime = false;
       return;
     }
+
     final um = UserService().currentUser.value;
     final soundOn = um?.enableNotificationSound ?? true;
+
+    final inForeground = _lifecycleState == AppLifecycleState.resumed;
+
+    final partyRunning = await ActivePartyService.isPartyActuallyActive();
+    if (!partyRunning) {
+      for (final change in snapshot.docChanges) {
+        if (change.type == DocumentChangeType.added) {
+          _notifiedWishIds.add(change.doc.id);
+        }
+      }
+      return;
+    }
 
     for (final change in snapshot.docChanges) {
       if (change.type != DocumentChangeType.added) continue;
       final id = change.doc.id;
       if (_notifiedWishIds.contains(id)) continue;
-      _notifiedWishIds.add(id);
-      await _showLocalNotification(
+
+      final wishData = change.doc.data() ?? <String, dynamic>{};
+      if (wishData['is_pre_wish'] == true) {
+        _notifiedWishIds.add(id);
+        continue;
+      }
+
+      if (!inForeground) {
+        // Hintergrund: FCM liefert zuverlässig & zeitnah — hier nur ID merken,
+        // damit beim Zurückkehren keine zweite lokale Notification nachzieht.
+        _notifiedWishIds.add(id);
+        continue;
+      }
+
+      if (!consumeWishNotificationSlot(id)) continue;
+
+      debugLog(
+        '🔔 DjWishNotification: neuer Pending-Wunsch doc=$id → lokale Notification',
+      );
+      await _showLocalNotificationFromFirestoreDoc(
         id,
         change.doc.data() ?? <String, dynamic>{},
         soundOn: soundOn,
@@ -145,19 +214,25 @@ class DjWishNotificationService {
     }
   }
 
-  Future<void> _showLocalNotification(
+  Future<void> showWishNotificationFromRemotePayload({
+    required String wishDocId,
+    required String titleLine,
+    required String body,
+    required bool soundOn,
+  }) async {
+    await _showLocalNotificationImpl(
+      wishDocId: wishDocId,
+      soundOn: soundOn,
+      titleLine: titleLine,
+      body: body,
+    );
+  }
+
+  Future<void> _showLocalNotificationFromFirestoreDoc(
     String wishDocId,
     Map<String, dynamic> data, {
     required bool soundOn,
   }) async {
-    final ctx = appRootNavigatorKey.currentContext;
-    if (ctx == null) {
-      debugLog('⚠️ DjWishNotification: kein Navigator-Kontext für l10n');
-      return;
-    }
-    final l = AppLocalizations.of(ctx);
-    if (l == null) return;
-
     final rawTitle = (data['title'] as String?)?.trim();
     final rawArtist = (data['artist'] as String?)?.trim();
     final title = rawTitle != null && rawTitle.isNotEmpty
@@ -166,14 +241,42 @@ class DjWishNotificationService {
     final artist = rawArtist != null && rawArtist.isNotEmpty
         ? decodeNotificationDisplayText(rawArtist)
         : null;
-    // Kurzer Notification-Titel + Songzeile: verhindert Android-Umbruch mitten in HTML-Entities
-    // (z. B. `I&#x27;m` in der sichtbaren Titelzeile) und hält Titel/Interpret in einer Body-Zeile.
-    final titleLine = l.dj_notification_short_title;
-    final body = l.dj_notification_song_line(
-      (title != null && title.isNotEmpty) ? title : '—',
-      (artist != null && artist.isNotEmpty) ? artist : '—',
-    );
+    final titleForBody =
+        (title != null && title.isNotEmpty) ? title : '—';
+    final artistForBody =
+        (artist != null && artist.isNotEmpty) ? artist : '—';
 
+    final ctx = appRootNavigatorKey.currentContext;
+    final l = ctx != null ? AppLocalizations.of(ctx) : null;
+    final String titleLine;
+    final String body;
+    if (l != null) {
+      titleLine = l.dj_notification_short_title;
+      body = l.dj_notification_song_line(titleForBody, artistForBody);
+    } else {
+      if (ctx == null) {
+        debugLog(
+          '⚠️ DjWishNotification: kein Navigator-Kontext — Fallback-Texte',
+        );
+      }
+      titleLine = fallbackWishTitleStatic;
+      body = '$titleForBody - $artistForBody';
+    }
+
+    await _showLocalNotificationImpl(
+      wishDocId: wishDocId,
+      soundOn: soundOn,
+      titleLine: titleLine,
+      body: body,
+    );
+  }
+
+  Future<void> _showLocalNotificationImpl({
+    required String wishDocId,
+    required bool soundOn,
+    required String titleLine,
+    required String body,
+  }) async {
     final android = AndroidNotificationDetails(
       'new_wishes_channel',
       'Neue Wünsche',
@@ -194,8 +297,11 @@ class DjWishNotificationService {
     );
     final ios = DarwinNotificationDetails(
       presentAlert: true,
+      presentBanner: true,
+      presentList: true,
       presentBadge: true,
       presentSound: soundOn,
+      sound: soundOn ? iosWishNotificationSound : null,
     );
     final details = NotificationDetails(android: android, iOS: ios);
 
@@ -205,7 +311,9 @@ class DjWishNotificationService {
         titleLine,
         body,
         details,
+        payload: 'dj_wish',
       );
+      debugLog('✅ DjWishNotification: show() ok doc=$wishDocId sound=$soundOn');
     } catch (e) {
       debugLog('❌ DjWishNotification show: $e');
     }
@@ -214,6 +322,19 @@ class DjWishNotificationService {
   /// Beim ersten Einschalten des Switches (Settings).
   static Future<bool> requestNotificationPermissionIfNeeded() async {
     if (!Platform.isAndroid && !Platform.isIOS) return true;
+    if (Platform.isIOS) {
+      final iosPlugin = appLocalNotificationsPlugin
+          .resolvePlatformSpecificImplementation<
+              IOSFlutterLocalNotificationsPlugin>();
+      if (iosPlugin != null) {
+        final granted = await iosPlugin.requestPermissions(
+          alert: true,
+          badge: true,
+          sound: true,
+        );
+        if (granted == true) return true;
+      }
+    }
     final status = await Permission.notification.status;
     if (status.isGranted) return true;
     final result = await Permission.notification.request();

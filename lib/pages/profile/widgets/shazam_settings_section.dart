@@ -212,14 +212,24 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
           }
         }
 
-        final statusNotification = data?['show_status_notification'] as bool?;
-        if (statusNotification != null) {
-          statusNotifForService = statusNotification;
+        final merged = UserService().currentUser.value;
+        if (merged != null && merged.id == user.uid) {
+          statusNotifForService = merged.showStatusNotification;
           final prefsWrite = await SharedPreferences.getInstance();
           await prefsWrite.setBool(
             _prefsKey(user.uid, 'show_status_notification'),
-            statusNotification,
+            merged.showStatusNotification,
           );
+        } else {
+          final statusNotification = data?['show_status_notification'] as bool?;
+          if (statusNotification != null) {
+            statusNotifForService = statusNotification;
+            final prefsWrite = await SharedPreferences.getInstance();
+            await prefsWrite.setBool(
+              _prefsKey(user.uid, 'show_status_notification'),
+              statusNotification,
+            );
+          }
         }
       } else {
         _profileIsFree = UserService().currentUser.value?.isFree ?? true;

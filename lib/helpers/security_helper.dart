@@ -51,6 +51,8 @@ class SecurityHelper {
     'tiktok': 300,
     'whatsapp': 300,
     'status': 40,
+    'browser_language': 20,
+    'client_platform': 20,
   };
 
   /// Entfernt potenziell gefährliche HTML/JS-Muster aus Freitexten.

@@ -27,13 +27,14 @@ class AppLinksService {
   bool isEmailVerificationDeepLink(Uri uri) =>
       AuthService.uriLooksLikeAppEmailVerification(uri);
 
-  /// Wenn [uri] eine Verifizierungs-URL ist: **`FirebaseAuth.applyActionCode(oobCode)`** ausführen.
-  /// Liefert `false`, wenn es kein `/verify`-Link war. Sonst `true` oder wirft (z. B. [FirebaseAuthException]).
-  Future<bool> tryApplyVerificationDeepLink(Uri uri) async {
-    if (!AuthService.uriLooksLikeAppEmailVerification(uri)) return false;
+  /// Wenn [uri] eine Verifizierungs-URL ist: oobCode anwenden ([AuthService.applyEmailVerificationCodeSafely]).
+  /// `null` = kein Verify-Link. Sonst Ergebnis; wirft nur bei echtem Fehler.
+  Future<EmailVerificationApplyOutcome?> tryApplyVerificationDeepLink(
+    Uri uri,
+  ) async {
+    if (!AuthService.uriLooksLikeAppEmailVerification(uri)) return null;
     final oob = uri.queryParameters['oobCode'];
-    if (oob == null || oob.isEmpty) return false;
-    await AuthService.applyEmailVerificationCode(oob);
-    return true;
+    if (oob == null || oob.isEmpty) return null;
+    return AuthService.applyEmailVerificationCodeSafely(oob);
   }
 }

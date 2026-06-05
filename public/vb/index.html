@@ -32,6 +32,10 @@
   </script>
   <!-- Sprachen: nur ?lang= aus URL (kein Browser-/Device-Locale in /vb/). Liste für Sprach-Modal. -->
   <script src="scripts/default-pwa-languages.js"></script>
+  <script src="scripts/generated/pwa-lang-codes.js"></script>
+  <script src="scripts/generated/party-locale-map.js"></script>
+  <script src="scripts/generated/party-locale-opts.js"></script>
+  <script src="/lang-menu-columns.js"></script>
   <script src="scripts/vb-url-lang.js"></script>
   <!-- Theme (Farbvariablen) -->
   <script src="styles/theme.js"></script>
@@ -45,6 +49,7 @@
   <div class="container">
     <!-- ✅ Statischer App-Header (immer sichtbar, außerhalb der Pages) -->
     <div class="app-header" id="appHeader">
+      <button type="button" class="header-lang-btn" id="headerLangBtn" onclick="openLanguageModal(); return false;" aria-label="Language" title="Language">🌐</button>
       <!-- ✅ Logo links (fixiert, klickbar für Lightbox) -->
       <img src="icon/vibesbox-logo.png" alt="VibesBox Logo" class="header-logo" id="appHeaderLogo" onclick="openLogoLightbox()" onerror="this.style.display='none';">
       
@@ -58,19 +63,22 @@
           <span class="header-by-text" id="headerByText"></span>
           <span class="header-dj-name" id="headerDjName"></span>
         </div>
-        <!-- ✅ Party-Info-Zeile (unter "von DJ-Name"), grün, Party-Name fett -->
+        <!-- ✅ Party-Info (unter "von DJ-Name"); Vorab-Modus: zwei Zeilen -->
         <div class="header-party-info" id="headerPartyInfo" style="display: none;">
-          <span class="header-party-info-text" id="headerPartyInfoText"></span>
-          <span class="header-party-info-name" id="headerPartyInfoName"></span>
+          <div class="header-party-info-row" id="headerPartyInfoRow1">
+            <span class="header-party-info-text" id="headerPartyInfoText"></span>
+            <span class="header-party-info-name" id="headerPartyInfoName"></span>
+          </div>
+          <div class="header-party-info-row" id="headerPartyStartRow" style="display: none;">
+            <span class="header-party-info-text" id="headerPartyStartLabel"></span>
+            <span class="header-party-info-name" id="headerPartyStartValue"></span>
+          </div>
         </div>
       </div>
       
-      <!-- ✅ Container für Titel und Hamburger-Icon (rechts im Header, vertikal gestapelt) -->
+      <!-- Rechts: Menü-Icon (fest); Erdkugel separat oben rechts am Header -->
       <div class="header-title-menu-container">
-        <!-- ✅ Aktueller Seitentitel (über Hamburger-Icon) -->
-        <span id="current-page-title" class="current-page-title"></span>
-        
-        <button class="hamburger-menu" id="hamburgerMenuBtn" onclick="toggleDrawer()">
+        <button class="hamburger-menu" id="hamburgerMenuBtn" onclick="toggleDrawer()" aria-label="Menu">
           <span></span>
           <span></span>
           <span></span>
@@ -138,7 +146,7 @@
 
       <div class="form-container">
         <!-- Pre-Party Wartemodus -->
-        <div class="pre-party-wait-mode" id="prePartyWaitMode" style="display: none; padding: 32px; margin: 24px 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 16px; text-align: center; color: white; box-shadow: 0 8px 24px rgba(102, 126, 234, 0.3);">
+        <div class="pre-party-wait-mode" id="prePartyWaitMode" style="display: none;">
           <div style="font-size: 64px; margin-bottom: 16px;">⏰</div>
           <h2 style="margin: 0 0 12px 0; font-size: 24px; font-weight: bold;" id="prePartyTitle" data-i18n="pre_party_title">Party starting soon!</h2>
           <p style="margin: 0 0 24px 0; font-size: 16px; opacity: 0.9;" id="prePartySubtitle" data-i18n="pre_party_subtitle">Music requests will be unlocked automatically</p>
@@ -172,18 +180,28 @@
         <!-- ✅ Branding-Zeile (ganz oben in Zelle 2, vor allen Eingabefeldern) -->
         <div class="branding-line" id="brandingLine" style="display: none;">
           <!-- Oben: Header-Text -->
-          <div class="branding-header-text" data-i18n="pwa_request_header_text">Send your song request to</div>
+          <p class="branding-header-text" id="brandingHeaderIntro" data-i18n="pwa_request_header_text">Send your song request to</p>
           
-          <!-- Mitte: DJ-Name (Überschrift), optional Logo darunter -->
-          <div class="branding-content">
-            <span class="branding-dj-name" id="brandingDjName" style="display: none;"></span>
-            <img src="" alt="" class="branding-dj-logo" id="brandingDjLogo" style="display: none;" onerror="this.style.display='none';">
-          </div>
+          <p class="branding-dj-name" id="brandingDjName" style="display: none;"></p>
+          <img src="" alt="" class="branding-dj-logo" id="brandingDjLogo" style="display: none;" onerror="this.style.display='none';">
+        </div>
+
+        <div id="preWishBanner" class="pre-wish-banner" style="display: none;">
+          <p id="preWishBannerText" data-i18n="pre_wish_banner_body">You can send the DJ music requests in advance here.</p>
+        </div>
+
+        <button type="button" id="guestFloorSwitchBtn" class="guest-floor-switch-btn" style="display: none;" data-i18n="guest_floor_switch_button">Change room</button>
+
+        <div id="guestFloorPicker" class="guest-floor-picker" style="display: none;" aria-live="polite">
+          <h2 class="guest-floor-picker-title" data-i18n="guest_floor_picker_title">Choose a room</h2>
+          <p class="guest-floor-picker-subtitle" data-i18n="guest_floor_picker_choose">Select the room for your music requests.</p>
+          <p id="guestFloorPickerInfo" class="guest-floor-picker-info" style="display: none;"></p>
+          <div id="guestFloorPickerOptions" class="guest-floor-picker-options"></div>
         </div>
 
         <!-- Block-Nachricht für gesperrte Gäste -->
         <div class="wishbox-blocked-message" id="wishboxBlockedMessage" style="display: none; padding: 24px; margin: 16px 0; background-color: #fff3e0; border: 2px solid #ff9800; border-radius: 12px; text-align: center;">
-          <div style="font-size: 48px; margin-bottom: 16px;">🚫</div>
+          <div style="margin-bottom: 12px; display: flex; justify-content: center;" class="wishbox-blocked-icon" aria-hidden="true"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="#e65100" stroke-width="1.5"/><rect x="9" y="8" width="2.2" height="8" rx="0.4" fill="#e65100"/><rect x="12.8" y="8" width="2.2" height="8" rx="0.4" fill="#e65100"/></svg></div>
           <h2 style="margin: 0 0 12px 0; color: #e65100; font-size: 20px; font-weight: bold;" data-i18n="wishbox_blocked_title">Pause for your wishes!</h2>
           <p style="margin: 0; color: #bf360c; font-size: 14px; line-height: 1.5;" data-i18n="wishbox_blocked_message">
             Since the last messages didn't quite match the vibe of the party, music requests are currently closed for you. See you on the dancefloor!
@@ -222,6 +240,8 @@
             <div class="suggestions" id="artistSuggestions"></div>
           </div>
 
+          <p class="wishbox-suggestions-hint" data-i18n="suggestions_auto_appear">Suggestions appear automatically as you type.</p>
+
           <!-- ✅ 3. Titel (vollbreit) -->
           <div class="form-group">
             <label for="title" data-i18n="label_title">Title *</label>
@@ -237,10 +257,10 @@
           <!-- ✅ 4. Name und Gruß nebeneinander (50% jeweils, 10px Abstand) - ohne Status unter den Feldern -->
           <div class="form-row-name-greeting">
             <div class="form-group form-group-half">
-              <label for="name" data-i18n="label_name">Your Name *</label>
+              <label for="name" data-i18n="label_name">Your Name (optional)</label>
               <div class="input-wrapper" style="position: relative;">
                 <span class="icon">👤</span>
-                <input type="text" id="name" name="name" required data-i18n="label_name_placeholder" placeholder="Your Name" maxlength="120">
+                <input type="text" id="name" name="name" data-i18n="label_name_placeholder" placeholder="Your Name" maxlength="120">
                 <span class="char-counter" id="nameCharCount" style="position: absolute; bottom: 4px; right: 8px; font-size: 11px; color: #888;">0 / 120</span>
               </div>
             </div>
@@ -257,7 +277,7 @@
 
         <!-- ✅ Absende-Button -->
         <div class="wish-form-footer" style="margin-top: 20px;">
-          <button type="submit" class="submit-btn submit-btn-compact" id="submitBtn">
+          <button type="submit" class="submit-btn submit-btn-compact" id="submitBtn" form="wishForm">
             <span>📤</span>
             <span data-i18n="submit_wish">Send request</span>
           </button>
@@ -528,6 +548,6 @@
   </div>
   </main>
 
-  <script src="app.js" defer></script>
+  <script src="app.js?v=20260519-prewish-nav" defer></script>
 </body>
 </html>

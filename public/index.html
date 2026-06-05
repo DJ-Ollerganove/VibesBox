@@ -9,89 +9,16 @@
   <meta property="og:description" content="Musikwünsche, Live-History und Interaktion für dein Event. Mit VibesBox steuern Gäste die Stimmung direkt vom Smartphone.">
   <meta property="og:image" content="https://vibesbox.app/assets/logo_og.png">
   <meta property="og:type" content="website">
+  <script src="/scripts/vb-party-redirect.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <!-- reCAPTCHA Enterprise: defer verhindert Render-Blockierung des Hauptdokuments -->
   <script defer src="https://www.google.com/recaptcha/enterprise.js?render=6LdoeDcsAAAAAIORb90GjRovm2tW5qE4v9q5J-u5"></script>
   <script src="/vb/scripts/default-pwa-languages.js"></script>
+  <script src="/lang-menu-columns.js"></script>
   <script src="/lang_menu_shared.js"></script>
-  <script src="/party_shared.js"></script>
-  <!-- Firebase früh starten: Modul ist deferred, lädt aber parallel zum restlichen Head — Party-Check wartet auf window.firebaseDb. -->
-  <script type="module" src="/vb/scripts/firebase-init.js"></script>
-  <!-- Übersetzungen: On-Demand aus /vb/lang/ (separate Sprachdateien) + DB-Logik recordLanguageHit -->
-  <!-- Party-Code in URL (?code= / …/party/…): kein Sofort-Redirect nach /vb/. Prüfung läuft auf der Root-PWA (Firebase + checkPartyCode); /vb/ nur bei laufender Party. -->
-  <script>
-    (function() {
-      var pathname = (window.location.pathname || '').toLowerCase();
-      if (pathname.indexOf('/vb') !== -1) return;
-      function normalizeDigitsPartyCode(raw) {
-        if (!raw || typeof raw !== 'string') return null;
-        var q = raw.replace(/[^0-9]/g, '').substring(0, 8);
-        return q.length === 8 ? q : null;
-      }
-      function extractPartyCodeFromCurrentUrl() {
-        try {
-          var urlParams = new URLSearchParams(window.location.search || '');
-          var raw = urlParams.get('code');
-          var fromQ = normalizeDigitsPartyCode(raw || '');
-          if (fromQ) return fromQ;
-        } catch (e) {}
-        try {
-          var rawHash = window.location.hash || '';
-          if (rawHash) {
-            var hash = rawHash.replace(/^#/, '');
-            var qi = hash.indexOf('?');
-            var qPart = qi >= 0 ? hash.substring(qi + 1) : (hash.indexOf('code=') !== -1 ? hash : '');
-            if (qPart) {
-              var hp = new URLSearchParams(qPart);
-              var fromH = normalizeDigitsPartyCode(hp.get('code') || '');
-              if (fromH) return fromH;
-            }
-          }
-        } catch (e2) {}
-        var path = (window.location.pathname || '').replace(/^\/+|\/+$/g, '');
-        var parts = path.split('/');
-        var partyIdx = parts.indexOf('party');
-        if (partyIdx !== -1 && parts[partyIdx + 1]) {
-          return normalizeDigitsPartyCode(parts[partyIdx + 1] || '');
-        }
-        return null;
-      }
-      var code = extractPartyCodeFromCurrentUrl();
-      if (!code) return;
-      window.__ROOT_URL_PARTY_CODE__ = code;
-      try {
-        var h = document.head;
-        if (h && !h.querySelector('link[data-vb-root-firebase-prewarm]')) {
-          var pc = document.createElement('link');
-          pc.rel = 'preconnect';
-          pc.href = 'https://www.gstatic.com';
-          pc.crossOrigin = 'anonymous';
-          pc.setAttribute('data-vb-root-firebase-prewarm', '1');
-          h.appendChild(pc);
-          var mpl = document.createElement('link');
-          mpl.rel = 'modulepreload';
-          mpl.href = '/vb/scripts/firebase-init.js';
-          mpl.crossOrigin = 'anonymous';
-          mpl.setAttribute('data-vb-root-firebase-prewarm', '1');
-          h.appendChild(mpl);
-        }
-      } catch (ePw) {}
-      if (typeof window.IS_DEBUG !== 'undefined' && window.IS_DEBUG) {
-        console.log('DEBUG [Root]: Party-Code in URL — Prüfung folgt auf Root (kein Redirect ohne laufende Party).', code);
-      }
-      var lang = '';
-      try {
-        lang = (typeof window.getEffectiveLangForMenu === 'function') ? window.getEffectiveLangForMenu() : '';
-      } catch (e) {}
-      try {
-        if (lang && typeof window.setVbPreferredLangForSession === 'function') {
-          window.setVbPreferredLangForSession(lang);
-        }
-      } catch (e2) {}
-    })();
-  </script>
+  <!-- Party-Code-Prüfung nur noch in /vb/ (party_shared.js dort) -->
   <script>
     (function() {
       window.IS_DEBUG = (new URLSearchParams(window.location.search).get('x') === '99');
@@ -605,19 +532,80 @@
       right: 0;
       margin-top: 8px;
       min-width: 200px;
+      max-width: min(96vw, 680px);
       background: #1A1A1A;
       border: 1px solid var(--accent);
       border-radius: 10px;
       box-shadow: 0 8px 24px rgba(212, 131, 77, 0.25);
-      padding: 6px 0;
+      padding: 10px;
       z-index: 150;
       display: none;
-      overflow: hidden;
-      flex-direction: column;
+      overflow: visible;
     }
     .main-lang-dropdown.show {
+      display: block;
+    }
+    .lang-menu-columns {
+      display: flex;
+      flex-direction: row;
+      align-items: flex-start;
+      gap: 10px;
+      width: max-content;
+      max-width: 100%;
+    }
+    .lang-menu-column {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      flex: 0 0 auto;
+      width: min(148px, 42vw);
+    }
+    .lang-menu-scroll-wrap { position: relative; width: 100%; }
+    .lang-menu-scroll-area {
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(212, 131, 77, 0.6) transparent;
+    }
+    .lang-menu-scroll-area::-webkit-scrollbar { height: 5px; }
+    .lang-menu-scroll-area::-webkit-scrollbar-thumb {
+      background: rgba(212, 131, 77, 0.6);
+      border-radius: 3px;
+    }
+    .lang-menu-scroll-peek { flex: 0 0 20px; width: 20px; min-width: 20px; }
+    .lang-menu-scroll-fade {
+      position: absolute; top: 0; bottom: 0; width: 36px;
+      pointer-events: none; z-index: 2; opacity: 0; transition: opacity 0.2s;
+    }
+    .lang-menu-scroll-wrap.lang-menu-scroll--scrollable:not(.lang-menu-scroll--at-end) .lang-menu-scroll-fade--right { opacity: 1; }
+    .lang-menu-scroll-wrap.lang-menu-scroll--scrollable:not(.lang-menu-scroll--at-start) .lang-menu-scroll-fade--left { opacity: 1; }
+    .lang-menu-scroll-fade--left {
+      left: 0;
+      background: linear-gradient(to right, #1A1A1A 40%, transparent);
+    }
+    .lang-menu-scroll-fade--right {
+      right: 0;
+      background: linear-gradient(to left, #1A1A1A 40%, transparent);
+    }
+    .lang-menu-scroll-chevron {
+      position: absolute; top: 50%; transform: translateY(-50%); z-index: 3;
+      width: 30px; height: 30px; border: 1px solid var(--accent); border-radius: 50%;
+      background: rgba(0,0,0,0.55); color: var(--accent); font-size: 20px;
+      cursor: pointer; display: none; align-items: center; justify-content: center;
+      padding: 0 0 2px 0;
+    }
+    .lang-menu-scroll-wrap.lang-menu-scroll--scrollable:not(.lang-menu-scroll--at-start) .lang-menu-scroll-chevron--left,
+    .lang-menu-scroll-wrap.lang-menu-scroll--scrollable:not(.lang-menu-scroll--at-end) .lang-menu-scroll-chevron--right {
       display: flex;
     }
+    .lang-menu-scroll-chevron--left { left: 2px; }
+    .lang-menu-scroll-chevron--right { right: 2px; }
+    .lang-menu-scroll-hint {
+      margin-top: 6px; font-size: 11px; color: var(--accent); text-align: center;
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+    }
+    .lang-menu-scroll-hint::before { content: '↔'; font-size: 13px; }
     .main-lang-option {
       display: flex;
       align-items: center;
@@ -1237,7 +1225,7 @@
     </nav>
   </header>
 
-  <!-- Legal-Modal (Inhalt aus VR-PWA translations.js – gleiche Keys, Mehrsprachigkeit) -->
+  <!-- Legal-Modal (Inhalt aus /vb/lang/*.js – gleiche Keys wie PWA, Mehrsprachigkeit) -->
   <div class="legal-overlay" id="legalOverlay" aria-hidden="true">
     <div class="legal-modal">
       <div class="legal-modal-header">
@@ -1635,14 +1623,15 @@
           return;
         }
         hideCodeError();
+        try {
+          if (typeof sessionStorage !== 'undefined') {
+            sessionStorage.setItem('vb_session_party_code', code);
+            sessionStorage.setItem('vb_pending_join_code', code);
+            sessionStorage.setItem('vb_entry_granted', '1');
+          }
+        } catch (eSessGo) {}
         codeSubmitBtn.disabled = true;
         codeSubmitBtn.textContent = mainOverlayT('main_overlay_btn_checking');
-        if (typeof window.checkPartyCode !== 'function') {
-          showCodeError(mainOverlayT('main_code_error_reload'));
-          codeSubmitBtn.textContent = mainOverlayT('main_overlay_btn_submit');
-          updateCodeSubmitEnabled();
-          return;
-        }
         var lang = '';
         try {
           lang = (typeof window.getEffectiveLangForMenu === 'function')
@@ -1650,46 +1639,10 @@
             : (localStorage.getItem('pwa_language') || localStorage.getItem('language') || localStorage.getItem('permanent_user_locale') || '').trim();
         } catch (e) {}
         var langNorm = (lang || '').toString().trim().split('-')[0].toLowerCase();
-        var vbUrl = '/vb/' + (langNorm ? '?lang=' + encodeURIComponent(langNorm) : '');
-        var navigatedAway = false;
-        window.checkPartyCode(code).then(function(result) {
-          if (result && result.success && result.data && result.data.party_id) {
-            try {
-              localStorage.setItem('pendingPartyId', result.data.party_id);
-            } catch (e) {}
-            try {
-              if (langNorm && typeof window.setVbPreferredLangForSession === 'function') {
-                window.setVbPreferredLangForSession(langNorm);
-              }
-            } catch (eLang) {}
-            navigatedAway = true;
-            try { if (typeof sessionStorage !== 'undefined') sessionStorage.setItem('vb_entry_granted', '1'); } catch (eGate) {}
-            window.location.href = vbUrl;
-            return;
-          }
-          if (result && result.type === 'future' && result.start_time_posix && typeof window.formatPartyLocalTime === 'function' && typeof window.calculateTimeUntilParty === 'function') {
-            var lang2 = window.getMainLang ? window.getMainLang() : (localStorage.getItem('pwa_language') || 'en');
-            var rawTime = window.formatPartyLocalTime(result.start_time_posix, result.timezone_id || 'UTC', lang2);
-            var clockStr = mainOverlayT('time_format_clock').replace('{time}', rawTime);
-            var dateStr = typeof window.formatPartyLocalDate === 'function' ? window.formatPartyLocalDate(result.start_time_posix, result.timezone_id || 'UTC', lang2) : '';
-            var timeInfo = window.calculateTimeUntilParty(result.start_time_posix, window.mainT);
-            var intro = mainOverlayT('main_party_not_started_intro');
-            var startsAt = mainOverlayT('main_party_starts_at').replace('{time}', clockStr);
-            var startIn = mainOverlayT('main_party_start_in').replace('{countdown}', timeInfo);
-            var fullMsg = intro + '<br><br>' + (dateStr ? '<strong>' + dateStr + '</strong><br><br>' : '') + '<strong>' + startsAt + '</strong><br><br>' + startIn;
-            showCodeError(fullMsg, true);
-          } else {
-            var errKey = (result && result.messageKey) ? result.messageKey : 'main_code_error_invalid';
-            showCodeError(mainOverlayT(errKey));
-          }
-        }).catch(function() {
-          showCodeError(mainOverlayT('main_code_error_invalid'));
-        }).finally(function() {
-          if (!navigatedAway) {
-            codeSubmitBtn.textContent = mainOverlayT('main_overlay_btn_submit');
-            updateCodeSubmitEnabled();
-          }
-        });
+        var vbUrl = (typeof window.vbBuildWishboxUrlWithPartyCode === 'function')
+          ? window.vbBuildWishboxUrlWithPartyCode(code, langNorm)
+          : ('/vb/?code=' + encodeURIComponent(code) + (langNorm ? ('&lang=' + encodeURIComponent(langNorm)) : ''));
+        window.location.href = vbUrl;
       }
 
       partyCodeInput.addEventListener('input', function() {
@@ -1713,139 +1666,15 @@
 
       updateCodeSubmitEnabled();
 
-      /** ?code= aus der Adresszeile entfernen (nach Prüfung), damit Reload nicht erneut triggert. */
-      function stripUrlPartyCodeParam() {
-        try {
-          var u = new URL(window.location.href);
-          u.searchParams.delete('code');
-          var qs = u.searchParams.toString();
-          history.replaceState({}, document.title, u.pathname + (qs ? '?' + qs : '') + u.hash);
-        } catch (eStrip) {}
-      }
-
-      /** QR-Link mit ?code= auf der Root-PWA: erst checkPartyCode; nur bei laufender Party → /vb/ (pendingPartyId, ohne Code in URL). */
-      (function rootUrlPartyBootstrap() {
-        var pathname = (window.location.pathname || '').toLowerCase();
-        if (pathname.indexOf('/vb') !== -1) return;
-        var code = typeof window.__ROOT_URL_PARTY_CODE__ === 'string' ? window.__ROOT_URL_PARTY_CODE__.replace(/[^0-9]/g, '').substring(0, 8) : '';
-        if (!code || code.length !== 8) return;
-        if (window.__ROOT_URL_PARTY_BOOTSTRAP_DONE) return;
-
-        function runCheckOnRoot() {
-          if (typeof window.checkPartyCode !== 'function') {
-            window.__ROOT_URL_PARTY_BOOTSTRAP_DONE = true;
-            applyOverlayL10n();
-            codeOverlay.classList.add('show');
-            partyCodeInput.value = code;
-            showCodeError(mainOverlayT('main_code_error_reload'));
-            stripUrlPartyCodeParam();
-            codeSubmitBtn.textContent = mainOverlayT('main_overlay_btn_submit');
-            updateCodeSubmitEnabled();
-            return;
-          }
-          window.__ROOT_URL_PARTY_BOOTSTRAP_DONE = true;
-          applyOverlayL10n();
-          codeOverlay.classList.add('show');
-          partyCodeInput.value = code;
-          hideCodeError();
-          codeSubmitBtn.disabled = true;
-          codeSubmitBtn.textContent = mainOverlayT('main_overlay_btn_checking');
-          var lang = '';
-          try {
-            lang = (typeof window.getEffectiveLangForMenu === 'function')
-              ? window.getEffectiveLangForMenu()
-              : (localStorage.getItem('pwa_language') || localStorage.getItem('language') || localStorage.getItem('permanent_user_locale') || '').trim();
-          } catch (eL) {}
-          var langNorm = (lang || '').toString().trim().split('-')[0].toLowerCase();
-          var vbUrl = '/vb/' + (langNorm ? '?lang=' + encodeURIComponent(langNorm) : '');
-          var navigatedAway = false;
-          window.checkPartyCode(code).then(function(result) {
-            if (result && result.success && result.data && result.data.party_id) {
-              try { localStorage.setItem('pendingPartyId', result.data.party_id); } catch (eP) {}
-              try { if (typeof sessionStorage !== 'undefined') sessionStorage.removeItem('vb_pending_join_code'); } catch (eS) {}
-              try {
-                if (langNorm && typeof window.setVbPreferredLangForSession === 'function') {
-                  window.setVbPreferredLangForSession(langNorm);
-                }
-              } catch (eLang) {}
-            navigatedAway = true;
-            try { if (typeof sessionStorage !== 'undefined') sessionStorage.setItem('vb_entry_granted', '1'); } catch (eGate2) {}
-            window.location.href = vbUrl;
-            return;
-          }
-          if (result && result.type === 'future' && result.start_time_posix && typeof window.formatPartyLocalTime === 'function' && typeof window.calculateTimeUntilParty === 'function') {
-            var lang2 = window.getMainLang ? window.getMainLang() : (localStorage.getItem('pwa_language') || 'en');
-            var rawTime = window.formatPartyLocalTime(result.start_time_posix, result.timezone_id || 'UTC', lang2);
-            var clockStr = mainOverlayT('time_format_clock').replace('{time}', rawTime);
-            var dateStr = typeof window.formatPartyLocalDate === 'function' ? window.formatPartyLocalDate(result.start_time_posix, result.timezone_id || 'UTC', lang2) : '';
-            var timeInfo = window.calculateTimeUntilParty(result.start_time_posix, window.mainT);
-            var intro = mainOverlayT('main_party_not_started_intro');
-            var startsAt = mainOverlayT('main_party_starts_at').replace('{time}', clockStr);
-            var startIn = mainOverlayT('main_party_start_in').replace('{countdown}', timeInfo);
-            var fullMsg = intro + '<br><br>' + (dateStr ? '<strong>' + dateStr + '</strong><br><br>' : '') + '<strong>' + startsAt + '</strong><br><br>' + startIn;
-            showCodeError(fullMsg, true);
-          } else {
-            var errKey = (result && result.messageKey) ? result.messageKey : 'main_code_error_invalid';
-            showCodeError(mainOverlayT(errKey));
-          }
-          stripUrlPartyCodeParam();
-          }).catch(function() {
-            showCodeError(mainOverlayT('main_code_error_invalid'));
-            stripUrlPartyCodeParam();
-          }).finally(function() {
-            if (!navigatedAway) {
-              codeSubmitBtn.textContent = mainOverlayT('main_overlay_btn_submit');
-              updateCodeSubmitEnabled();
-            }
-          });
-        }
-
-        var deadline = Date.now() + 14000;
-        (function waitFirebaseTick() {
-          if (window.__ROOT_URL_PARTY_BOOTSTRAP_DONE) return;
-          if (window.firebaseDb && typeof window.checkPartyCode === 'function') {
-            runCheckOnRoot();
-            return;
-          }
-          if (Date.now() > deadline) {
-            window.__ROOT_URL_PARTY_BOOTSTRAP_DONE = true;
-            applyOverlayL10n();
-            codeOverlay.classList.add('show');
-            partyCodeInput.value = code;
-            showCodeError(mainOverlayT('main_code_error_timeout'));
-            stripUrlPartyCodeParam();
-            codeSubmitBtn.textContent = mainOverlayT('main_overlay_btn_submit');
-            updateCodeSubmitEnabled();
-            return;
-          }
-          setTimeout(waitFirebaseTick, 16);
-        })();
-      })();
-
-      /** Nach Redirect von /vb/ wegen beendeter Party: Info-Overlay auf der Root-PWA (l10n). */
+      /** Legacy: altes Flag entfernen – kein zweites Party-Code-Overlay mehr nach Party-Ende. */
       function maybeShowPartyEndedFromWishbox() {
         try {
-          if (typeof sessionStorage === 'undefined' || sessionStorage.getItem('vb_party_ended_notice') !== '1') return;
-          var msg = mainOverlayT('main_party_ended_returned_home');
-          if (!msg || msg === 'main_party_ended_returned_home') {
-            msg = mainOverlayT('party_ended');
+          if (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('vb_party_ended_notice') === '1') {
+            sessionStorage.removeItem('vb_party_ended_notice');
           }
-          var unresolved = !msg || msg === 'main_party_ended_returned_home' || msg === 'party_ended';
-          if (unresolved && typeof translations === 'undefined') return;
-          if (unresolved) {
-            msg = 'Die Party ist beendet. Du wurdest zur Startseite zurückgeleitet. Danke für deinen Besuch!';
-          }
-          sessionStorage.removeItem('vb_party_ended_notice');
-          applyOverlayL10n();
-          partyCodeInput.value = '';
-          hideCodeError();
-          showCodeError(msg, false, true);
-          codeOverlay.classList.add('show');
         } catch (eEnd) {}
       }
       maybeShowPartyEndedFromWishbox();
-      window.addEventListener('translationsReady', maybeShowPartyEndedFromWishbox);
-      setTimeout(maybeShowPartyEndedFromWishbox, 2800);
 
       // Kontaktformular – vereinheitlicht mit VR-Seite (Felder, Validierung, Cloud Function, Kupfer-Design)
       const contactForm = document.getElementById('contactForm');

@@ -1,0 +1,221 @@
+{
+  "sourceLanguage": "de",
+  "excludeFromMenu": [
+    "ar"
+  ],
+  "languages": [
+    {
+      "code": "de",
+      "intl_locale": "de-DE",
+      "name": "German",
+      "flag": "🇩🇪",
+      "icon": "de",
+      "langKey": "lang_german",
+      "arbKey": "german",
+      "time_suffix": " Uhr",
+      "time_style": "colon_suffix"
+    },
+    {
+      "code": "en",
+      "intl_locale": "en-US",
+      "hour12": true,
+      "name": "English",
+      "flag": "🇬🇧",
+      "icon": "en",
+      "langKey": "lang_english",
+      "arbKey": "english",
+      "time_suffix": "",
+      "time_style": "intl_12"
+    },
+    {
+      "code": "fr",
+      "intl_locale": "fr-FR",
+      "name": "French",
+      "flag": "🇫🇷",
+      "icon": "fr",
+      "langKey": "lang_french",
+      "arbKey": "french",
+      "time_suffix": "",
+      "time_style": "fr_h"
+    },
+    {
+      "code": "ru",
+      "intl_locale": "ru-RU",
+      "name": "Russian",
+      "flag": "🇷🇺",
+      "icon": "ru",
+      "langKey": "lang_russian",
+      "arbKey": "russian",
+      "time_suffix": "",
+      "time_style": "colon_suffix"
+    },
+    {
+      "code": "zh",
+      "intl_locale": "zh-CN",
+      "name": "Chinese",
+      "flag": "🇨🇳",
+      "icon": "zh",
+      "langKey": "lang_chinese",
+      "arbKey": "chinese",
+      "time_suffix": "",
+      "time_style": "colon_suffix"
+    },
+    {
+      "code": "es",
+      "intl_locale": "es-ES",
+      "name": "Spanish",
+      "flag": "🇪🇸",
+      "icon": "es",
+      "langKey": "lang_spanish",
+      "arbKey": "spanish",
+      "time_suffix": " h",
+      "time_style": "colon_suffix"
+    },
+    {
+      "code": "tr",
+      "intl_locale": "tr-TR",
+      "name": "Turkish",
+      "flag": "🇹🇷",
+      "icon": "tr",
+      "langKey": "lang_turkish",
+      "arbKey": "turkish",
+      "time_suffix": "",
+      "time_style": "colon_suffix"
+    },
+    {
+      "code": "pt",
+      "intl_locale": "pt-PT",
+      "name": "Portuguese",
+      "flag": "🇵🇹",
+      "icon": "pt",
+      "langKey": "lang_portuguese",
+      "arbKey": "portuguese",
+      "time_suffix": "",
+      "time_style": "h_compact"
+    },
+    {
+      "code": "it",
+      "intl_locale": "it-IT",
+      "name": "Italian",
+      "flag": "🇮🇹",
+      "icon": "it",
+      "langKey": "lang_italian",
+      "arbKey": "italian",
+      "time_suffix": "",
+      "time_style": "h_compact"
+    },
+    {
+      "code": "uk",
+      "intl_locale": "uk-UA",
+      "name": "Ukrainian",
+      "flag": "🇺🇦",
+      "icon": "uk",
+      "langKey": "lang_ukrainian",
+      "arbKey": "ukrainian",
+      "time_suffix": "",
+      "time_style": "colon_suffix"
+    },
+    {
+      "code": "hi",
+      "intl_locale": "hi-IN",
+      "name": "Hindi",
+      "flag": "🇮🇳",
+      "icon": "hi",
+      "langKey": "lang_hindi",
+      "arbKey": "hindi",
+      "time_suffix": "",
+      "time_style": "intl_12",
+      "hour12": true
+    },
+    {
+      "code": "sq",
+      "intl_locale": "sq-AL",
+      "name": "Albanian",
+      "flag": "🇦🇱",
+      "icon": "sq",
+      "langKey": "lang_albanian",
+      "arbKey": "albanian",
+      "time_suffix": "",
+      "time_style": "colon_suffix"
+    },
+    {
+      "code": "vi",
+      "intl_locale": "vi-VN",
+      "name": "Vietnamese",
+      "flag": "🇻🇳",
+      "icon": "vi",
+      "langKey": "lang_vietnamese",
+      "arbKey": "vietnamese",
+      "time_suffix": "",
+      "time_style": "colon_suffix"
+    },
+    {
+      "code": "ja",
+      "intl_locale": "ja-JP",
+      "name": "Japanese",
+      "flag": "🇯🇵",
+      "icon": "ja",
+      "langKey": "lang_japanese",
+      "arbKey": "japanese",
+      "time_suffix": "",
+      "time_style": "ja_kanji"
+    },
+    {
+      "code": "el",
+      "intl_locale": "el-GR",
+      "name": "Greek",
+      "flag": "🇬🇷",
+      "icon": "el",
+      "langKey": "lang_greek",
+      "arbKey": "greek",
+      "time_suffix": "",
+      "time_style": "colon_suffix"
+    },
+    {
+      "code": "nl",
+      "intl_locale": "nl-NL",
+      "name": "Dutch",
+      "flag": "🇳🇱",
+      "icon": "nl",
+      "langKey": "lang_dutch",
+      "arbKey": "dutch",
+      "time_suffix": " uur",
+      "time_style": "colon_suffix"
+    },
+    {
+      "code": "pl",
+      "intl_locale": "pl-PL",
+      "name": "Polish",
+      "flag": "🇵🇱",
+      "icon": "pl",
+      "langKey": "lang_polish",
+      "arbKey": "polish",
+      "time_suffix": "",
+      "time_style": "colon_suffix"
+    },
+    {
+      "code": "cs",
+      "intl_locale": "cs-CZ",
+      "name": "Czech",
+      "flag": "🇨🇿",
+      "icon": "cs",
+      "langKey": "lang_czech",
+      "arbKey": "czech",
+      "time_suffix": "",
+      "time_style": "colon_suffix"
+    },
+    {
+      "code": "ar",
+      "intl_locale": "ar",
+      "name": "Arabic",
+      "flag": "🇸🇦",
+      "icon": "ar",
+      "langKey": "lang_arabic",
+      "arbKey": "arabic",
+      "appMenu": false,
+      "time_suffix": "",
+      "time_style": "intl_12",
+      "hour12": true
+    }
+  ]
+}

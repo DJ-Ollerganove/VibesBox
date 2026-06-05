@@ -1,4 +1,3 @@
-import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 
 import '../../l10n/app_localizations.dart';
@@ -6,6 +5,7 @@ import '../../services/dj_dashboard_statistics_service.dart';
 import '../../services/statistics_service.dart';
 import '../../services/party_statistics_service.dart';
 import '../../utils/ui_constants.dart';
+import 'stats_pie_chart_shared.dart';
 
 class StatsPieChartCard extends StatelessWidget {
   final Widget Function(BuildContext context, Widget child) cardBuilder;
@@ -133,6 +133,7 @@ class StatsPieChartCard extends StatelessWidget {
 
   Widget _buildPie(
     AppLocalizations l, {
+    required StatsPieChartMetrics metrics,
     required int played,
     required int rejected,
     required int pending,
@@ -142,76 +143,65 @@ class StatsPieChartCard extends StatelessWidget {
   }) {
     final total = played + rejected + pending + notPlayed + unknown;
     if (total == 0) {
-      // Leerzustand: Hinweistext statt weißem Kreis (Admin: globale Daten, sonst: warte auf Daten)
       return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Text(
-            isAdmin ? l.stats_piechart_no_global_data : l.stats_piechart_waiting_for_data,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Colors.grey.shade400,
-              fontSize: 14,
-            ),
+        child: SizedBox(
+          width: metrics.diameter,
+          height: metrics.diameter,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              StatsPieChartEmptyCircle(metrics: metrics),
+              Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Text(
+                  isAdmin ? l.stats_piechart_no_global_data : l.stats_piechart_waiting_for_data,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.grey.shade600,
+                    fontSize: metrics.titleFontSize + 1,
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       );
     }
 
-    final playedPercent = (played / total * 100);
-    final rejectedPercent = (rejected / total * 100);
-    final pendingPercent = (pending / total * 100);
-    final notPlayedPercent = (notPlayed / total * 100);
-    final unknownPercent = (unknown / total * 100);
-
-    return PieChart(
-      PieChartData(
-        sectionsSpace: 2,
-        centerSpaceRadius: 40,
-        startDegreeOffset: 270,
-        sections: [
-          if (played > 0)
-            PieChartSectionData(
-              value: played.toDouble(),
-              title: '${playedPercent.toStringAsFixed(1)}%',
-              color: Colors.green,
-              radius: 60,
-              titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-          if (rejected > 0)
-            PieChartSectionData(
-              value: rejected.toDouble(),
-              title: '${rejectedPercent.toStringAsFixed(1)}%',
-              color: UIConstants.frameAbgelehnt,
-              radius: 60,
-              titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-          if (notPlayed > 0)
-            PieChartSectionData(
-              value: notPlayed.toDouble(),
-              title: '${notPlayedPercent.toStringAsFixed(1)}%',
-              color: Colors.blue,
-              radius: 60,
-              titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-          if (pending > 0)
-            PieChartSectionData(
-              value: pending.toDouble(),
-              title: '${pendingPercent.toStringAsFixed(1)}%',
-              color: Colors.orange,
-              radius: 60,
-              titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-          if (unknown > 0)
-            PieChartSectionData(
-              value: unknown.toDouble(),
-              title: '${unknownPercent.toStringAsFixed(1)}%',
-              color: Colors.grey,
-              radius: 60,
-              titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-        ],
-      ),
+    return buildStatsPieChart(
+      metrics: metrics,
+      sections: [
+        if (played > 0)
+          StatsPieChartSlice(
+            value: played.toDouble(),
+            title: statsPiePercentLabel(played, total),
+            color: Colors.green,
+          ),
+        if (rejected > 0)
+          StatsPieChartSlice(
+            value: rejected.toDouble(),
+            title: statsPiePercentLabel(rejected, total),
+            color: UIConstants.frameAbgelehnt,
+          ),
+        if (notPlayed > 0)
+          StatsPieChartSlice(
+            value: notPlayed.toDouble(),
+            title: statsPiePercentLabel(notPlayed, total),
+            color: Colors.blue,
+          ),
+        if (pending > 0)
+          StatsPieChartSlice(
+            value: pending.toDouble(),
+            title: statsPiePercentLabel(pending, total),
+            color: Colors.orange,
+          ),
+        if (unknown > 0)
+          StatsPieChartSlice(
+            value: unknown.toDouble(),
+            title: statsPiePercentLabel(unknown, total),
+            color: Colors.grey,
+          ),
+      ],
     );
   }
 
@@ -219,10 +209,10 @@ class StatsPieChartCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
 
-    // Admin-View (global): Einmaliger get()-Call, um unnötige Dauerstreams zu vermeiden.
-    // Party-View: Verwende Stream nur wenn useStreamForParty == true (aktive Party), sonst Future (beendete Party)
-    // Gesamt-Statistik: Verwende Future (einmaliges Laden nach djId)
-    final useStream = (partyId != null && partyId!.isNotEmpty && useStreamForParty == true);
+    // Admin: Live-Stream über alle Wünsche (collectionGroup + Fallback).
+    // Party: Stream nur bei aktiver Party; sonst Future.
+    final useStream = isAdmin ||
+        (partyId != null && partyId!.isNotEmpty && useStreamForParty == true);
 
     return cardBuilder(
       context,
@@ -327,30 +317,52 @@ class StatsPieChartCard extends StatelessWidget {
   }
 
   Widget _buildContent(BuildContext context, AppLocalizations l, _StatsPayload data, bool isAdminValue) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final metrics = StatsPieChartMetrics.resolve(
+          context,
+          maxLayoutWidth: constraints.maxWidth,
+        );
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
-              flex: 2,
-              child: AspectRatio(
-                aspectRatio: 1,
-                child: _buildPie(
-                  l,
-                  played: data.played,
-                  rejected: data.rejected,
-                  pending: data.pending,
-                  notPlayed: data.notPlayed,
-                  unknown: data.unknown,
-                  isAdmin: isAdminValue,
-                ),
+            if (isAdminValue) ...[
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    l.total_wishes,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      color: Colors.white70,
+                    ),
+                  ),
+                  Text(
+                    '${data.total}',
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: UIConstants.appOrange,
+                    ),
+                  ),
+                ],
               ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
+              const SizedBox(height: 12),
+            ],
+            StatsPieChartLegendRow(
+              metrics: metrics,
+              pie: _buildPie(
+                l,
+                metrics: metrics,
+                played: data.played,
+                rejected: data.rejected,
+                pending: data.pending,
+                notPlayed: data.notPlayed,
+                unknown: data.unknown,
+                isAdmin: isAdminValue,
+              ),
+              legend: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -379,17 +391,17 @@ class StatsPieChartCard extends StatelessWidget {
                 ],
               ),
             ),
+            if (data.total == 0 && data.showEmptyText) ...[
+              const SizedBox(height: 12),
+              Text(
+                l.djDashboardEmptyState,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ],
           ],
-        ),
-        if (data.total == 0 && data.showEmptyText) ...[
-          const SizedBox(height: 12),
-          Text(
-            l.djDashboardEmptyState,
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-        ],
-      ],
+        );
+      },
     );
   }
 }

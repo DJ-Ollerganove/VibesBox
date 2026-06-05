@@ -1,8 +1,9 @@
-# PWA-Sprachdateien (dynamisches Laden)
+# PWA-Sprachdateien (Runtime)
 
-Jede Datei exportiert ein Objekt `lang_XX` (z. B. `lang_de`, `lang_en`) mit denselben Keys wie in der monolithischen `translations.js`. Die Keys sind in allen Dateien identisch.
+Die App lädt ausschließlich **`/vb/lang/<code>.js`** (pro Sprache eine Datei, aus `babel/locales/*.json` generiert).
 
-- **Pfad (relativ zu vb/):** `lang/de.js`, `lang/en.js`, …
-- **settings/languages:** Pro Sprache kann `js_url` den relativen Pfad angeben (z. B. `lang/de.js`) für das dynamische Laden.
+**Übersetzen mit BabelEdit:** siehe **`../babel/README.md`** — dort nur `locales/*.json` bearbeiten, danach:
 
-Erzeugt mit `node extract-langs.js` aus `../translations.js`.
+`node scripts/pwa-lang-import-babel.js`
+
+Dieser Ordner wird vom Import-Skript aus den JSON-Dateien erzeugt.

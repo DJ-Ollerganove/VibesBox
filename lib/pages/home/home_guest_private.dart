@@ -72,7 +72,10 @@ class _HomeGuestPrivateState extends State<HomeGuestPrivate> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    setState(() => _loading = true);
+    final showSpinner = _loading;
+    if (showSpinner) {
+      setState(() => _loading = true);
+    }
     try {
       final stats = await StatisticsService.loadUserStatistics(user);
       if (!mounted) return;

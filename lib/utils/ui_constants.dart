@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+/// DJ-Listen-Kontext für Akzentfarben auf Wunsch-Karten (Titel, Interpret, Gruß).
+enum WishCardListKind { offen, gespielt, abgelehnt, preWish }
+
 /// Zentrale UI-Konstanten für die gesamte App
 /// Enthält wiederkehrende Werte wie Padding, Abstände, etc.
 class UIConstants {
@@ -16,12 +19,20 @@ class UIConstants {
   static const Color colorRed = Colors.red;
   static const Color colorGrey = Color(0xFF9E9E9E);
   static const Color colorYellow = Colors.yellow;
+  /// Vorab-Wünsche (Rahmen, Badges, Icons, Banner) – zentral änderbar.
+  /// PWA: `--pre-wish-primary` in `public/vb/styles/main.css`, `window.VB_PRE_WISH` in `party_shared.js`.
+  static const Color colorPreWish = Color(0xFF7986CB);
+  /// Text auf Vorab-Bannern (hell, gut lesbar auf dunklem Grund).
+  static const Color colorPreWishBannerText = Color(0xFFE8EAF6);
+  /// Zweite Farbe für Vorab-/Pre-Party-Verläufe (Wartemodus-Karte).
+  static const Color colorPreWishGradientEnd = Color(0xFF764BA2);
 
   // ─── Rollen (Rahmen/Akzente pro Screen) ───────────────────────────────────
   static const Color frameOffen = colorBlue;
   static const Color frameNeu = colorWhite;   // Neue/ungelesene Wünsche (Offen)
   static const Color frameGespielt = colorGreen;
-  static const Color frameAbgelehnt = colorOrange; // Orange für abgelehnte Wünsche (Rahmen + Zeitstempel)
+  static const Color frameAbgelehnt = colorOrange; // Orange für abgelehnte Wünsche (Rahmen, Akzente)
+  static const Color framePreWish = colorPreWish;
   static const Color frameGesperrt = colorRed;
   static const Color frameHistory = colorGrey;
   static const Color frameNoParty = colorRed;
@@ -40,6 +51,29 @@ class UIConstants {
   static const Color tabOffenColor = frameOffen;
   static const Color tabGespieltColor = frameGespielt;
   static const Color tabAbgelehntColor = frameAbgelehnt;
+  static const Color tabVorabColor = colorPreWish;
+
+  // ─── Wunsch-Karte (Listen-Widget) ─────────────────────────────────────────
+  /// Datum/Uhrzeit in der oberen Statuszeile.
+  static const Color wishCardDateTimeColor = colorWhite;
+  /// Name sowie Bezeichner „Titel“ / „Interpret“.
+  static const Color wishCardLabelColor = colorWhite;
+  /// Übersetzter Gruß (dezent, sekundär).
+  static const Color wishCardTranslationColor = Color(0xFFB0B0B0);
+
+  /// Seiten-Akzent für Wunsch-Karten-Inhalt.
+  static Color wishCardAccentFor(WishCardListKind kind) {
+    switch (kind) {
+      case WishCardListKind.offen:
+        return frameOffen;
+      case WishCardListKind.gespielt:
+        return frameGespielt;
+      case WishCardListKind.abgelehnt:
+        return frameAbgelehnt;
+      case WishCardListKind.preWish:
+        return framePreWish;
+    }
+  }
 
   // Legacy-Aliase (weiterhin nutzbar außerhalb der 6 DJ-Listen)
   static const Color appOrange = colorOrange;
@@ -84,6 +118,13 @@ class UIConstants {
           color: vibesBoxVerificationBorderOrange,
           width: 2,
         ),
+      );
+
+  /// DJ Startseite bearbeiten (Bottom-Sheet): Grau-Verlauf, weißer Rahmen.
+  static BoxDecoration get djHomeEditSheetDecoration => BoxDecoration(
+        gradient: colorGreyGradient,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+        border: Border.all(color: colorWhite, width: 2),
       );
 
   /// BoxDecoration für Gast-Ansicht (PartyCheckIn, Info-Boxen): Grau-Verlauf, oranger Rahmen.
@@ -276,10 +317,11 @@ class UIConstants {
   static BoxDecoration get statusFrameDecoration => statusFrameGreen;
 
   // ─── DJ-Shell: Vollflächen-Hintergrund (zentrales IndexedStack-Panel) ───
-  /// Leicht transparentes Schwarz wie `Colors.black87`. **Nur** im zentralen Shell-Clip
+  /// Leicht transparentes Schwarz über dem Shell-Hintergrundbild. **Nur** im zentralen Shell-Clip
   /// ([MainPage] → `IndexedStack`); Tab-Seiten darunter nutzen `Scaffold(backgroundColor: Colors.transparent)`,
   /// sonst doppelte Schicht (dunkler als z. B. [OffenPage]).
-  static const Color djShellPageBackground = Color(0xDD000000); // == Colors.black87
+  /// Alpha ~0xAA ≈ 67 % Deckkraft — Hintergrundbild stärker sichtbar als früher (0xDD / black87).
+  static const Color djShellPageBackground = Color(0xAA000000);
 
   /// Panel/Hüllen im DJ-Bereich: halbtransparentes Schwarz + oranger Rahmen (Referenz: Party-Verwaltung).
   static BoxDecoration get djChromePanelDecoration => BoxDecoration(

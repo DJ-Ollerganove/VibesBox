@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -10,14 +12,20 @@ import '../services/admin_service.dart';
 import '../services/pro_free_check.dart';
 import '../utils/ui_constants.dart';
 import '../l10n/app_localizations.dart';
+import '../l10n/locale_helper.dart';
 import '../utils/debug_log.dart';
+import '../utils/formatting_utils.dart';
 
 /// Rollen-Filter für die Admin-Benutzerliste (IDs aus [AppConfig]).
 enum _BenutzerVerwaltungRoleFilter { admin, dj, guest }
 
 // Benutzer-Verwaltungsseite für Admin
 class BenutzerVerwaltungPage extends StatefulWidget {
-  const BenutzerVerwaltungPage({super.key});
+  /// Wenn [false], solange ein anderer Tab aktiv ist. Beim Wechsel auf diese Seite
+  /// [true] → Stream wird neu angebunden (frische Firestore-Daten).
+  const BenutzerVerwaltungPage({super.key, this.isActive = true});
+
+  final bool isActive;
 
   @override
   State<BenutzerVerwaltungPage> createState() => _BenutzerVerwaltungPageState();
@@ -52,6 +60,25 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
     }
     _loadRoleNames();
     _loadCurrentUserAdminFlag();
+  }
+
+  @override
+  void didUpdateWidget(BenutzerVerwaltungPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isActive && !oldWidget.isActive) {
+      _refreshUsersStreamOnPageOpen();
+    }
+  }
+
+  /// Neuen Snapshot-Stream erzeugen (z. B. nach Tab-Wechsel zurück auf Benutzerverwaltung).
+  void _refreshUsersStreamOnPageOpen() {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) return;
+    final isAdmin = _currentUserIsAdmin == true;
+    setState(() {
+      _initializeUsersStream(uid: uid, isAdmin: isAdmin);
+    });
+    unawaited(_loadRoleNames());
   }
 
   /// Lädt das admin-Flag des aktuellen Nutzers aus Firestore (users/{uid}.admin).
@@ -124,11 +151,15 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
     return s.isEmpty ? null : s;
   }
 
-  bool _userDocMatchesRoleFilter(DocumentSnapshot doc) {
+  bool _userDocMatchesRoleFilter(
+    DocumentSnapshot doc, [
+    _BenutzerVerwaltungRoleFilter? filter,
+  ]) {
     final data = doc.data() as Map<String, dynamic>?;
     if (data == null) return false;
     final rid = _roleIdFromUserDoc(data);
-    switch (_roleListFilter) {
+    final f = filter ?? _roleListFilter;
+    switch (f) {
       case _BenutzerVerwaltungRoleFilter.admin:
         if (data['admin'] == true) return true;
         final aid = AppConfig.adminRoleId?.trim();
@@ -258,29 +289,64 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
     }
   }
 
-  String _roleFilterDropdownLabel(_BenutzerVerwaltungRoleFilter f) {
+  String _roleFilterDropdownLabel(_BenutzerVerwaltungRoleFilter f, int count) {
+    String base;
     switch (f) {
       case _BenutzerVerwaltungRoleFilter.admin:
         final id = AppConfig.adminRoleId;
         if (id != null && id.isNotEmpty) {
           final n = _roleNames[id];
-          if (n != null && n.isNotEmpty) return n;
+          if (n != null && n.isNotEmpty) {
+            base = n;
+            break;
+          }
         }
-        return 'Admin';
+        base = 'Admin';
+        break;
       case _BenutzerVerwaltungRoleFilter.dj:
         final id = AppConfig.djRoleId;
         if (id != null && id.isNotEmpty) {
           final n = _roleNames[id];
-          if (n != null && n.isNotEmpty) return n;
+          if (n != null && n.isNotEmpty) {
+            base = n;
+            break;
+          }
         }
-        return 'DJ';
+        base = 'DJ';
+        break;
       case _BenutzerVerwaltungRoleFilter.guest:
         final id = AppConfig.guestRoleId;
         if (id != null && id.isNotEmpty) {
           final n = _roleNames[id];
-          if (n != null && n.isNotEmpty) return n;
+          if (n != null && n.isNotEmpty) {
+            base = n;
+            break;
+          }
         }
-        return 'Gast';
+        base = 'Gast';
+        break;
+    }
+    return '$base ($count)';
+  }
+
+  int _roleFilterCount(
+    List<QueryDocumentSnapshot<Object?>> docs,
+    _BenutzerVerwaltungRoleFilter f,
+  ) {
+    return docs.where((d) => _userDocMatchesRoleFilter(d, f)).length;
+  }
+
+  /// Firestore liefert `devices` teils als `Map` mit dynamischen Key-Typen.
+  Map<String, dynamic>? _coerceUserDevicesMap(dynamic raw) {
+    if (raw == null || raw is! Map) return null;
+    try {
+      final out = <String, dynamic>{};
+      for (final e in raw.entries) {
+        out[e.key.toString()] = e.value;
+      }
+      return out.isEmpty ? null : out;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -344,6 +410,7 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
     'device_model',
     'os_version',
     'platform',
+    'system_locale_tag',
     'last_seen',
   };
 
@@ -406,6 +473,7 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
         _detailRow(l.admin_device_model, nz(dev['device_model'])),
         _detailRow(l.admin_device_os_version, nz(dev['os_version'])),
         _detailRow(l.admin_device_app_version, nz(dev['app_version'])),
+        _detailRow(l.admin_device_system_locale, nz(dev['system_locale_tag'])),
         _detailRow(
           l.admin_device_last_seen,
           _formatAdminDeviceFieldValue(dev['last_seen']),
@@ -428,6 +496,113 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
     final month = date.month.toString().padLeft(2, '0');
     final year = date.year;
     return '$day.$month.$year';
+  }
+
+  /// Letzter bekannter BCP47-/Locale-String aus allen `devices`-Einträgen (neuestes [last_seen] zuerst).
+  String? _bestSystemLocaleTagFromDevices(Map<String, dynamic>? devices) {
+    if (devices == null || devices.isEmpty) return null;
+    final scored = <({DateTime t, String tag})>[];
+    for (final e in devices.entries) {
+      final dev = e.value is Map
+          ? Map<String, dynamic>.from(e.value as Map)
+          : null;
+      if (dev == null) continue;
+      String? tag;
+      for (final key in [
+        'system_locale_tag',
+        'system_locale',
+        'locale_tag',
+        'device_locale',
+      ]) {
+        final v = dev[key]?.toString().trim();
+        if (v != null && v.isNotEmpty) {
+          tag = v;
+          break;
+        }
+      }
+      if (tag == null) continue;
+      final lastSeen = dev['last_seen'];
+      final t = lastSeen is Timestamp
+          ? lastSeen.toDate()
+          : DateTime.fromMillisecondsSinceEpoch(0);
+      scored.add((t: t, tag: tag));
+    }
+    if (scored.isEmpty) return null;
+    scored.sort((a, b) => b.t.compareTo(a.t));
+    return scored.first.tag;
+  }
+
+  /// Rohwert für Admin-Sprache: Profil → [last_app_system_locale_tag] → alle Geräte-Einträge.
+  String? _languageRawFromUserDocForAdmin(Map<String, dynamic> data) {
+    final fromProfile = UserModel.parsePreferredLanguageFields(data);
+    if (fromProfile != null && fromProfile.trim().isNotEmpty) {
+      return fromProfile.trim();
+    }
+    final rootTag = data['last_app_system_locale_tag']?.toString().trim();
+    if (rootTag != null && rootTag.isNotEmpty) {
+      return rootTag;
+    }
+    final devices = _coerceUserDevicesMap(data['devices']);
+    return _bestSystemLocaleTagFromDevices(devices);
+  }
+
+  /// Anzeige der in der App gewählten Sprache (Profil oder Geräte-Locale).
+  String _formatAppLanguageForAdmin(
+    Map<String, dynamic> data,
+    AppLocalizations l,
+  ) {
+    final fromProfile = UserModel.parsePreferredLanguageFields(data)?.trim();
+    final raw = _languageRawFromUserDocForAdmin(data);
+    if (raw == null || raw.trim().isEmpty) {
+      return l.admin_user_app_language_not_set;
+    }
+    final code = LocaleHelper.mapToSupportedOrEnglish(raw);
+    final label = _languageLabelForAdminCode(l, code);
+    final inferredFromDevice = fromProfile == null || fromProfile.isEmpty;
+    final suffix = inferredFromDevice
+        ? l.admin_user_app_language_from_device_suffix
+        : '';
+    return '$code – $label$suffix';
+  }
+
+  String _languageLabelForAdminCode(AppLocalizations l, String code) {
+    switch (code) {
+      case 'de':
+        return l.german;
+      case 'en':
+        return l.english;
+      case 'fr':
+        return l.french;
+      case 'ru':
+        return l.russian;
+      case 'zh':
+        return l.chinese;
+      case 'es':
+        return l.spanish;
+      case 'tr':
+        return l.turkish;
+      case 'pt':
+        return l.portuguese;
+      case 'it':
+        return l.italian;
+      case 'uk':
+        return l.ukrainian;
+      case 'hi':
+        return l.hindi;
+      case 'sq':
+        return l.albanian;
+      case 'vi':
+        return l.vietnamese;
+      default:
+        return code;
+    }
+  }
+
+  /// Kompakter Sprach-Code für die Listenkarte (Tooltip zeigt volle Bezeichnung).
+  String _compactAppLanguageCode(Map<String, dynamic> data) {
+    final raw = _languageRawFromUserDocForAdmin(data);
+    if (raw == null || raw.trim().isEmpty) return '–';
+    return LocaleHelper.mapToSupportedOrEnglish(raw).toUpperCase();
   }
 
   /// Öffnet den Benutzer-Detail-Dialog (VibesBox-Stil). Nutzt nur [data] – keine neuen Firestore-Abfragen.
@@ -459,7 +634,7 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
               ? data['birthday'].toString()
               : '–');
 
-    final devices = data['devices'] as Map<String, dynamic>?;
+    final devices = _coerceUserDevicesMap(data['devices']);
     final createdAt = data['created_at'] as Timestamp?;
     final loginCount = data['loginCount'];
     final isPro = data['isPro'] == true;
@@ -522,6 +697,10 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
               _sectionTitle(l.admin_user_section_user),
               _detailRow(l.email_address, email),
               _detailRow(l.admin_role_label, roleName, bold: true),
+              _detailRow(
+                l.admin_user_app_language_label,
+                _formatAppLanguageForAdmin(data, l),
+              ),
               // Profil nur für Admin/DJ: Realname, Land, Geburtstag
               if (showProfilSection) ...[
                 const SizedBox(height: 16),
@@ -730,22 +909,12 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
 
   // Formatiert DateTime für Anzeige
   String _formatDateTime(DateTime date) {
-    final day = date.day.toString().padLeft(2, '0');
-    final month = date.month.toString().padLeft(2, '0');
-    final year = date.year;
-    final hour = date.hour.toString().padLeft(2, '0');
-    final minute = date.minute.toString().padLeft(2, '0');
-    return '$day.$month.$year $hour:$minute Uhr';
+    return FormattingUtils.formatDateTimeCommaBetweenDateAndTime(date, context);
   }
 
-  /// Kurzformat für „Letzter Login“: dd.MM.yyyy, HH:mm
+  /// Kurzformat für „Letzter Login“: Datum und Uhrzeit nach App-Locale.
   String _formatDateTimeShort(DateTime date) {
-    final day = date.day.toString().padLeft(2, '0');
-    final month = date.month.toString().padLeft(2, '0');
-    final year = date.year;
-    final hour = date.hour.toString().padLeft(2, '0');
-    final minute = date.minute.toString().padLeft(2, '0');
-    return '$day.$month.$year, $hour:$minute';
+    return FormattingUtils.formatDateTimeCommaBetweenDateAndTime(date, context);
   }
 
   // Holt den Rollennamen basierend auf role_id
@@ -1015,14 +1184,17 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
         }
       } else {
         // Entziehen: Nur bei explizitem Klick „Entziehen“ – User war Lifetime und wird zu Free.
-        // free_period_start hier bewusst setzen (Neustart Abrechnungszyklus). Kein „stiller“ Reset:
-        // Rolle ändern (_updateUserRole) und andere Bearbeitungen schreiben free_period_start nicht.
+        // Kulanz wie [ProFreeCheck]: Pro bis 23:59 des Folgetags nach dem Kalendertag des Entzugs;
+        // free_period_start = erster Kalendertag danach (Abrechnungs-Stichtag), nicht der Klick-Zeitpunkt.
+        final revokeInstant = DateTime.now();
+        final freePeriodStart =
+            ProFreeCheck.computeFreePeriodStartAfterProGrace(revokeInstant);
         await userRef.update(
           SecurityHelper.sanitizeMap({
             'isPro': false,
-            'proUntil': FieldValue.serverTimestamp(),
+            'proUntil': Timestamp.fromDate(revokeInstant),
             'planType': 'free',
-            'free_period_start': FieldValue.serverTimestamp(),
+            'free_period_start': Timestamp.fromDate(freePeriodStart),
           }),
         );
 
@@ -1275,7 +1447,10 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
                                     (f) => DropdownMenuItem(
                                       value: f,
                                       child: Text(
-                                        _roleFilterDropdownLabel(f),
+                                        _roleFilterDropdownLabel(
+                                          f,
+                                          _roleFilterCount(users, f),
+                                        ),
                                       ),
                                     ),
                                   )
@@ -1405,11 +1580,48 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
                                   ],
                                 ),
                                 const SizedBox(height: 8),
-                                // Email
-                                Text(
-                                  email,
-                                  style: Theme.of(context).textTheme.bodyMedium
-                                      ?.copyWith(color: Colors.grey[600]),
+                                // E-Mail + App-Sprache (kompakt mit Icon, Details im Tooltip)
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        email,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodyMedium
+                                            ?.copyWith(color: Colors.grey[600]),
+                                      ),
+                                    ),
+                                    Tooltip(
+                                      message:
+                                          '${l.admin_user_app_language_label}: ${_formatAppLanguageForAdmin(data, l)}',
+                                      child: Padding(
+                                        padding: const EdgeInsets.only(left: 8),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              Icons.language,
+                                              size: 17,
+                                              color: Colors.grey[600],
+                                            ),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              _compactAppLanguageCode(data),
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .labelMedium
+                                                  ?.copyWith(
+                                                    color: Colors.grey[700],
+                                                    fontWeight: FontWeight.w600,
+                                                  ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                                 const SizedBox(height: 4),
                                 // Registrierungsdatum
@@ -1422,9 +1634,9 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
                                 // Aktuellstes Gerät (neuestes last_seen) oder Fallback
                                 Builder(
                                   builder: (context) {
-                                    final devices =
-                                        data['devices']
-                                            as Map<String, dynamic>?;
+                                    final devices = _coerceUserDevicesMap(
+                                      data['devices'],
+                                    );
                                     final newest = _getNewestDevice(devices);
                                     if (newest == null) {
                                       return Text(

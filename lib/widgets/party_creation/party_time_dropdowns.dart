@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import '../../utils/party_validator.dart';
 import '../../utils/ui_constants.dart';
 
 /// Gemeinsame Zeitlogik und UI für Party-Erstellung und Party-Bearbeitung.
@@ -14,6 +15,54 @@ class PartyTimeHelpers {
   static int roundToNext5Minutes(int minute) {
     if (minute <= 0) return 0;
     return ((minute + 4) ~/ 5) * 5;
+  }
+
+  static bool isSameCalendarDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  /// Nächster 5-Minuten-Slot strikt nach [dt] (z. B. 16:53 → 16:55).
+  static DateTime ceilToNext5MinuteSlot(DateTime dt) {
+    int roundedMinute = roundToNext5Minutes(dt.minute);
+    int hour = dt.hour;
+    int minute = roundedMinute;
+    if (roundedMinute >= 60) {
+      hour = dt.hour + 1;
+      minute = 0;
+    }
+    var result = DateTime(dt.year, dt.month, dt.day, hour, minute);
+    if (!result.isAfter(dt)) {
+      result = result.add(const Duration(minutes: 5));
+    }
+    if (result.hour >= 24) {
+      final nextDay = DateTime(dt.year, dt.month, dt.day).add(const Duration(days: 1));
+      result = DateTime(
+        nextDay.year,
+        nextDay.month,
+        nextDay.day,
+        result.hour - 24,
+        result.minute,
+      );
+    }
+    return result;
+  }
+
+  /// Früheste wählbare Endzeit bei laufender Party (nicht in der Vergangenheit).
+  static DateTime getEarliestSelectableEndDateTime() =>
+      ceilToNext5MinuteSlot(DateTime.now());
+
+  /// Untere Grenze für Endzeit: Start + 5 Min, optional mindestens jetzt (laufende Party).
+  static DateTime computeMinEndDateTime(
+    DateTime startDateTime, {
+    bool enforceNotInPast = false,
+  }) {
+    var minEnd = startDateTime.add(PartyValidator.minDuration);
+    if (enforceNotInPast) {
+      final earliestNow = getEarliestSelectableEndDateTime();
+      if (earliestNow.isAfter(minEnd)) {
+        minEnd = earliestNow;
+      }
+    }
+    return minEnd;
   }
 
   /// Frühestmögliche Startzeit (heute): jetzt + 5 Min, aufgerundet auf 5-Min-Intervall.
@@ -62,64 +111,106 @@ class PartyTimeHelpers {
   }
 
   /// Verfügbare Endstunden ab Startzeit, max. Start + 23:55.
+  /// [minEndDateTime]: bei laufender Party — keine Endzeit in der Vergangenheit.
   static List<int> getAvailableEndHours(
     DateTime? startDate,
     int? startHour,
     int? startMinute,
-    DateTime? endDate,
-  ) {
+    DateTime? endDate, {
+    DateTime? minEndDateTime,
+  }) {
     if (startDate == null || startHour == null || startMinute == null || endDate == null) {
       return [];
     }
     final startDateTime = DateTime(startDate.year, startDate.month, startDate.day, startHour, startMinute);
     final maxEnd = startDateTime.add(const Duration(hours: 23, minutes: 55));
-    if (endDate.year == startDate.year && endDate.month == startDate.month && endDate.day == startDate.day) {
+    List<int> hours;
+    if (isSameCalendarDay(endDate, startDate)) {
       final minHour = startHour;
       int maxHour;
-      if (maxEnd.year == startDate.year && maxEnd.month == startDate.month && maxEnd.day == startDate.day) {
+      if (isSameCalendarDay(maxEnd, startDate)) {
         maxHour = maxEnd.hour;
       } else {
         maxHour = 23;
       }
-      return List.generate(maxHour - minHour + 1, (i) => minHour + i);
-    }
-    int maxHour;
-    if (endDate.year == maxEnd.year && endDate.month == maxEnd.month && endDate.day == maxEnd.day) {
-      maxHour = maxEnd.hour;
+      hours = minHour > maxHour
+          ? <int>[]
+          : List.generate(maxHour - minHour + 1, (i) => minHour + i);
     } else {
-      maxHour = 23;
+      int maxHour;
+      if (isSameCalendarDay(endDate, maxEnd)) {
+        maxHour = maxEnd.hour;
+      } else {
+        maxHour = 23;
+      }
+      hours = List.generate(maxHour + 1, (i) => i);
     }
-    return List.generate(maxHour + 1, (i) => i);
+
+    if (minEndDateTime != null) {
+      final minDay = DateTime(minEndDateTime.year, minEndDateTime.month, minEndDateTime.day);
+      final endDay = DateTime(endDate.year, endDate.month, endDate.day);
+      if (endDay.isBefore(minDay)) {
+        return [];
+      }
+      if (isSameCalendarDay(endDate, minEndDateTime)) {
+        hours = hours.where((h) => h >= minEndDateTime.hour).toList();
+      }
+    }
+
+    return hours;
   }
 
   /// Verfügbare Endminuten (5-Minuten-Takt, abhängig von Start und max. 23:55).
+  /// [minEndDateTime]: bei laufender Party — keine Endzeit in der Vergangenheit.
   static List<int> getAvailableEndMinutes(
     DateTime? startDate,
     int? startHour,
     int? startMinute,
     DateTime? endDate,
-    int? endHour,
-  ) {
+    int? endHour, {
+    DateTime? minEndDateTime,
+  }) {
     if (startDate == null || startHour == null || startMinute == null || endDate == null || endHour == null) {
       return [];
     }
     final startDateTime = DateTime(startDate.year, startDate.month, startDate.day, startHour, startMinute);
     final maxEnd = startDateTime.add(const Duration(hours: 23, minutes: 55));
-    if (endDate.year == startDate.year &&
-        endDate.month == startDate.month &&
-        endDate.day == startDate.day &&
-        endHour == startHour) {
+    List<int> minutes;
+    if (isSameCalendarDay(endDate, startDate) && endHour == startHour) {
       final filtered = kFiveMinuteSteps.where((m) => m > startMinute).toList();
-      return filtered.isEmpty ? [0] : filtered;
-    }
-    if (endDate.year == maxEnd.year &&
-        endDate.month == maxEnd.month &&
-        endDate.day == maxEnd.day &&
-        endHour == maxEnd.hour) {
+      minutes = filtered.isEmpty ? <int>[] : filtered;
+    } else if (isSameCalendarDay(endDate, maxEnd) && endHour == maxEnd.hour) {
       final filtered = kFiveMinuteSteps.where((m) => m <= maxEnd.minute).toList();
-      return filtered.isEmpty ? [0] : filtered;
+      minutes = filtered.isEmpty ? <int>[] : filtered;
+    } else {
+      minutes = List<int>.from(kFiveMinuteSteps);
     }
-    return List<int>.from(kFiveMinuteSteps);
+
+    if (minEndDateTime != null &&
+        isSameCalendarDay(endDate, minEndDateTime) &&
+        endHour == minEndDateTime.hour) {
+      minutes = minutes.where((m) => m >= minEndDateTime.minute).toList();
+    }
+
+    return minutes;
+  }
+
+  /// Korrigiert Endzeit auf [minEnd], falls End davor liegt (laufende Party).
+  static ({DateTime endDate, int endHour, int endMinute}) correctEndIfBeforeMin(
+    DateTime endDate,
+    int endHour,
+    int endMinute,
+    DateTime minEnd,
+  ) {
+    final end = DateTime(endDate.year, endDate.month, endDate.day, endHour, endMinute);
+    if (end.isBefore(minEnd)) {
+      return (
+        endDate: DateTime(minEnd.year, minEnd.month, minEnd.day),
+        endHour: minEnd.hour,
+        endMinute: minEnd.minute,
+      );
+    }
+    return (endDate: endDate, endHour: endHour, endMinute: endMinute);
   }
 
   /// Korrigiert Endzeit auf Startzeit + 1 Stunde, falls End <= Start.

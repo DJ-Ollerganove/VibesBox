@@ -10,8 +10,8 @@
   /** Session: von Root (/) mitgegebene Sprache für /vb/ — gleiche Browser-Sitzung, auch ohne ?lang= in jeder Navigation. */
   var VB_ENTRY_LANG_KEY = 'vb_entry_lang';
   /** Muss mit default-pwa-languages.js übereinstimmen — URL-Sprache gilt auch wenn codes noch leer. */
-  var STATIC_PWA_LANG_CODES = ['de', 'en', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi'];
-  var REGION_TO_LANG = { de: 'de', at: 'de', ch: 'de', fr: 'fr', es: 'es', it: 'it', ru: 'ru', tr: 'tr', pt: 'pt', br: 'pt', zh: 'zh', cn: 'zh', tw: 'zh', ua: 'uk', in: 'hi', ar: 'ar', sa: 'ar', eg: 'ar' };
+  var STATIC_PWA_LANG_CODES = ['de', 'en', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi', 'ja', 'el', 'nl', 'pl', 'cs'];
+  var REGION_TO_LANG = { de: 'de', at: 'de', ch: 'de', fr: 'fr', es: 'es', it: 'it', ru: 'ru', tr: 'tr', pt: 'pt', br: 'pt', zh: 'zh', cn: 'zh', tw: 'zh', ua: 'uk', in: 'hi', al: 'sq', vn: 'vi', jp: 'ja', ja: 'ja', gr: 'el', el: 'el', nl: 'nl', pl: 'pl', cs: 'cs', cz: 'cs', ar: 'ar', sa: 'ar', eg: 'ar' };
 
   function setVbPreferredLangForSession(code) {
     if (!code) return;
@@ -233,7 +233,7 @@
     if (list.length) return list.map(function (e) { return e.code; });
     var d = window.DEFAULT_PWA_LANGUAGES;
     if (d && d.length) return d.map(function (e) { return e.code; });
-    return ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi'];
+    return ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi', 'ja', 'el', 'nl', 'pl', 'cs'];
   }
 
   function getEffectiveLangForMenu() {
@@ -252,11 +252,9 @@
     if (!list || !list.length) return;
     list = list.filter(function (e) { return e && e.code && e.code !== 'ar'; });
     if (!list.length) return;
-    list = list.slice().sort(function (a, b) {
-      var na = (a.name != null ? String(a.name) : '').trim();
-      var nb = (b.name != null ? String(b.name) : '').trim();
-      return na.localeCompare(nb, 'en', { sensitivity: 'base' });
-    });
+    list = typeof window.sortLanguageMenuList === 'function'
+      ? window.sortLanguageMenuList(list)
+      : list.slice();
     var container = document.getElementById(containerId);
     if (!container) return;
     container.innerHTML = '';
@@ -289,8 +287,17 @@
         var code = this.getAttribute('data-lang');
         e.stopPropagation();
         persistLanguageSelection(code);
-        parent.querySelectorAll('.main-lang-option, .language-modal-option').forEach(function (o) { o.classList.remove('active'); });
-        this.classList.add('active');
+        if (typeof window.setLanguageMenuActive === 'function') {
+          window.setLanguageMenuActive(this, code);
+        } else {
+          var menuRoot = typeof window.langMenuRootFromElement === 'function'
+            ? window.langMenuRootFromElement(this)
+            : parent;
+          (menuRoot || parent).querySelectorAll('.main-lang-option, .language-modal-option').forEach(function (o) {
+            o.classList.remove('active');
+          });
+          this.classList.add('active');
+        }
         if (!isModal) {
           var drop = document.getElementById('mainLangDropdown');
           if (drop) drop.classList.remove('show');
@@ -319,7 +326,13 @@
     }
 
     if (isModal) {
-      list.forEach(function (entry) { addOption(entry, container, 'language-modal-option', 'language-name'); });
+      if (typeof window.fillLanguageMenuColumns === 'function') {
+        window.fillLanguageMenuColumns(container, list, function (entry, col) {
+          addOption(entry, col, 'language-modal-option', 'language-name');
+        });
+      } else {
+        list.forEach(function (entry) { addOption(entry, container, 'language-modal-option', 'language-name'); });
+      }
     } else {
       var wrap = document.createElement('div');
       wrap.className = 'main-lang-wrap';
@@ -335,7 +348,13 @@
       dropdown.className = 'main-lang-dropdown';
       dropdown.id = 'mainLangDropdown';
       dropdown.setAttribute('role', 'menu');
-      list.forEach(function (entry) { addOption(entry, dropdown, 'main-lang-option', 'main-lang-name'); });
+      if (typeof window.fillLanguageMenuColumns === 'function') {
+        window.fillLanguageMenuColumns(dropdown, list, function (entry, col) {
+          addOption(entry, col, 'main-lang-option', 'main-lang-name');
+        });
+      } else {
+        list.forEach(function (entry) { addOption(entry, dropdown, 'main-lang-option', 'main-lang-name'); });
+      }
       function removeOutsideListener() {
         if (wrap._outsideClick) {
           document.removeEventListener('click', wrap._outsideClick);

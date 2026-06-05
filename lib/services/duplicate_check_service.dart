@@ -5,6 +5,7 @@ import 'package:string_similarity/string_similarity.dart';
 
 import '../utils/text_utils.dart';
 import '../utils/debug_log.dart';
+import '../utils/wish_paths.dart';
 
 /// Treffer in der offenen Wunschliste (entspricht PWA `findSimilarWish`, Firestore-Zweig).
 class SimilarPendingWishMatch {
@@ -84,6 +85,22 @@ class DuplicateCheckService {
     return _cachedIgnoredKeywords != null
         ? List<String>.from(_cachedIgnoredKeywords!)
         : List<String>.from(kIgnoredKeywordsDefault);
+  }
+
+  /// Vorab-Wünsche (Queue + freigegeben) liegen oft vor Party-Start — trotzdem für Dubletten zählen.
+  static bool _includePendingWishDespitePartyWindow(Map<String, dynamic> data) {
+    return data['is_pre_wish'] == true;
+  }
+
+  static bool _pendingWishInPartyWindow(
+    DateTime createdDate,
+    DateTime? partyStart,
+    DateTime? partyEnd,
+    Map<String, dynamic> data,
+  ) {
+    if (_includePendingWishDespitePartyWindow(data)) return true;
+    if (partyStart == null || partyEnd == null) return true;
+    return !createdDate.isBefore(partyStart) && createdDate.isBefore(partyEnd);
   }
 
   static Future<double> _getDuplicateThreshold() async {
@@ -187,9 +204,7 @@ class DuplicateCheckService {
 
       // 2. Prüfe in wishes (Status: played)
       try {
-        final playedWishesSnapshot = await FirebaseFirestore.instance
-            .collection('wishes')
-            .where('party_id', isEqualTo: partyId)
+        final playedWishesSnapshot = await WishPaths.partyWishes(partyId)
             .where('status', isEqualTo: 'played')
             .get();
 
@@ -274,10 +289,10 @@ class DuplicateCheckService {
         if (ed is Timestamp) partyEnd = ed.toDate();
       } catch (_) {}
 
-      final pendingSnapshot = await FirebaseFirestore.instance
-          .collection('wishes')
-          .where('party_id', isEqualTo: partyId)
+      final pendingSnapshot = await WishPaths.partyWishes(partyId)
           .where('status', isEqualTo: 'pending')
+          .orderBy('createdAt', descending: true)
+          .limit(100)
           .get();
 
       final normalizedInputTitle = normalizeTextForDuplicateCheck(title, ignoredKeywords);
@@ -291,8 +306,13 @@ class DuplicateCheckService {
           final ts = data['createdAt'];
           if (ts is! Timestamp) continue;
           final createdDate = ts.toDate();
-          if (partyStart != null && partyEnd != null) {
-            if (createdDate.isBefore(partyStart) || !createdDate.isBefore(partyEnd)) continue;
+          if (!_pendingWishInPartyWindow(
+            createdDate,
+            partyStart,
+            partyEnd,
+            data,
+          )) {
+            continue;
           }
           final existingSpotifyId = data['spotify_id'] as String?;
           if (existingSpotifyId != null && existingSpotifyId == sid) {
@@ -310,8 +330,13 @@ class DuplicateCheckService {
         final ts = data['createdAt'];
         if (ts is! Timestamp) continue;
         final createdDate = ts.toDate();
-        if (partyStart != null && partyEnd != null) {
-          if (createdDate.isBefore(partyStart) || !createdDate.isBefore(partyEnd)) continue;
+        if (!_pendingWishInPartyWindow(
+          createdDate,
+          partyStart,
+          partyEnd,
+          data,
+        )) {
+          continue;
         }
 
         final rawWishTitle = (data['title'] ?? data['song'] ?? '') as String;

@@ -141,6 +141,14 @@ class AnnouncementLanguagesService {
           code: 'hi',
           nameEnglish: 'Hindi',
         ),
+        'sq': languageFieldsTemplate(
+          code: 'sq',
+          nameEnglish: 'Albanian',
+        ),
+        'vi': languageFieldsTemplate(
+          code: 'vi',
+          nameEnglish: 'Vietnamese',
+        ),
         'ar': languageFieldsTemplate(
           code: 'ar',
           nameEnglish: 'Arabic',

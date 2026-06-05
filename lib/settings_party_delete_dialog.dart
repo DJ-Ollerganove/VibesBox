@@ -261,43 +261,33 @@ class SettingsPartyDeleteDialog {
         debugLog('   ⚠️ Fehler beim Löschen von music_history: $e');
       }
 
-      // 2. Lösche wishes (mit party_id) - IN BATCHES
-      debugLog('📝 Schritt 2: Lösche wishes...');
+      // 2. Lösche parties/{partyId}/wishes (Unter-Collection) - IN BATCHES
+      debugLog('📝 Schritt 2: Lösche Party-Wünsche (Subcollection)...');
       try {
-        const BATCH_SIZE = 450; // Firestore Batch-Limit: 500
+        const BATCH_SIZE = 450;
         int wishesDeleted = 0;
-        
-        Query wishesQuery = firestore
-            .collection('wishes')
-            .where('party_id', isEqualTo: partyId)
-            .limit(BATCH_SIZE);
-        
+        final partyWishesRef = firestore
+            .collection('parties')
+            .doc(partyId)
+            .collection('wishes');
+
         while (true) {
-          final wishesSnapshot = await wishesQuery.get();
-          
+          final wishesSnapshot =
+              await partyWishesRef.limit(BATCH_SIZE).get();
           if (wishesSnapshot.docs.isEmpty) break;
-          
+
           final batch = firestore.batch();
           for (final wishDoc in wishesSnapshot.docs) {
             batch.delete(wishDoc.reference);
           }
           await batch.commit();
           wishesDeleted += wishesSnapshot.docs.length;
-          
           if (wishesSnapshot.docs.length < BATCH_SIZE) break;
-          
-          // Nächste Seite
-          final lastDoc = wishesSnapshot.docs.last;
-          wishesQuery = firestore
-              .collection('wishes')
-              .where('party_id', isEqualTo: partyId)
-              .startAfterDocument(lastDoc)
-              .limit(BATCH_SIZE);
         }
         totalDeleted += wishesDeleted;
-        debugLog('   ✅ $wishesDeleted wishes gelöscht');
+        debugLog('   ✅ $wishesDeleted Wünsche in Subcollection gelöscht');
       } catch (e) {
-        debugLog('   ⚠️ Fehler beim Löschen von wishes: $e');
+        debugLog('   ⚠️ Fehler beim Löschen der Party-Wünsche: $e');
       }
 
       // 3. Lösche shazam_history (mit party_id)

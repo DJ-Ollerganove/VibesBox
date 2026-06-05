@@ -1,5 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:intl/intl.dart';
+import '../utils/formatting_utils.dart';
 import 'package:flutter/services.dart'; // Für Clipboard
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -855,9 +855,8 @@ class _ProfilPageState extends State<ProfilPage> with WidgetsBindingObserver {
               final memberDate = createdTs?.toDate() ??
                   user.metadata.creationTime ??
                   DateTime.now();
-              final memberDateStr = DateFormat.yMMMMd(
-                Localizations.localeOf(context).languageCode,
-              ).format(memberDate);
+              final memberDateStr =
+                  FormattingUtils.formatDateLong(memberDate, context);
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1170,11 +1169,10 @@ class _ProfilPageState extends State<ProfilPage> with WidgetsBindingObserver {
                                 label: loc.profile_birthday,
                                 value: Text(
                                   birthDate != null
-                                      ? DateFormat.yMMMMd(
-                                          Localizations.localeOf(
-                                            context,
-                                          ).languageCode,
-                                        ).format(birthDate)
+                                      ? FormattingUtils.formatDateLong(
+                                          birthDate,
+                                          context,
+                                        )
                                       : loc.profile_value_placeholder,
                                 ),
                               ),
@@ -1209,9 +1207,10 @@ class _ProfilPageState extends State<ProfilPage> with WidgetsBindingObserver {
                               icon: Icons.calendar_today,
                               label: loc.profile_registered_since,
                               value: Text(
-                                DateFormat.yMMMMd(
-                                  Localizations.localeOf(context).languageCode,
-                                ).format(creationTime),
+                                FormattingUtils.formatDateLong(
+                                  creationTime,
+                                  context,
+                                ),
                               ),
                               isLast: true,
                             ),
@@ -1354,6 +1353,7 @@ class _ProfilPageState extends State<ProfilPage> with WidgetsBindingObserver {
     // 1. Re-Authentication: Passwort-Abfrage (vor Missbrauch schützen)
     // Controller außerhalb des Dialogs – wird nach showDialog in finally entsorgt
     final passwordController = TextEditingController();
+    var showDeletePassword = false;
     String? passwordResult;
     try {
       passwordResult = await showDialog<String?>(
@@ -1362,57 +1362,72 @@ class _ProfilPageState extends State<ProfilPage> with WidgetsBindingObserver {
         builder: (ctx) {
           // Lokaler Form-Key pro Dialog-Build, keine globalen Keys die beim Schließen hängen bleiben
           final formKey = GlobalKey<FormState>();
-          return AlertDialog(
-            backgroundColor: UIConstants.djShellPageBackground,
-            title: Text(
-              localizations.confirm_password,
-            ),
-            content: Form(
-              key: formKey,
-              child: TextFormField(
-                controller: passwordController,
-                obscureText: true,
-                autofocus: true,
-                decoration: InputDecoration(
-                  labelText: localizations.your_password,
-                  labelStyle: TextStyle(color: Colors.grey[300]),
-                  enabledBorder: const UnderlineInputBorder(
-                    borderSide: BorderSide(color: UIConstants.appOrange),
+          return StatefulBuilder(
+            builder: (ctx, setDialogState) => AlertDialog(
+              backgroundColor: UIConstants.djShellPageBackground,
+              title: Text(
+                localizations.confirm_password,
+              ),
+              content: Form(
+                key: formKey,
+                child: TextFormField(
+                  controller: passwordController,
+                  obscureText: !showDeletePassword,
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    labelText: localizations.your_password,
+                    labelStyle: TextStyle(color: Colors.grey[300]),
+                    enabledBorder: const UnderlineInputBorder(
+                      borderSide: BorderSide(color: UIConstants.appOrange),
+                    ),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        showDeletePassword
+                            ? Icons.visibility
+                            : Icons.visibility_off,
+                        color: Colors.white54,
+                      ),
+                      onPressed: () {
+                        setDialogState(() {
+                          showDeletePassword = !showDeletePassword;
+                        });
+                      },
+                    ),
+                  ),
+                  validator: (v) => (v == null || v.isEmpty)
+                      ? localizations.password_cannot_be_empty
+                      : null,
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    FocusManager.instance.primaryFocus?.unfocus();
+                    Future.delayed(const Duration(milliseconds: 50), () {
+                      if (ctx.mounted) {
+                        Navigator.of(ctx, rootNavigator: true).pop(null);
+                      }
+                    });
+                  },
+                  child: Text(
+                    localizations.cancel,
+                    style: const TextStyle(color: Colors.white70),
                   ),
                 ),
-                validator: (v) => (v == null || v.isEmpty)
-                    ? localizations.password_cannot_be_empty
-                    : null,
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  FocusManager.instance.primaryFocus?.unfocus();
-                  Future.delayed(const Duration(milliseconds: 50), () {
-                    if (ctx.mounted) {
-                      Navigator.of(ctx, rootNavigator: true).pop(null);
+                TextButton(
+                  onPressed: () {
+                    if (formKey.currentState!.validate()) {
+                      final pwd = passwordController.text;
+                      Navigator.of(ctx).pop(pwd);
                     }
-                  });
-                },
-                child: Text(
-                  localizations.cancel,
-                  style: const TextStyle(color: Colors.white70),
+                  },
+                  child: Text(
+                    localizations.confirm,
+                    style: const TextStyle(color: UIConstants.appOrange),
+                  ),
                 ),
-              ),
-              TextButton(
-                onPressed: () {
-                  if (formKey.currentState!.validate()) {
-                    final pwd = passwordController.text;
-                    Navigator.of(ctx).pop(pwd);
-                  }
-                },
-                child: Text(
-                  localizations.confirm,
-                  style: const TextStyle(color: UIConstants.appOrange),
-                ),
-              ),
-            ],
+              ],
+            ),
           );
         },
       );
@@ -1777,11 +1792,10 @@ class _PersonalDataSectionState extends State<_PersonalDataSection> {
                             const SizedBox(height: 4),
                             Text(
                               birthDate != null
-                                  ? DateFormat.yMMMMd(
-                                      Localizations.localeOf(
-                                        context,
-                                      ).languageCode,
-                                    ).format(birthDate)
+                                  ? FormattingUtils.formatDateLong(
+                                      birthDate,
+                                      context,
+                                    )
                                   : loc.profile_value_placeholder,
                               style: Theme.of(context).textTheme.bodyLarge
                                   ?.copyWith(color: Colors.white70),

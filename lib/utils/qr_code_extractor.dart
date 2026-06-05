@@ -1,7 +1,8 @@
 /// Extrahiert den Party-Code (genau 8 Ziffern) aus VibesBox-QR-Inhalten.
 ///
 /// Unterstützte Formate:
-/// - https://vibesbox.app/?code=12345678
+/// - https://vibesbox.app/vb/?code=12345678
+/// - https://vibesbox.app/?code=12345678 (Legacy)
 /// - djwunschbox://wunschbox?code=12345678
 /// - Reine Ziffernfolge: 8-stellig
 String? extractPartyCodeFromQr(String raw) {
@@ -18,6 +19,17 @@ String? extractPartyCodeFromQr(String raw) {
           code.length == 8 &&
           RegExp(r'^\d+$').hasMatch(code)) {
         return code;
+      }
+      final segments = uri.pathSegments.where((s) => s.isNotEmpty).toList();
+      for (var i = 0; i < segments.length - 1; i++) {
+        final seg = segments[i].toLowerCase();
+        if (seg == 'p' || seg == 'party') {
+          final raw = segments[i + 1].replaceAll(RegExp(r'\D'), '');
+          if (raw.length >= 8) {
+            final eight = raw.substring(0, 8);
+            if (RegExp(r'^\d{8}$').hasMatch(eight)) return eight;
+          }
+        }
       }
     }
   } catch (_) {}

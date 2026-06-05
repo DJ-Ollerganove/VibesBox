@@ -16,7 +16,9 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.33+33
+# Android (versionName/versionCode): diese Zeile für Play Store / Android (z. B. 1.0.36+36).
+# iOS (TestFlight/App Store): nur ios/Flutter/Debug|Release|Profile.xcconfig (FLUTTER_BUILD_NAME / FLUTTER_BUILD_NUMBER).
+version: 1.0.45+45
 
 environment:
   sdk: ^3.10.3
@@ -103,6 +105,9 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
+  # Hinweis iOS (App Store / Review): Nutzungserklärungen (Mikrofon, Kamera, Standort, Fotos, …)
+  # liegen in ios/Runner/Info.plist (NS*UsageDescription), nicht in pubspec.yaml. Plugins
+  # wie permission_handler erwarten diese Keys dort — bereits gepflegt für Audio/Mikrofon u. a.
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in

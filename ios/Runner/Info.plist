@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 	<dict>
+		<key>CADisableMinimumFrameDurationOnPhone</key>
+		<true/>
 		<key>CFBundleDevelopmentRegion</key>
 		<string>$(DEVELOPMENT_LANGUAGE)</string>
 		<key>CFBundleDisplayName</key>
@@ -20,31 +22,6 @@
 		<string>$(FLUTTER_BUILD_NAME)</string>
 		<key>CFBundleSignature</key>
 		<string>????</string>
-		<key>CFBundleVersion</key>
-		<string>$(FLUTTER_BUILD_NUMBER)</string>
-		<key>LSRequiresIPhoneOS</key>
-		<true/>
-		<key>UILaunchStoryboardName</key>
-		<string>LaunchScreen</string>
-		<key>UIMainStoryboardFile</key>
-		<string>Main</string>
-		<key>UISupportedInterfaceOrientations</key>
-		<array>
-			<string>UIInterfaceOrientationPortrait</string>
-			<string>UIInterfaceOrientationLandscapeLeft</string>
-			<string>UIInterfaceOrientationLandscapeRight</string>
-		</array>
-		<key>UISupportedInterfaceOrientations~ipad</key>
-		<array>
-			<string>UIInterfaceOrientationPortrait</string>
-			<string>UIInterfaceOrientationPortraitUpsideDown</string>
-			<string>UIInterfaceOrientationLandscapeLeft</string>
-			<string>UIInterfaceOrientationLandscapeRight</string>
-		</array>
-		<key>CADisableMinimumFrameDurationOnPhone</key>
-		<true/>
-		<key>UIApplicationSupportsIndirectInputEvents</key>
-		<true/>
 		<key>CFBundleURLTypes</key>
 		<array>
 			<dict>
@@ -67,24 +44,77 @@
 					<string>vibesbox</string>
 				</array>
 			</dict>
+			<dict>
+				<key>CFBundleTypeRole</key>
+				<string>Editor</string>
+				<key>CFBundleURLName</key>
+				<string>GoogleSignIn</string>
+				<key>CFBundleURLSchemes</key>
+				<array>
+					<string>com.googleusercontent.apps.567845942758-jj8j5j2e6vjiafaitnts8bunklh10ddr</string>
+				</array>
+			</dict>
 		</array>
-		<!-- Berechtigungen / Usage Descriptions -->
-		<key>NSMicrophoneUsageDescription</key>
-		<string>VibesBox benötigt Zugriff auf das Mikrofon für die Musikerkennung.</string>
-		<key>NSCameraUsageDescription</key>
-		<string>VibesBox benötigt Zugriff auf die Kamera, um QR-Codes zu scannen und Fotos aufzunehmen.</string>
-		<key>NSPhotoLibraryUsageDescription</key>
-		<string>VibesBox benötigt Zugriff auf deine Mediathek, um Bilder auszuwählen.</string>
-		<key>NSPhotoLibraryAddUsageDescription</key>
-		<string>VibesBox benötigt Zugriff, um Bilder (z.B. QR-Codes) in deiner Mediathek zu speichern.</string>
-		<key>NSLocationWhenInUseUsageDescription</key>
-		<string>Wir benötigen deinen Standort, um die Karte für deine Party-Location zu zentrieren.</string>
+		<key>CFBundleVersion</key>
+		<string>$(FLUTTER_BUILD_NUMBER)</string>
+		<key>FlutterDeepLinkingEnabled</key>
+		<false/>
+		<key>ITSAppUsesNonExemptEncryption</key>
+		<false/>
+		<key>LSRequiresIPhoneOS</key>
+		<true/>
+		<key>NSAppleMusicUsageDescription</key>
+		<string>VibesBox kann auf deine Mediathek zugreifen, um Musikerkennung und passende Funktionen mit Apple Music zu verknüpfen.</string>
+		<key>NSBonjourServices</key>
+		<array>
+			<string>_dartVmService._tcp</string>
+		</array>
 		<key>NSCalendarsUsageDescription</key>
 		<string>Wird benötigt, um Party-Termine in deinen Kalender zu exportieren.</string>
+		<key>NSCameraUsageDescription</key>
+		<string>VibesBox benötigt Zugriff auf die Kamera, um QR-Codes zu scannen und Fotos aufzunehmen.</string>
 		<key>NSFaceIDUsageDescription</key>
 		<string>Admin-Authentifizierung erforderlich, um auf sensible Einstellungen zuzugreifen.</string>
+		<key>NSLocalNetworkUsageDescription</key>
+		<string>VibesBox nutzt das lokale Netzwerk für die Flutter-/Xcode-Entwicklungsverbindung (z. B. Hot Reload, Debugging) und ggf. für Gerätedienste im gleichen WLAN.</string>
+		<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+		<string>VibesBox benötigt Zugriff auf den Standort, um lokale DJ-Funktionen zu unterstützen.</string>
+		<key>NSLocationWhenInUseUsageDescription</key>
+		<string>VibesBox benötigt Zugriff auf den Standort, um lokale DJ-Funktionen zu unterstützen.</string>
+		<key>NSMicrophoneUsageDescription</key>
+		<string>VibesBox benötigt Zugriff auf das Mikrofon, um laufende Musik für die Musikerkennung zu analysieren.</string>
+		<key>NSPhotoLibraryAddUsageDescription</key>
+		<string>VibesBox benötigt Zugriff, um Bilder (z.B. QR-Codes) in deiner Mediathek zu speichern.</string>
+		<key>NSPhotoLibraryUsageDescription</key>
+		<string>VibesBox benötigt Zugriff auf deine Mediathek, um Bilder auszuwählen. Das ist optional nur fürs Profilbild.</string>
+		<key>UIApplicationSupportsIndirectInputEvents</key>
+		<true/>
+		<key>UIBackgroundModes</key>
+		<array>
+			<string>fetch</string>
+			<string>remote-notification</string>
+		</array>
+		<key>UILaunchStoryboardName</key>
+		<string>LaunchScreen</string>
+		<key>UIMainStoryboardFile</key>
+		<string>Main</string>
 		<key>UIStatusBarHidden</key>
 		<true/>
+		<key>UIStatusBarStyle</key>
+		<string></string>
+		<key>UISupportedInterfaceOrientations</key>
+		<array>
+			<string>UIInterfaceOrientationPortrait</string>
+			<string>UIInterfaceOrientationLandscapeLeft</string>
+			<string>UIInterfaceOrientationLandscapeRight</string>
+		</array>
+		<key>UISupportedInterfaceOrientations~ipad</key>
+		<array>
+			<string>UIInterfaceOrientationPortrait</string>
+			<string>UIInterfaceOrientationPortraitUpsideDown</string>
+			<string>UIInterfaceOrientationLandscapeLeft</string>
+			<string>UIInterfaceOrientationLandscapeRight</string>
+		</array>
 		<key>UIViewControllerBasedStatusBarAppearance</key>
 		<false/>
 	</dict>

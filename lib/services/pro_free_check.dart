@@ -22,30 +22,29 @@ enum ProFreeStatus {
   FREE,
 }
 
-/// Zentrale Logik für Pro/Free-Status: Life-Check, History-Check, Kulanz-Regel.
+/// Zentrale Logik für Pro/Free-Status: Life-Check, Trial, bezahltes Pro, Kulanz.
 /// Kein UI-Code, nur Zugriffskontrolle und Status-Ermittlung.
 class ProFreeCheck {
   ProFreeCheck._();
 
-  /// Ermittelt den Pro/Free-Status strikt nach: Life -> History -> Kulanz.
-  ///
-  /// [user] – aktuelles UserModel aus Firestore.
-  /// [historyEntries] – Liste der History-Einträge (users/{uid}/history).
-  ///   Format: Map mit 'timestamp' (Timestamp?) und optional weiteren Feldern.
-  ///
-  /// Check 1 (Life): proUntil Jahr >= 2099 -> PRO_LIFE.
-  /// Check 2 (History): Kein Life -> neuester History-Eintrag bzw. User-Dokument liefert expiryDate.
-  /// Check 3 (Kulanz): expiryDate überschritten -> wenn noch vor 23:59 Folgetag (lokal) -> PRO.
+  static const _freeInactive =
+      ProFreeStatusResult(status: ProFreeStatus.FREE, isActive: false);
+
+  /// Ermittelt den Pro/Free-Status:
+  /// Life → aktives Trial → bezahltes Pro → Kulanz (nur bezahltes Pro, **nie** Trial).
   static ProFreeStatusResult determineStatus({
     UserModel? user,
     List<Map<String, dynamic>> historyEntries = const [],
   }) {
     if (user == null) {
-      return const ProFreeStatusResult(status: ProFreeStatus.FREE, isActive: false);
+      return _freeInactive;
     }
 
-    // Check 1 (Life): proUntil im Jahr 2099 oder später -> PRO_LIFE
+    final now = DateTime.now();
     final proUntilDate = user.proUntil?.toDate();
+    final trialUntilDate = user.trialUntil?.toDate();
+
+    // Check 1 (Life): proUntil im Jahr 2099 oder später -> PRO_LIFE
     if (proUntilDate != null && proUntilDate.year >= 2099) {
       return ProFreeStatusResult(
         status: ProFreeStatus.PRO_LIFE,
@@ -54,32 +53,49 @@ class ProFreeCheck {
       );
     }
 
-    // Check 2 (History): Kein Life -> neuester Eintrag / User-Dokument liefert expiryDate
-    // expiryDate aus User-Dokument (proUntil oder trialUntil)
-    DateTime? expiryDate = user.proUntil?.toDate() ?? user.trialUntil?.toDate();
+    // Check 2: Aktives Trial (planType trial, trialUntil in der Zukunft)
+    if (user.planType == 'trial' &&
+        trialUntilDate != null &&
+        trialUntilDate.isAfter(now)) {
+      return ProFreeStatusResult(
+        status: ProFreeStatus.PRO,
+        displayDate: trialUntilDate,
+        isActive: true,
+      );
+    }
 
-    // Falls User-Dokument kein Datum hat, könnte aus History abgeleitet werden
-    // (z.B. neuester Kauf + Standardlaufzeit). Aktuell: primär aus User-Dokument.
+    // Abgelaufenes Trial oder Free ohne bezahltes Pro — kein Pro, keine Kulanz auf trialUntil
+    final hasPaidProEntitlement =
+        user.isPro || user.planType == 'pro' || _hasPaidProInHistory(historyEntries);
+
+    if (!hasPaidProEntitlement) {
+      if (trialUntilDate != null &&
+          (user.planType == 'trial' || user.planType == 'free')) {
+        return ProFreeStatusResult(
+          status: ProFreeStatus.FREE,
+          displayDate: trialUntilDate,
+          isActive: false,
+        );
+      }
+      return _freeInactive;
+    }
+
+    // Check 3: Bezahltes Pro — Ablauf aus proUntil (nicht trialUntil)
+    DateTime? expiryDate = proUntilDate;
+
     if (expiryDate == null && historyEntries.isNotEmpty) {
       final newest = historyEntries.first;
       final ts = newest['timestamp'];
-      if (ts != null && ts is Timestamp) {
+      if (ts is Timestamp) {
         expiryDate = ts.toDate();
-        // Kein Ablaufdatum in History – Fallback: Datum des letzten Kaufs
-        // (optional: +1 Monat wenn Kauf-Typ bekannt; hier nur Timestamp)
       }
     }
 
-    // Kein Ablaufdatum verfügbar -> FREE
     if (expiryDate == null) {
-      return const ProFreeStatusResult(status: ProFreeStatus.FREE, isActive: false);
+      return _freeInactive;
     }
 
-    final now = DateTime.now();
-
-    // Check 3 (Kulanz): expiryDate überschritten?
     if (expiryDate.isAfter(now)) {
-      // Noch gültig -> PRO
       return ProFreeStatusResult(
         status: ProFreeStatus.PRO,
         displayDate: expiryDate,
@@ -87,16 +103,7 @@ class ProFreeCheck {
       );
     }
 
-    // Abgelaufen: Bei planType 'trial' keine Kulanz (exakt trialUntil/proUntil).
-    if (user.planType == 'trial') {
-      return ProFreeStatusResult(
-        status: ProFreeStatus.FREE,
-        displayDate: expiryDate,
-        isActive: false,
-      );
-    }
-
-    // Kulanz: expiryDate überschritten – prüfen, ob vor 23:59 Uhr des Folgetages (lokale Zeit)
+    // Check 4 (Kulanz): nur bezahltes Pro — bis 23:59 Folgetag nach Ablauf
     final dateOnly =
         DateTime(expiryDate.year, expiryDate.month, expiryDate.day);
     final nextDay = dateOnly.add(const Duration(days: 1));
@@ -122,5 +129,25 @@ class ProFreeCheck {
       displayDate: expiryDate,
       isActive: false,
     );
+  }
+
+  static bool _hasPaidProInHistory(List<Map<String, dynamic>> historyEntries) {
+    for (final entry in historyEntries) {
+      final type = (entry['type'] ?? entry['planType'] ?? '')
+          .toString()
+          .toLowerCase();
+      if (type.contains('pro') || type.contains('purchase') || type.contains('subscription')) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Erster Kalendertag (lokal, 00:00), an dem der User nach der Kulanz-Regel ([determineStatus] Check 4)
+  /// für Abrechnungszwecke als **Free** gilt — nicht der Moment des Entzugs/Kündigungs-Klicks.
+  static DateTime computeFreePeriodStartAfterProGrace(DateTime lastProInstant) {
+    final local = lastProInstant.toLocal();
+    final dateOnly = DateTime(local.year, local.month, local.day);
+    return dateOnly.add(const Duration(days: 2));
   }
 }

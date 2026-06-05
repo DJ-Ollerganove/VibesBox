@@ -1,4 +1,3 @@
-import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -8,6 +7,8 @@ import '../../widgets/common/pwa_widget_cell.dart';
 import 'total_statistics_card.dart';
 import 'live_guest_stats_view.dart';
 import '../../utils/debug_log.dart';
+import '../../utils/wish_paths.dart';
+import 'stats_pie_chart_shared.dart';
 
 /// Widget für duale Statistik: Aktuelle/Letzte Party + Gesamtbilanz
 class DualStatisticsCard extends StatelessWidget {
@@ -15,6 +16,14 @@ class DualStatisticsCard extends StatelessWidget {
   final String effectiveDjId;
   final bool onlyFirstCard;
   final bool skipFirstCard;
+  /// Nur Login-Statistik (modulare Startseite).
+  final bool onlyLoginCard;
+  /// Nur Gesamtstatistik (modulare Startseite).
+  final bool onlyTotalCard;
+  /// Modulares Startseiten-Widget: orangener Rahmen + Überschrift (nicht in großer Party-Karte).
+  final bool showPartyStatsFrame;
+  /// Optional feste Überschrift (z. B. „Live-Statistik“); sonst LIVE-STATISTIK / LETZTE PARTY.
+  final String? sectionTitle;
   /// Von außen vorgegebene Party-ID (z. B. von home_dj berechnet). Spart _identifyParty()-Abfrage.
   final String? preferredPartyId;
 
@@ -24,6 +33,10 @@ class DualStatisticsCard extends StatelessWidget {
     required this.effectiveDjId,
     this.onlyFirstCard = false,
     this.skipFirstCard = false,
+    this.onlyLoginCard = false,
+    this.onlyTotalCard = false,
+    this.showPartyStatsFrame = false,
+    this.sectionTitle,
     this.preferredPartyId,
   });
 
@@ -37,11 +50,20 @@ class DualStatisticsCard extends StatelessWidget {
           _CurrentPartyStatisticsCard(
             cardBuilder: cardBuilder,
             effectiveDjId: effectiveDjId,
-            hideBorder: onlyFirstCard, // Rahmen verstecken wenn nur erste Karte
+            hideBorder: onlyFirstCard && !showPartyStatsFrame,
+            sectionTitle: sectionTitle,
             preferredPartyId: preferredPartyId,
           ),
-        if (!onlyFirstCard && !skipFirstCard) const SizedBox(height: 16),
-        if (!onlyFirstCard) ...[
+        if (!onlyFirstCard && !skipFirstCard && !onlyLoginCard && !onlyTotalCard)
+          const SizedBox(height: 16),
+        if (onlyLoginCard) ...[
+          _LoginStatisticsCard(cardBuilder: cardBuilder),
+        ] else if (onlyTotalCard) ...[
+          TotalStatisticsCard(
+            cardBuilder: cardBuilder,
+            effectiveDjId: effectiveDjId,
+          ),
+        ] else if (!onlyFirstCard) ...[
           // POSITION 2: Logins (Zelle mit Gesamtzahl & letztem Login)
           _LoginStatisticsCard(
             cardBuilder: cardBuilder,
@@ -74,6 +96,7 @@ class _CurrentPartyStatisticsCard extends StatelessWidget {
   final Widget Function(BuildContext context, Widget child) cardBuilder;
   final String effectiveDjId;
   final bool hideBorder;
+  final String? sectionTitle;
   /// Wenn gesetzt: _identifyParty() wird übersprungen; nur diese Party wird geladen (traffic-sparend).
   final String? preferredPartyId;
 
@@ -81,6 +104,7 @@ class _CurrentPartyStatisticsCard extends StatelessWidget {
     required this.cardBuilder,
     required this.effectiveDjId,
     this.hideBorder = false,
+    this.sectionTitle,
     this.preferredPartyId,
   });
 
@@ -411,10 +435,7 @@ class _CurrentPartyStatisticsCard extends StatelessWidget {
         if (partyInfo.isLive) {
           // FALL A: LIVE-STREAM (Echtzeit-Updates)
           return StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('wishes')
-                .where('party_id', isEqualTo: partyInfo.partyId!)
-                .snapshots(),
+            stream: WishPaths.partyWishes(partyInfo.partyId!).snapshots(),
             builder: (context, wishesSnapshot) {
               if (!wishesSnapshot.hasData) {
                 return cardBuilder(
@@ -437,10 +458,7 @@ class _CurrentPartyStatisticsCard extends StatelessWidget {
         } else {
           // FALL B: ARCHIV (einmaliger Abruf; danach cachen)
           return FutureBuilder<QuerySnapshot>(
-            future: FirebaseFirestore.instance
-                .collection('wishes')
-                .where('party_id', isEqualTo: partyInfo.partyId!)
-                .get(),
+            future: WishPaths.partyWishes(partyInfo.partyId!).get(),
             builder: (context, wishesSnapshot) {
               if (!wishesSnapshot.hasData) {
                 return cardBuilder(
@@ -490,13 +508,15 @@ class _CurrentPartyStatisticsCard extends StatelessWidget {
       );
     }
 
-    // Header-Text: Titel 2 - "LIVE-STATISTIK", "LETZTE PARTY" oder "NOCH KEINE PARTY DURCHGEFÜHRT"
+    // Header-Text: modulare Überschrift oder LIVE-STATISTIK / LETZTE PARTY
     final l = AppLocalizations.of(context)!;
-    final headerText = isLive 
-        ? (l.stats_live)
-        : (partyInfo.hasFinishedParty 
-            ? (l.stats_last_party)
-            : (l.stats_no_party_completed));
+    final headerText = sectionTitle?.trim().isNotEmpty == true
+        ? sectionTitle!.trim()
+        : (isLive
+            ? l.stats_live
+            : (partyInfo.hasFinishedParty
+                ? l.stats_last_party
+                : l.stats_no_party_completed));
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -709,6 +729,7 @@ class _StatsPieChartContent extends StatelessWidget {
   });
 
   Widget _buildPie({
+    required StatsPieChartMetrics metrics,
     required int played,
     required int rejected,
     required int open,
@@ -717,70 +738,43 @@ class _StatsPieChartContent extends StatelessWidget {
   }) {
     final total = played + rejected + open + notPlayed + deleted;
     if (total == 0) {
-      // Leerzustand: identische Größe, komplett weiß
-      return Center(
-        child: Container(
-          width: double.infinity,
-          height: double.infinity,
-          decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-        ),
-      );
+      return StatsPieChartEmptyCircle(metrics: metrics);
     }
 
-    final playedPercent = (played / total * 100);
-    final rejectedPercent = (rejected / total * 100);
-    final openPercent = (open / total * 100);
-    final notPlayedPercent = (notPlayed / total * 100);
-    final deletedPercent = (deleted / total * 100);
-
-    return PieChart(
-      PieChartData(
-        sectionsSpace: 2,
-        centerSpaceRadius: 40,
-        startDegreeOffset: 270,
-        sections: [
-          if (deleted > 0)
-            PieChartSectionData(
-              value: deleted.toDouble(),
-              title: '${deletedPercent.toStringAsFixed(1)}%',
-              color: Colors.black,
-              radius: 60,
-              titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-          if (played > 0)
-            PieChartSectionData(
-              value: played.toDouble(),
-              title: '${playedPercent.toStringAsFixed(1)}%',
-              color: Colors.green,
-              radius: 60,
-              titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-          if (rejected > 0)
-            PieChartSectionData(
-              value: rejected.toDouble(),
-              title: '${rejectedPercent.toStringAsFixed(1)}%',
-              color: Colors.red,
-              radius: 60,
-              titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-          if (open > 0)
-            PieChartSectionData(
-              value: open.toDouble(),
-              title: '${openPercent.toStringAsFixed(1)}%',
-              color: Colors.blue,
-              radius: 60,
-              titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-          if (notPlayed > 0)
-            PieChartSectionData(
-              value: notPlayed.toDouble(),
-              title: '${notPlayedPercent.toStringAsFixed(1)}%',
-              color: Colors.orange,
-              radius: 60,
-              titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-        ],
-      ),
+    return buildStatsPieChart(
+      metrics: metrics,
+      sections: [
+        if (deleted > 0)
+          StatsPieChartSlice(
+            value: deleted.toDouble(),
+            title: statsPiePercentLabel(deleted, total),
+            color: Colors.black,
+          ),
+        if (played > 0)
+          StatsPieChartSlice(
+            value: played.toDouble(),
+            title: statsPiePercentLabel(played, total),
+            color: Colors.green,
+          ),
+        if (rejected > 0)
+          StatsPieChartSlice(
+            value: rejected.toDouble(),
+            title: statsPiePercentLabel(rejected, total),
+            color: Colors.red,
+          ),
+        if (open > 0)
+          StatsPieChartSlice(
+            value: open.toDouble(),
+            title: statsPiePercentLabel(open, total),
+            color: Colors.blue,
+          ),
+        if (notPlayed > 0)
+          StatsPieChartSlice(
+            value: notPlayed.toDouble(),
+            title: statsPiePercentLabel(notPlayed, total),
+            color: Colors.orange,
+          ),
+      ],
     );
   }
 
@@ -788,28 +782,27 @@ class _StatsPieChartContent extends StatelessWidget {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final metrics = StatsPieChartMetrics.resolve(
+          context,
+          maxLayoutWidth: constraints.maxWidth,
+        );
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
-              flex: 2,
-              child: AspectRatio(
-                aspectRatio: 1,
-                child: _buildPie(
-                  played: stats.played,
-                  rejected: stats.rejected,
-                  open: stats.open,
-                  notPlayed: stats.notPlayed,
-                  deleted: stats.deleted,
-                ),
+            StatsPieChartLegendRow(
+              metrics: metrics,
+              pie: _buildPie(
+                metrics: metrics,
+                played: stats.played,
+                rejected: stats.rejected,
+                open: stats.open,
+                notPlayed: stats.notPlayed,
+                deleted: stats.deleted,
               ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
+              legend: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -835,17 +828,17 @@ class _StatsPieChartContent extends StatelessWidget {
                 ],
               ),
             ),
+            if (stats.total == 0 && stats.showEmptyText) ...[
+              const SizedBox(height: 12),
+              Text(
+                l.no_wishes_yet_hint,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ],
           ],
-        ),
-        if (stats.total == 0 && stats.showEmptyText) ...[
-          const SizedBox(height: 12),
-          Text(
-            l.no_wishes_yet_hint,
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-        ],
-      ],
+        );
+      },
     );
   }
 }

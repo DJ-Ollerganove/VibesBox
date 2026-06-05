@@ -1,5 +1,5 @@
 /**
- * party_shared.js – Zentrale Party-Code-Prüfung für Landingpage (/) und PWA (/vb/)
+ * party_shared.js – Zentrale Party-Code-Prüfung für die Wunschbox-PWA (/vb/)
  * Firestore startet nur in firebase-init.js (memoryLocalCache). Hier nur Warten auf window.firebaseDb*.
  * Von / und /vb/ mit <script src="/party_shared.js"></script> einbindbar (kein type="module" nötig).
  */
@@ -16,8 +16,24 @@
   var STORAGE_KEY_FAIL_COUNT = 'party_shared_fail_count';
   var STORAGE_KEY_BLOCK_UNTIL = 'party_shared_block_until';
   /** Gesamtfrist inkl. ensureFirebase; Join-Queries laufen parallel (nicht nacheinander). */
-  var PARTY_CODE_CHECK_TIMEOUT_MS = 55000;
+  var PARTY_CODE_CHECK_TIMEOUT_MS = 20000;
   var MESSAGE_KEY_TIMEOUT = 'main_code_error_timeout';
+  /** Vorab-Wünsche schließen spätestens diese Stunden vor Partybeginn. */
+  var PRE_WISH_CLOSE_HOURS = 6;
+
+  /**
+   * Vorab-Farben – eine Quelle (Flutter: UIConstants.colorPreWish = #7986CB).
+   * PWA: CSS --pre-wish-* in styles/main.css
+   */
+  var VB_PRE_WISH = {
+    primary: '#7986CB',
+    text: '#E8EAF6',
+    gradientEnd: '#764BA2',
+    bgSubtle: 'rgba(121, 134, 203, 0.15)',
+    border: 'rgba(121, 134, 203, 0.45)',
+    shadow: 'rgba(121, 134, 203, 0.3)'
+  };
+  window.VB_PRE_WISH = VB_PRE_WISH;
 
   function withTimeout(promise, ms) {
     var err = new Error('party_code_check_timeout');
@@ -47,8 +63,45 @@
     });
   }
 
-  /** pwa_language (de, en, …) → BCP 47 Locale für Intl */
-  var PARTY_LOCALE_MAP = { de: 'de-DE', en: 'en-US', fr: 'fr-FR', ru: 'ru-RU', zh: 'zh-CN', es: 'es-ES', tr: 'tr-TR', pt: 'pt-PT', hi: 'hi-IN' };
+  /** pwa_language (de, en, …) → BCP 47 für Intl — aus l10n/languages.json (generated/party-locale-map.js) */
+  var PARTY_LOCALE_MAP = (typeof window !== 'undefined' && window.PARTY_LOCALE_MAP) ? window.PARTY_LOCALE_MAP : {
+    de: 'de-DE',
+    en: 'en-US',
+    fr: 'fr-FR',
+    ru: 'ru-RU',
+    zh: 'zh-CN',
+    es: 'es-ES',
+    tr: 'tr-TR',
+    pt: 'pt-PT',
+    it: 'it-IT',
+    uk: 'uk-UA',
+    hi: 'hi-IN',
+    sq: 'sq-AL',
+    vi: 'vi-VN',
+    ja: 'ja-JP',
+    el: 'el-GR',
+    nl: 'nl-NL',
+    pl: 'pl-PL',
+    cs: 'cs-CZ',
+    ar: 'ar'
+  };
+
+  function getPartyLangCode(lang) {
+    var l = lang;
+    if (l == null && typeof window !== 'undefined') {
+      if (typeof window.getEffectiveLangForMenu === 'function') {
+        try {
+          l = window.getEffectiveLangForMenu();
+        } catch (e) {
+          l = '';
+        }
+      }
+      if (!l && window.localStorage) {
+        l = window.localStorage.getItem('pwa_language') || window.localStorage.getItem('language') || '';
+      }
+    }
+    return (l || 'de').toString().toLowerCase().split('-')[0];
+  }
 
   function getPartyLocale(lang) {
     var l = lang;
@@ -64,11 +117,111 @@
         l = window.localStorage.getItem('pwa_language') || window.localStorage.getItem('language') || '';
       }
     }
-    return PARTY_LOCALE_MAP[l] || 'de-DE';
+    var code = getPartyLangCode(l);
+    return PARTY_LOCALE_MAP[code] || 'de-DE';
+  }
+
+  /** Optionen aus l10n/languages.json (generated/party-locale-opts.js). */
+  function partyLocaleOpt(lang) {
+    var code = getPartyLangCode(lang);
+    var opts = (typeof window !== 'undefined' && window.PARTY_LOCALE_OPTS) ? window.PARTY_LOCALE_OPTS : {};
+    return opts[code] || {};
+  }
+
+  /** 12-Stunden-Uhr (nur z. B. en). */
+  function partyHour12(lang) {
+    var o = partyLocaleOpt(lang);
+    if (typeof o.hour12 === 'boolean') return o.hour12;
+    return /^en/i.test(getPartyLocale(lang));
+  }
+
+  /** Text nach der Uhrzeit (z. B. DE „ Uhr“) — Quelle: languages.json → PARTY_LOCALE_OPTS. */
+  function partyTimeSuffix(lang) {
+    var o = partyLocaleOpt(lang);
+    if (typeof o.time_suffix === 'string') return o.time_suffix.trim();
+    return '';
+  }
+
+  function partyTimeStyle(lang) {
+    var o = partyLocaleOpt(lang);
+    return (o.time_style && String(o.time_style)) || 'colon_suffix';
+  }
+
+  /** Stunde/Minute (24h-Ziffern) in optionaler Zeitzone. */
+  function clockParts24(date, locale, timeZoneId) {
+    var opts = {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: false
+    };
+    if (timeZoneId) opts.timeZone = timeZoneId;
+    var parts = new Intl.DateTimeFormat(locale, opts).formatToParts(date);
+    var hour = 0;
+    var minute = 0;
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i].type === 'hour') hour = parseInt(parts[i].value, 10);
+      if (parts[i].type === 'minute') minute = parseInt(parts[i].value, 10);
+    }
+    return { hour: hour, minute: minute };
+  }
+
+  function appendTimeSuffix(clock, suffix) {
+    var s = (suffix || '').trim();
+    if (!s || clock.indexOf(s) !== -1) return clock;
+    return clock + '\u00A0' + s;
+  }
+
+  /**
+   * Uhrzeit nach languages.json (time_style, time_suffix, hour12).
+   * @param {Date} date
+   * @param {string} [lang]
+   * @param {string} [timeZoneId]
+   * @param {boolean} [withSuffix]
+   */
+  function formatClockForLang(date, lang, timeZoneId, withSuffix) {
+    if (!date || !(date instanceof Date) || isNaN(date.getTime())) return '';
+    if (withSuffix === undefined) withSuffix = true;
+    var locale = getPartyLocale(lang);
+    var style = partyTimeStyle(lang);
+    var suffix = partyTimeSuffix(lang);
+
+    if (style === 'intl_12' && partyHour12(lang)) {
+      var iOpts = {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      };
+      if (timeZoneId) iOpts.timeZone = timeZoneId;
+      return new Intl.DateTimeFormat(locale, iOpts).format(date);
+    }
+
+    var p = clockParts24(date, locale, timeZoneId);
+    var h = p.hour;
+    var m = String(p.minute).padStart(2, '0');
+
+    if (style === 'fr_h') {
+      return h + ' h ' + m;
+    }
+    if (style === 'h_compact' || style === 'pt_h') {
+      return h + 'h' + m;
+    }
+    if (style === 'ja_kanji') {
+      return h + '\u6642' + m + '\u5206';
+    }
+
+    var colonOpts = {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    };
+    if (timeZoneId) colonOpts.timeZone = timeZoneId;
+    var clock = new Intl.DateTimeFormat(locale, colonOpts).format(date);
+    if (!withSuffix || !suffix) return clock;
+    return appendTimeSuffix(clock, suffix);
   }
 
   /** Muss zur Root-Wartezeit passen (index.html rootUrlPartyBootstrap); sonst hängt UI unnötig. */
-  var FIREBASE_WAIT_MS = 14000;
+  var FIREBASE_WAIT_MS = 10000;
   var FIREBASE_POLL_MS = 16;
 
   function hasFirebaseGlobals() {
@@ -88,14 +241,30 @@
     if (hasFirebaseGlobals()) return Promise.resolve();
     if (!initPromise) {
       initPromise = new Promise(function (resolve, reject) {
+        var settled = false;
+        function finishOk() {
+          if (settled) return;
+          settled = true;
+          resolve();
+        }
+        function finishErr() {
+          if (settled) return;
+          settled = true;
+          reject(new Error('firebase-init.js: Firebase nicht rechtzeitig geladen.'));
+        }
+        if (typeof window !== 'undefined') {
+          window.addEventListener('firebaseGlobalsReady', function () {
+            if (hasFirebaseGlobals()) finishOk();
+          }, { once: true });
+        }
         var deadline = Date.now() + FIREBASE_WAIT_MS;
         function tick() {
           if (hasFirebaseGlobals()) {
-            resolve();
+            finishOk();
             return;
           }
           if (Date.now() > deadline) {
-            reject(new Error('firebase-init.js: Firebase nicht rechtzeitig geladen.'));
+            finishErr();
             return;
           }
           setTimeout(tick, FIREBASE_POLL_MS);
@@ -104,6 +273,32 @@
       });
     }
     return initPromise;
+  }
+
+  /** Serialisierbare Party-Felder aus Firestore (kein zweites getDoc beim Join nötig). */
+  function partySnapshotFromData(data) {
+    if (!data || typeof data !== 'object') return {};
+    var snap = {};
+    var strKeys = [
+      'party_name', 'partyName', 'party_code', 'fixed_party_code', 'dj_name', 'display_name', 'name',
+      'created_by', 'timezone_id', 'lifecycle_status', 'status', 'dj_logo'
+    ];
+    for (var i = 0; i < strKeys.length; i++) {
+      var k = strKeys[i];
+      if (data[k] != null) snap[k] = data[k];
+    }
+    if (data.is_paused === true) snap.is_paused = true;
+    if (data.allow_pre_wishes === true) snap.allow_pre_wishes = true;
+    if (typeof data.start_time_posix === 'number') snap.start_time_posix = data.start_time_posix;
+    if (typeof data.end_time_posix === 'number') snap.end_time_posix = data.end_time_posix;
+    if (data.start_date && typeof data.start_date.toDate === 'function') {
+      snap.start_time_posix = Math.floor(data.start_date.toDate().getTime() / 1000);
+    }
+    if (data.end_date && typeof data.end_date.toDate === 'function') {
+      snap.end_time_posix = Math.floor(data.end_date.toDate().getTime() / 1000);
+    }
+    if (data.finished_at != null) snap.finished_at = data.finished_at;
+    return snap;
   }
 
   /**
@@ -121,7 +316,8 @@
 
   /**
    * Mehrere Party-Dokumente können denselben Join-Code haben (z. B. Location + fixed_party_code).
-   * Priorität: gerade laufend → nächste zukünftige (frühester Start) → zuletzt beendete (für korrekte Meldung).
+   * Priorität: gerade laufend → nächste zukünftige (frühester Start) → zuletzt beendete (für Meldung/Join-Fallback).
+   * Zeitfenster wie processFoundDoc: start_time_posix / start_date, end_time_posix / end_date.
    * @param {Array} docs Firestore QuerySnapshot.docs
    * @param {Date} [nowDate]
    * @returns {object|null} ein doc oder null
@@ -132,15 +328,31 @@
 
     var now = nowDate instanceof Date ? nowDate : new Date();
 
-    function classify(doc) {
-      var data = doc.data();
-      var endedByLifecycle = data.lifecycle_status === 'finished' || data.finished_at != null;
-      var endedByStatus = data.status === 'beendet' || data.status === 'ended';
+    /** Gleiche Zeitquellen wie checkPartyCode / processFoundDoc (posix bevorzugt wo sinnvoll). */
+    function getStartEndDates(data) {
       var startDate = null;
       var endDate = null;
-      if (data.start_date && typeof data.start_date.toDate === 'function') startDate = data.start_date.toDate();
-      if (data.end_date && typeof data.end_date.toDate === 'function') endDate = data.end_date.toDate();
+      if (data.start_time_posix && typeof data.start_time_posix === 'number') {
+        startDate = new Date(data.start_time_posix * 1000);
+      } else if (data.start_date && typeof data.start_date.toDate === 'function') {
+        startDate = data.start_date.toDate();
+      }
+      if (data.end_time_posix && typeof data.end_time_posix === 'number') {
+        endDate = new Date(data.end_time_posix * 1000);
+      } else if (data.end_date && typeof data.end_date.toDate === 'function') {
+        endDate = data.end_date.toDate();
+      }
+      return { startDate: startDate, endDate: endDate };
+    }
 
+    function classify(doc) {
+      var data = doc.data();
+      var se = getStartEndDates(data);
+      var startDate = se.startDate;
+      var endDate = se.endDate;
+
+      var endedByLifecycle = data.lifecycle_status === 'finished' || data.finished_at != null;
+      var endedByStatus = data.status === 'beendet' || data.status === 'ended';
       var ended = endedByLifecycle || endedByStatus;
       if (!ended && endDate && now > endDate) ended = true;
 
@@ -153,6 +365,18 @@
         if (now >= startDate && now < endDate) return { tier: 'running', startMs: startMs, endMs: endMs };
         if (now < startDate) return { tier: 'future', startMs: startMs, endMs: endMs };
         if (now >= endDate) return { tier: 'past', startMs: startMs, endMs: endMs };
+      }
+
+      if (startDate && !endDate) {
+        if (now < startDate) return { tier: 'future', startMs: startMs, endMs: endMs };
+        if (!ended) return { tier: 'running', startMs: startMs, endMs: endMs };
+        return { tier: 'past', startMs: startMs, endMs: endMs };
+      }
+
+      if (!startDate && endDate) {
+        if (!ended && now < endDate) return { tier: 'running', startMs: startMs, endMs: endMs };
+        if (now >= endDate) return { tier: 'past', startMs: startMs, endMs: endMs };
+        return { tier: 'unknown', startMs: startMs, endMs: endMs };
       }
 
       return { tier: 'unknown', startMs: startMs, endMs: endMs };
@@ -223,6 +447,155 @@
     } catch (e) {}
   }
 
+  function partyStartDateFromData(data) {
+    if (!data) return null;
+    if (data.start_time_posix && typeof data.start_time_posix === 'number') {
+      return new Date(data.start_time_posix * 1000);
+    }
+    if (data.start_date && typeof data.start_date.toDate === 'function') {
+      return data.start_date.toDate();
+    }
+    return null;
+  }
+
+  function vbPreWishDeadlineMs(startDateUtc) {
+    return startDateUtc.getTime() - PRE_WISH_CLOSE_HOURS * 60 * 60 * 1000;
+  }
+
+  function vbIsPreWishWindowOpen(data, nowDate) {
+    if (!data || data.allow_pre_wishes !== true) return false;
+    var start = partyStartDateFromData(data);
+    if (!start) return false;
+    var now = nowDate || new Date();
+    if (now >= start) return false;
+    return now.getTime() <= vbPreWishDeadlineMs(start);
+  }
+
+  var VB_DEFAULT_FLOOR_KEY = 'default';
+
+  function vbEffectiveFloorKey(data) {
+    if (!data) return VB_DEFAULT_FLOOR_KEY;
+    var key = data.floor_key;
+    if (key == null || String(key).trim() === '') return VB_DEFAULT_FLOOR_KEY;
+    return String(key).trim();
+  }
+
+  function vbRawFloorLabel(data) {
+    if (!data) return VB_DEFAULT_FLOOR_KEY;
+    var explicit = data.floor_label;
+    if (explicit != null && String(explicit).trim() !== '') return String(explicit).trim();
+    var key = vbEffectiveFloorKey(data);
+    return key === VB_DEFAULT_FLOOR_KEY ? VB_DEFAULT_FLOOR_KEY : key;
+  }
+
+  function vbPartyStartEndDates(data) {
+    var startDate = null;
+    var endDate = null;
+    if (data.start_time_posix && typeof data.start_time_posix === 'number') {
+      startDate = new Date(data.start_time_posix * 1000);
+    } else if (data.start_date && typeof data.start_date.toDate === 'function') {
+      startDate = data.start_date.toDate();
+    }
+    if (data.end_time_posix && typeof data.end_time_posix === 'number') {
+      endDate = new Date(data.end_time_posix * 1000);
+    } else if (data.end_date && typeof data.end_date.toDate === 'function') {
+      endDate = data.end_date.toDate();
+    }
+    return { startDate: startDate, endDate: endDate };
+  }
+
+  function vbIsPartyEnded(data, nowDate) {
+    if (!data) return true;
+    var now = nowDate instanceof Date ? nowDate : new Date();
+    if (data.lifecycle_status === 'finished' || data.finished_at != null) return true;
+    if (data.status === 'beendet' || data.status === 'ended') return true;
+    var se = vbPartyStartEndDates(data);
+    return se.endDate != null && now > se.endDate;
+  }
+
+  /** Gast darf beitreten (laufend, nicht standby/beendet). */
+  function vbIsPartyGuestJoinable(data, nowDate) {
+    if (!data || vbIsPartyEnded(data, nowDate)) return false;
+    if (data.lifecycle_status === 'standby') return false;
+    var now = nowDate instanceof Date ? nowDate : new Date();
+    var se = vbPartyStartEndDates(data);
+    if (se.startDate && se.endDate) {
+      return now >= se.startDate && now < se.endDate;
+    }
+    if (se.startDate && !se.endDate) {
+      return now >= se.startDate;
+    }
+    if (se.endDate) {
+      return now < se.endDate;
+    }
+    return data.lifecycle_status === 'active' || data.lifecycle_status == null;
+  }
+
+  function vbFloorOptionFromDoc(doc) {
+    var data = doc.data();
+    return {
+      party_id: doc.id,
+      floor_key: vbEffectiveFloorKey(data),
+      floor_label: vbRawFloorLabel(data),
+      party_name: data.party_name || data.partyName || null,
+      dj_name: 'DJ'
+    };
+  }
+
+  function collectJoinCodePartyDocs(normalized) {
+    var db = window.firebaseDb;
+    var collectionFn = window.firebaseCollection;
+    var queryFn = window.firebaseQuery;
+    var whereFn = window.firebaseWhere;
+    var getDocsFn = window.firebaseGetDocs;
+    if (!db || !collectionFn || !queryFn || !whereFn || !getDocsFn) {
+      return Promise.resolve([]);
+    }
+    var partiesRef = collectionFn(db, PARTIES_COLLECTION);
+
+    function queryField(field, value) {
+      var q = queryFn(partiesRef, whereFn(field, '==', value));
+      return getDocsFn(q);
+    }
+
+    function safeQueryDocs(field, value) {
+      return queryField(field, value)
+        .then(function (snap) {
+          return snap && snap.docs ? snap.docs.slice() : [];
+        })
+        .catch(function () {
+          return [];
+        });
+    }
+
+    function mergeUniqueById(docArrays) {
+      var seen = Object.create(null);
+      var out = [];
+      docArrays.forEach(function (docs) {
+        if (!docs) return;
+        for (var i = 0; i < docs.length; i++) {
+          var doc = docs[i];
+          if (!doc || !doc.id) continue;
+          if (!seen[doc.id]) {
+            seen[doc.id] = true;
+            out.push(doc);
+          }
+        }
+      });
+      return out;
+    }
+
+    var num = parseInt(normalized, 10);
+    var tryPartyCodeAsNumber = !isNaN(num) && String(num) === normalized;
+    var pA = safeQueryDocs('party_code', normalized);
+    var pB = tryPartyCodeAsNumber ? safeQueryDocs('party_code', num) : Promise.resolve([]);
+    var pC = safeQueryDocs('fixed_party_code', normalized);
+    var pD = tryPartyCodeAsNumber ? safeQueryDocs('fixed_party_code', num) : Promise.resolve([]);
+    return Promise.all([pA, pB, pC, pD]).then(function (arrays) {
+      return mergeUniqueById(arrays);
+    });
+  }
+
   /**
    * Prüft einen Party-Code gegen Firestore (exakt 8 Ziffern).
    * @param {string} code
@@ -284,17 +657,27 @@
           return { success: false, messageKey: MESSAGE_KEY_ENDED };
         }
 
-        var startDateUtc = null;
-        if (data.start_time_posix && typeof data.start_time_posix === 'number') {
-          startDateUtc = new Date(data.start_time_posix * 1000);
-        } else if (data.start_date && typeof data.start_date.toDate === 'function') {
-          startDateUtc = data.start_date.toDate();
-        }
+        var startDateUtc = partyStartDateFromData(data);
         if (startDateUtc && nowDate < startDateUtc) {
           setRateLimitState(0, 0);
           var startPosix = data.start_time_posix;
           if (startPosix == null && data.start_date && typeof data.start_date.toDate === 'function') {
             startPosix = Math.floor(data.start_date.toDate().getTime() / 1000);
+          }
+          if (vbIsPreWishWindowOpen(data, nowDate)) {
+            return {
+              success: true,
+              pre_wish_mode: true,
+              data: {
+                party_id: partyId,
+                party_code: data.party_code != null ? String(data.party_code) : normalized,
+                party_name: data.party_name || data.partyName || null,
+                start_time_posix: startPosix || 0,
+                timezone_id: data.timezone_id || 'UTC',
+                allow_pre_wishes: true,
+                party_snapshot: partySnapshotFromData(data)
+              }
+            };
           }
           return {
             success: false,
@@ -310,7 +693,8 @@
           data: {
             party_id: partyId,
             party_code: data.party_code != null ? String(data.party_code) : normalized,
-            party_name: data.party_name || data.partyName || null
+            party_name: data.party_name || data.partyName || null,
+            party_snapshot: partySnapshotFromData(data)
           }
         };
       }
@@ -351,22 +735,29 @@
         return out;
       }
 
-      function collectAllJoinCodeDocs() {
-        var num = parseInt(normalized, 10);
-        // Nur Zahl-Query wenn exakt dieselbe Ziffernfolge (kein parseInt mit führenden Nullen: "01234567" → 1234567).
-        var tryPartyCodeAsNumber = !isNaN(num) && String(num) === normalized;
-        var pA = safeQueryDocs('party_code', normalized);
-        var pB = tryPartyCodeAsNumber ? safeQueryDocs('party_code', num) : Promise.resolve([]);
-        var pC = safeQueryDocs('fixed_party_code', normalized);
-        var pD = tryPartyCodeAsNumber ? safeQueryDocs('fixed_party_code', num) : Promise.resolve([]);
-        return Promise.all([pA, pB, pC, pD]).then(function (arrays) {
-          return mergeUniqueById(arrays);
-        });
-      }
-
-      return collectAllJoinCodeDocs().then(function (allDocs) {
+      return collectJoinCodePartyDocs(normalized).then(function (allDocs) {
         if (!allDocs || allDocs.length === 0) return rateLimitFail();
-        var best = pickBestPartyDocForJoinCode(allDocs, new Date());
+        var nowDate = new Date();
+        var joinable = allDocs.filter(function (doc) {
+          return vbIsPartyGuestJoinable(doc.data(), nowDate);
+        });
+        if (joinable.length > 1) {
+          setRateLimitState(0, 0);
+          var floorOptions = joinable.map(vbFloorOptionFromDoc);
+          floorOptions.sort(function (a, b) {
+            return String(a.floor_label || '').localeCompare(String(b.floor_label || ''));
+          });
+          return {
+            success: false,
+            type: 'select_floor',
+            join_code: normalized,
+            floor_options: floorOptions
+          };
+        }
+        if (joinable.length === 1) {
+          return processFoundDoc(joinable[0]);
+        }
+        var best = pickBestPartyDocForJoinCode(allDocs, nowDate);
         if (!best) return rateLimitFail();
         return processFoundDoc(best);
       });
@@ -393,19 +784,96 @@
    * @returns {string} z.B. "20:00"
    */
   function formatPartyLocalTime(timePosix, timezoneId, lang) {
+    try {
+      var utcDate = new Date(timePosix * 1000);
+      return formatClockForLang(utcDate, lang, timezoneId || 'UTC', false);
+    } catch (e) {
+      return '';
+    }
+  }
+
+  /** Lokale Uhrzeit (ohne Zeitzone) — languages.json time_style. */
+  function formatLocaleClock(date, lang) {
+    return formatClockForLang(date, lang, null, false);
+  }
+
+  /**
+   * Datum (yMd) in Party-Zeitzone — wie Flutter [FormattingUtils.formatDateForLocale].
+   */
+  function formatPartyLocalDateYmd(timePosix, timezoneId, lang) {
     var locale = getPartyLocale(lang);
     try {
       var utcDate = new Date(timePosix * 1000);
-      var formatter = new Intl.DateTimeFormat(locale, {
+      return new Intl.DateTimeFormat(locale, {
         timeZone: timezoneId || 'UTC',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: locale.startsWith('en')
-      });
-      return formatter.format(utcDate);
+        day: 'numeric',
+        month: 'numeric',
+        year: 'numeric'
+      }).format(utcDate);
     } catch (e) {
-      return new Date(timePosix * 1000).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit', hour12: locale.startsWith('en') });
+      return new Date(timePosix * 1000).toLocaleDateString(locale);
     }
+  }
+
+  function formatPartyLocalTimeWithSuffix(timePosix, timezoneId, lang, t) {
+    try {
+      var utcDate = new Date(timePosix * 1000);
+      var style = partyTimeStyle(lang);
+      if (style === 'fr_h' || style === 'h_compact' || style === 'pt_h' || style === 'ja_kanji') {
+        return formatClockForLang(utcDate, lang, timezoneId || 'UTC', false);
+      }
+      return formatClockForLang(utcDate, lang, timezoneId || 'UTC', true);
+    } catch (e) {
+      return '';
+    }
+  }
+
+  /**
+   * Wie Flutter party_start_at: {date} + {time} (inkl. time_suffix, z. B. DE „ Uhr“).
+   */
+  function formatPartyStartAtLine(timePosix, timezoneId, lang, t) {
+    var dateStr = formatPartyLocalDateYmd(timePosix, timezoneId, lang);
+    var timeStr = formatPartyLocalTimeWithSuffix(timePosix, timezoneId, lang, t);
+    var tpl = '';
+    if (typeof t === 'function') {
+      tpl = (t('party_start_at', '') || '').trim();
+    }
+    if (tpl) {
+      return String(tpl).replace(/\{date\}/g, dateStr).replace(/\{time\}/g, timeStr);
+    }
+    var fallback = (typeof t === 'function' && t('main_party_starts_at', '')) || 'Starts at {time}';
+    return String(fallback).replace(/\{time\}/g, timeStr);
+  }
+
+  /**
+   * Uhrzeit + optionales time_suffix (z. B. DE „ Uhr“).
+   */
+  function formatLocaleClockWithSuffix(date, lang, t) {
+    void t;
+    var style = partyTimeStyle(lang);
+    if (style === 'fr_h' || style === 'h_compact' || style === 'pt_h' || style === 'ja_kanji' || style === 'intl_12') {
+      return formatClockForLang(date, lang, null, false);
+    }
+    return formatClockForLang(date, lang, null, true);
+  }
+
+  /**
+   * Kompakte Zeile Datum + Uhrzeit (z. B. Vorab-Header) — wie Flutter formatCompactDateTimeLine.
+   */
+  function formatLocaleCompactDateTime(date, lang, t) {
+    if (!date || !(date instanceof Date) || isNaN(date.getTime())) return '';
+    var locale = getPartyLocale(lang);
+    var datePart;
+    try {
+      datePart = new Intl.DateTimeFormat(locale, {
+        day: 'numeric',
+        month: 'numeric',
+        year: 'numeric'
+      }).format(date);
+    } catch (e) {
+      datePart = date.toLocaleDateString(locale);
+    }
+    return datePart + ' ' + formatLocaleClockWithSuffix(date, lang, t);
   }
 
   /**
@@ -438,21 +906,21 @@
    * @param {string} [lang] - pwa_language wenn fehlt
    * @returns {string}
    */
-  function formatPartyShortDateTime(date, lang) {
+  function formatPartyShortDateTime(date, lang, t) {
+    void t;
     if (!date || !(date instanceof Date)) return '';
     var locale = getPartyLocale(lang);
+    var datePart;
     try {
-      return new Intl.DateTimeFormat(locale, {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: locale.startsWith('en')
+      datePart = new Intl.DateTimeFormat(locale, {
+        day: 'numeric',
+        month: 'numeric',
+        year: 'numeric'
       }).format(date);
     } catch (e) {
-      return date.toLocaleString(locale);
+      datePart = date.toLocaleDateString(locale);
     }
+    return datePart + ' ' + formatLocaleClockWithSuffix(date, lang, null);
   }
 
   /**
@@ -532,14 +1000,51 @@
     return minutesCeil + ' ' + (minutesCeil === 1 ? T('time_minute') : T('time_minutes'));
   }
 
+  /** Wünsche unter parties/{partyId}/wishes (keine Root-Collection mehr). */
+  function vbPartyWishesCollection(partyId) {
+    if (!hasFirebaseGlobals() || !partyId || partyId === 'manual' || partyId === 'manuell') {
+      return null;
+    }
+    var partyRef = window.firebaseDoc(window.firebaseCollection(window.firebaseDb, PARTIES_COLLECTION), partyId);
+    return window.firebaseCollection(partyRef, 'wishes');
+  }
+
+  function vbPartyWishDoc(partyId, wishId) {
+    var col = vbPartyWishesCollection(partyId);
+    if (!col || !wishId) return null;
+    return window.firebaseDoc(col, wishId);
+  }
+
   if (typeof window !== 'undefined') {
+    window.vbPartyWishesCollection = vbPartyWishesCollection;
+    window.vbPartyWishDoc = vbPartyWishDoc;
     window.checkPartyCode = checkPartyCode;
+    window.vbCollectJoinCodePartyDocs = collectJoinCodePartyDocs;
+    window.vbIsPartyGuestJoinable = vbIsPartyGuestJoinable;
+    window.vbIsPartyEnded = vbIsPartyEnded;
+    window.vbEffectiveFloorKey = vbEffectiveFloorKey;
+    window.vbRawFloorLabel = vbRawFloorLabel;
+    window.VB_DEFAULT_FLOOR_KEY = VB_DEFAULT_FLOOR_KEY;
+    window.vbFloorOptionFromDoc = vbFloorOptionFromDoc;
+    window.partySnapshotFromData = partySnapshotFromData;
     window.pickBestPartyDocForJoinCode = pickBestPartyDocForJoinCode;
     window.getPartyLocale = getPartyLocale;
+    window.partyHour12 = partyHour12;
+    window.formatClockForLang = formatClockForLang;
     window.formatPartyLocalTime = formatPartyLocalTime;
+    window.formatPartyLocalTimeWithSuffix = formatPartyLocalTimeWithSuffix;
+    window.formatPartyLocalDateYmd = formatPartyLocalDateYmd;
+    window.formatPartyStartAtLine = formatPartyStartAtLine;
     window.formatPartyLocalDate = formatPartyLocalDate;
     window.formatPartyShortDateTime = formatPartyShortDateTime;
+    window.formatLocaleClock = formatLocaleClock;
+    window.formatLocaleClockWithSuffix = formatLocaleClockWithSuffix;
+    window.formatLocaleCompactDateTime = formatLocaleCompactDateTime;
     window.formatDuration = formatDuration;
     window.calculateTimeUntilParty = calculateTimeUntilParty;
+    window.vbIsPreWishWindowOpen = vbIsPreWishWindowOpen;
+    window.vbPreWishDeadlineMs = vbPreWishDeadlineMs;
+    window.partyStartDateFromData = partyStartDateFromData;
+    window.PRE_WISH_CLOSE_HOURS = PRE_WISH_CLOSE_HOURS;
   }
 })();

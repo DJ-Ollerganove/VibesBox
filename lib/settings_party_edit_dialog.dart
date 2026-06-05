@@ -1,6 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart' as intl;
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:timezone/timezone.dart' as tz;
@@ -15,10 +14,31 @@ import 'helpers/security_helper.dart';
 import 'models/location_result.dart';
 import 'pages/location_edit_picker_page.dart';
 import 'widgets/party_creation/party_time_dropdowns.dart';
+import '../services/pre_wish_limit_service.dart';
+import 'widgets/party_pre_wish_settings_field.dart';
+import 'widgets/vibesbox_info_dialog.dart';
 import 'utils/debug_log.dart';
+import 'constants/venue_constants.dart';
+import 'models/venue_model.dart';
+import 'models/floor_occupancy_info.dart';
+import 'services/venue_service.dart';
+import 'services/venue_party_conflict_service.dart';
+import 'utils/floor_key_utils.dart';
+import 'utils/venue_party_fields.dart';
+import 'widgets/party_creation/public_venue_floor_field.dart';
+import 'widgets/floor_swap_dialogs.dart';
 
 /// Dialog für die Bearbeitung einer Party
 class SettingsPartyEditDialog {
+  static void _showRegisteredAppGuestInfo(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
+    showVibesBoxInfoDialog(
+      context,
+      title: l.party_registered_app_guest_info_title,
+      body: l.party_registered_app_guest_info_body,
+    );
+  }
+
   /// Zeigt den Bearbeitungs-Dialog für eine Party
   ///
   /// [allParties] - Optional: Liste aller Partys des DJs für Überschneidungs-Check
@@ -114,6 +134,8 @@ class SettingsPartyEditDialog {
     // Wenn Limits nicht übergeben wurden, lade sie aus Firestore (nutze bereits geladenes Dokument)
     int? guestLimit = currentGuestLimit;
     int? userLimit = currentUserLimit;
+    bool allowPreWishes = false;
+    int preWishLimitPerGuest = 0;
 
     if (guestLimit == null || userLimit == null) {
       try {
@@ -122,6 +144,9 @@ class SettingsPartyEditDialog {
           final data = partyDoc.data() as Map<String, dynamic>?;
           guestLimit = data?['guest_limit_per_hour'] as int? ?? 2;
           userLimit = data?['user_limit_per_hour'] as int? ?? 5;
+          allowPreWishes = data?['allow_pre_wishes'] == true;
+          preWishLimitPerGuest =
+              PreWishLimitService.parseLimitFromParty(data);
         } else {
           guestLimit = guestLimit ?? 2;
           userLimit = userLimit ?? 5;
@@ -132,6 +157,48 @@ class SettingsPartyEditDialog {
         userLimit = userLimit ?? 5;
       }
     }
+    if (partyDoc != null && partyDoc.exists) {
+      final data = partyDoc.data() as Map<String, dynamic>?;
+      allowPreWishes = data?['allow_pre_wishes'] == true;
+      preWishLimitPerGuest = PreWishLimitService.parseLimitFromParty(data);
+    }
+
+    String? editVenueId;
+    var initialEditFloorKey = VenueConstants.defaultFloorKey;
+    VenueModel? editVenueModel;
+    var editOccupiedFloorKeys = <String>{};
+    var editFloorOccupancy = <String, FloorOccupancyInfo>{};
+    final effectivePartyType = currentPartyType ?? 'private';
+    if (partyDoc != null && partyDoc.exists) {
+      final data = partyDoc.data() as Map<String, dynamic>? ?? {};
+      editVenueId = VenuePartyFields.readVenueId(data);
+      initialEditFloorKey = VenuePartyFields.effectiveFloorKeyFromParty(data);
+    }
+    final showEditFloorField = editVenueId != null &&
+        editVenueId.isNotEmpty &&
+        effectivePartyType == 'public';
+    if (showEditFloorField) {
+      try {
+        editVenueModel = await VenueService().getVenueById(editVenueId!);
+        editOccupiedFloorKeys =
+            await VenuePartyConflictService().occupiedFloorKeys(
+          venueId: editVenueId,
+          start: currentStartDate,
+          end: currentEndDate,
+          excludePartyId: partyId,
+        );
+        editFloorOccupancy =
+            await VenuePartyConflictService().occupancyByFloorKey(
+          venueId: editVenueId,
+          start: currentStartDate,
+          end: currentEndDate,
+          excludePartyId: partyId,
+        );
+      } catch (e) {
+        debugLog('⚠️ Venue/Floor für Bearbeiten: $e');
+      }
+    }
+    var editSelectedFloorKey = initialEditFloorKey;
 
     // Free-DJ: Limits fest auf 1 (auch beim Bearbeiten – zurücksetzen und sperren)
     final editUser = UserService().currentUser.value;
@@ -162,6 +229,25 @@ class SettingsPartyEditDialog {
       currentStartDate,
       currentEndDate,
     );
+
+    if (isPartyRunning) {
+      final minEnd = PartyTimeHelpers.computeMinEndDateTime(
+        currentStartDate,
+        enforceNotInPast: true,
+      );
+      final initialEnd = DateTime(
+        currentEndDate.year,
+        currentEndDate.month,
+        currentEndDate.day,
+        endHour!,
+        endMinute!,
+      );
+      if (initialEnd.isBefore(minEnd)) {
+        endDate = DateTime(minEnd.year, minEnd.month, minEnd.day);
+        endHour = minEnd.hour;
+        endMinute = minEnd.minute;
+      }
+    }
 
     // Bearbeitbare Location- und Zeitzonen-Daten (können per "Ort ändern" aktualisiert werden)
     final locName = partyLocationName?.trim();
@@ -237,20 +323,61 @@ class SettingsPartyEditDialog {
 
               // Validierung: Endzeit > Startzeit (Korrektur in setDialogState)
               void correctEndTimeIfNeeded() {
-                if (startDate == null ||
-                    startHour == null ||
-                    startMinute == null ||
-                    endDate == null ||
-                    endHour == null ||
-                    endMinute == null)
+                if (endDate == null || endHour == null || endMinute == null) {
                   return;
+                }
+
+                final effectiveStartDate = isPartyRunning
+                    ? DateTime(
+                        currentStartDate.year,
+                        currentStartDate.month,
+                        currentStartDate.day,
+                      )
+                    : startDate;
+                final effectiveStartHour =
+                    isPartyRunning ? currentStartDate.hour : startHour;
+                final effectiveStartMinute =
+                    isPartyRunning ? currentStartDate.minute : startMinute;
+
+                if (effectiveStartDate == null ||
+                    effectiveStartHour == null ||
+                    effectiveStartMinute == null) {
+                  return;
+                }
+
+                var workingEndDate = endDate!;
+                var workingEndHour = endHour!;
+                var workingEndMinute = endMinute!;
+
+                if (isPartyRunning) {
+                  final minEnd = PartyTimeHelpers.computeMinEndDateTime(
+                    DateTime(
+                      effectiveStartDate.year,
+                      effectiveStartDate.month,
+                      effectiveStartDate.day,
+                      effectiveStartHour,
+                      effectiveStartMinute,
+                    ),
+                    enforceNotInPast: true,
+                  );
+                  final correctedMin = PartyTimeHelpers.correctEndIfBeforeMin(
+                    workingEndDate,
+                    workingEndHour,
+                    workingEndMinute,
+                    minEnd,
+                  );
+                  workingEndDate = correctedMin.endDate;
+                  workingEndHour = correctedMin.endHour;
+                  workingEndMinute = correctedMin.endMinute;
+                }
+
                 final corrected = PartyTimeHelpers.correctEndIfBeforeStart(
-                  startDate!,
-                  startHour!,
-                  startMinute!,
-                  endDate!,
-                  endHour!,
-                  endMinute!,
+                  effectiveStartDate,
+                  effectiveStartHour,
+                  effectiveStartMinute,
+                  workingEndDate,
+                  workingEndHour,
+                  workingEndMinute,
                 );
                 if (corrected.endDate != endDate ||
                     corrected.endHour != endHour ||
@@ -295,6 +422,15 @@ class SettingsPartyEditDialog {
                   endH,
                   endM,
                 );
+                if (isPartyRunning) {
+                  final minEnd = PartyTimeHelpers.computeMinEndDateTime(
+                    currentStartDate,
+                    enforceNotInPast: true,
+                  );
+                  if (newEndDateTime.isBefore(minEnd)) {
+                    return AppLocalizations.of(context)!.party_validation_end_in_past;
+                  }
+                }
                 return PartyValidator.validate(
                   newStartDateTime,
                   newEndDateTime,
@@ -315,6 +451,26 @@ class SettingsPartyEditDialog {
                 partiesList,
                 partyId,
               );
+              final effectiveStartForEndLimits = DateTime(
+                (isPartyRunning ? currentStartDate : (startDate ?? currentStartDate))
+                    .year,
+                (isPartyRunning ? currentStartDate : (startDate ?? currentStartDate))
+                    .month,
+                (isPartyRunning ? currentStartDate : (startDate ?? currentStartDate))
+                    .day,
+                isPartyRunning
+                    ? currentStartDate.hour
+                    : (startHour ?? currentStartDate.hour),
+                isPartyRunning
+                    ? currentStartDate.minute
+                    : (startMinute ?? currentStartDate.minute),
+              );
+              final minEndDateTime = isPartyRunning
+                  ? PartyTimeHelpers.computeMinEndDateTime(
+                      effectiveStartForEndLimits,
+                      enforceNotInPast: true,
+                    )
+                  : null;
               final isValid =
                   validationError == null &&
                   startDate != null &&
@@ -607,6 +763,118 @@ class SettingsPartyEditDialog {
                                       ],
                                     ),
                                   ),
+                                  if (showEditFloorField) ...[
+                                    const SizedBox(height: 16),
+                                    PublicVenueFloorField(
+                                      floors: editVenueModel?.floors ?? const [],
+                                      selectedFloorKey: editSelectedFloorKey,
+                                      defaultFloorAvailable: !editOccupiedFloorKeys
+                                          .contains(
+                                            VenueConstants.defaultFloorKey,
+                                          ),
+                                      occupiedFloorKeys: editOccupiedFloorKeys,
+                                      floorOccupancy: editFloorOccupancy,
+                                      hasVenueOverlap:
+                                          editOccupiedFloorKeys.isNotEmpty,
+                                      isLoading: false,
+                                      onFloorSelected: (key) {
+                                        setDialogState(() {
+                                          editSelectedFloorKey = key;
+                                        });
+                                      },
+                                      onOccupiedFloorTap: (key, info) async {
+                                        if (editVenueId == null) return;
+                                        await showFloorSwapRequestDialog(
+                                          context: context,
+                                          venueId: editVenueId,
+                                          fromPartyId: partyId,
+                                          fromFloorKey: editSelectedFloorKey ??
+                                              initialEditFloorKey,
+                                          targetFloorKey: key,
+                                          targetOccupancy: info,
+                                          venueFloors:
+                                              editVenueModel?.floors ?? const [],
+                                        );
+                                        editOccupiedFloorKeys =
+                                            await VenuePartyConflictService()
+                                                .occupiedFloorKeys(
+                                          venueId: editVenueId,
+                                          start: currentStartDate,
+                                          end: currentEndDate,
+                                          excludePartyId: partyId,
+                                        );
+                                        editFloorOccupancy =
+                                            await VenuePartyConflictService()
+                                                .occupancyByFloorKey(
+                                          venueId: editVenueId,
+                                          start: currentStartDate,
+                                          end: currentEndDate,
+                                          excludePartyId: partyId,
+                                        );
+                                        setDialogState(() {});
+                                      },
+                                      onAddFloor: () async {
+                                        final controller =
+                                            TextEditingController();
+                                        final label = await showDialog<String>(
+                                          context: context,
+                                          builder: (ctx) => AlertDialog(
+                                            backgroundColor:
+                                                UIConstants.bgGradientEnd,
+                                            title: Text(
+                                              l10n.party_floor_add_dialog_title,
+                                            ),
+                                            content: TextField(
+                                              controller: controller,
+                                              decoration: InputDecoration(
+                                                hintText: l10n
+                                                    .party_floor_add_dialog_hint,
+                                              ),
+                                              autofocus: true,
+                                            ),
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () =>
+                                                    Navigator.pop(ctx),
+                                                child: Text(l10n.cancel),
+                                              ),
+                                              FilledButton(
+                                                onPressed: () => Navigator.pop(
+                                                  ctx,
+                                                  controller.text.trim(),
+                                                ),
+                                                child: Text(l10n.save),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                        controller.dispose();
+                                        if (label == null || label.isEmpty) {
+                                          return;
+                                        }
+                                        try {
+                                          final updated =
+                                              await VenueService().addFloor(
+                                            venueId: editVenueId!,
+                                            floorLabel: label,
+                                            createdBy:
+                                                FirebaseAuth.instance.currentUser
+                                                        ?.uid ??
+                                                    '',
+                                          );
+                                          setDialogState(() {
+                                            editVenueModel = updated;
+                                            editSelectedFloorKey =
+                                                FloorKeyUtils.slugFromLabel(
+                                              label,
+                                            );
+                                          });
+                                        } catch (e) {
+                                          debugLog('⚠️ Floor anlegen: $e');
+                                        }
+                                      },
+                                    ),
+                                  ],
                                   const SizedBox(height: 16),
                                   // Start-Datum und Start-Uhrzeit (nur bearbeitbar wenn Party noch nicht begonnen)
                                   if (hasNotStarted) ...[
@@ -685,11 +953,10 @@ class SettingsPartyEditDialog {
                                                       Expanded(
                                                         child: Text(
                                                           startDate != null
-                                                              ? intl.DateFormat.yMd(
-                                                                  Localizations.localeOf(
-                                                                    context,
-                                                                  ).toString(),
-                                                                ).format(startDate!)
+                                                              ? FormattingUtils.formatDateForLocale(
+                                                                  startDate!,
+                                                                  context,
+                                                                )
                                                               : l10n.party_not_selected,
                                                           style: TextStyle(
                                                             fontSize: 14,
@@ -862,16 +1129,34 @@ class SettingsPartyEditDialog {
                                             const SizedBox(height: 4),
                                             InkWell(
                                               onTap: () async {
+                                                final startDay = DateTime(
+                                                  currentStartDate.year,
+                                                  currentStartDate.month,
+                                                  currentStartDate.day,
+                                                );
+                                                final earliestEndDay =
+                                                    minEndDateTime != null
+                                                    ? DateTime(
+                                                        minEndDateTime.year,
+                                                        minEndDateTime.month,
+                                                        minEndDateTime.day,
+                                                      )
+                                                    : startDay;
+                                                final firstDate = hasNotStarted
+                                                    ? (startDate ??
+                                                          currentStartDate)
+                                                    : (earliestEndDay.isAfter(
+                                                            startDay,
+                                                          )
+                                                          ? earliestEndDay
+                                                          : startDay);
                                                 final picked =
                                                     await showDatePicker(
                                                       context: context,
                                                       initialDate:
                                                           endDate ??
                                                           currentEndDate,
-                                                      firstDate: hasNotStarted
-                                                          ? (startDate ??
-                                                                currentStartDate)
-                                                          : currentStartDate,
+                                                      firstDate: firstDate,
                                                       lastDate: DateTime.now()
                                                           .add(
                                                             const Duration(
@@ -904,11 +1189,10 @@ class SettingsPartyEditDialog {
                                                     Expanded(
                                                       child: Text(
                                                         endDate != null
-                                                            ? intl.DateFormat.yMd(
-                                                                Localizations.localeOf(
-                                                                  context,
-                                                                ).toString(),
-                                                              ).format(endDate!)
+                                                            ? FormattingUtils.formatDateForLocale(
+                                                                endDate!,
+                                                                context,
+                                                              )
                                                             : l10n.party_not_selected,
                                                         style: const TextStyle(
                                                           fontSize: 14,
@@ -947,18 +1231,32 @@ class SettingsPartyEditDialog {
                                               valueMinute: endMinute,
                                               availableHours:
                                                   PartyTimeHelpers.getAvailableEndHours(
-                                                    startDate,
-                                                    startHour,
-                                                    startMinute,
+                                                    startDate ??
+                                                        currentStartDate,
+                                                    isPartyRunning
+                                                        ? currentStartDate.hour
+                                                        : startHour,
+                                                    isPartyRunning
+                                                        ? currentStartDate.minute
+                                                        : startMinute,
                                                     endDate,
+                                                    minEndDateTime:
+                                                        minEndDateTime,
                                                   ),
                                               availableMinutes:
                                                   PartyTimeHelpers.getAvailableEndMinutes(
-                                                    startDate,
-                                                    startHour,
-                                                    startMinute,
+                                                    startDate ??
+                                                        currentStartDate,
+                                                    isPartyRunning
+                                                        ? currentStartDate.hour
+                                                        : startHour,
+                                                    isPartyRunning
+                                                        ? currentStartDate.minute
+                                                        : startMinute,
                                                     endDate,
                                                     endHour,
+                                                    minEndDateTime:
+                                                        minEndDateTime,
                                                   ),
                                               enabled: endDate != null,
                                               labelHour: l10n.select_hour,
@@ -1051,7 +1349,8 @@ class SettingsPartyEditDialog {
                                               ? 1
                                               : selectedUserLimit,
                                           decoration: InputDecoration(
-                                            labelText: l10n.party_user_limit,
+                                            labelText:
+                                                l10n.party_registered_app_guest,
                                             border: const OutlineInputBorder(),
                                             prefixIcon: Icon(
                                               Icons.person,
@@ -1059,6 +1358,19 @@ class SettingsPartyEditDialog {
                                               color: isFreeEdit
                                                   ? Colors.grey
                                                   : null,
+                                            ),
+                                            suffixIcon: IconButton(
+                                              icon: Icon(
+                                                Icons.info_outline,
+                                                color: Colors.grey.shade400,
+                                                size: 20,
+                                              ),
+                                              tooltip: l10n
+                                                  .party_registered_app_guest_info_title,
+                                              onPressed: () =>
+                                                  _showRegisteredAppGuestInfo(
+                                                    context,
+                                                  ),
                                             ),
                                             isDense: true,
                                             filled: isFreeEdit,
@@ -1096,6 +1408,21 @@ class SettingsPartyEditDialog {
                                       ),
                                     ),
                                   ],
+                                  const SizedBox(height: 8),
+                                  PartyPreWishSettingsField(
+                                    allowPreWishes: allowPreWishes,
+                                    limitPerGuest: preWishLimitPerGuest,
+                                    onAllowChanged: (v) {
+                                      setDialogState(() {
+                                        allowPreWishes = v;
+                                      });
+                                    },
+                                    onLimitChanged: (n) {
+                                      setDialogState(() {
+                                        preWishLimitPerGuest = n;
+                                      });
+                                    },
+                                  ),
                                 ],
                               ),
                             ),
@@ -1379,6 +1706,12 @@ class SettingsPartyEditDialog {
                                                   newEndTimePosix * 1000,
                                                 ),
                                             'timezone_id': editTimezoneId,
+                                            'allow_pre_wishes': allowPreWishes,
+                                            'pre_wish_limit_per_guest':
+                                                PreWishLimitService.clampForSave(
+                                              preWishLimitPerGuest,
+                                              allowPreWishes: allowPreWishes,
+                                            ),
                                             'guest_limit_per_hour': isFreeEdit
                                                 ? 1
                                                 : selectedGuestLimit,
@@ -1453,6 +1786,41 @@ class SettingsPartyEditDialog {
                                                 Timestamp.fromMillisecondsSinceEpoch(
                                                   newStartTimePosix! * 1000,
                                                 ); // Abgeleitet vom POSIX-Wert
+                                          }
+
+                                          if (showEditFloorField) {
+                                            if (editOccupiedFloorKeys.contains(
+                                                  editSelectedFloorKey,
+                                                ) &&
+                                                editSelectedFloorKey !=
+                                                    initialEditFloorKey) {
+                                              if (context.mounted) {
+                                                ScaffoldMessenger.of(context)
+                                                    .showSnackBar(
+                                                  SnackBar(
+                                                    content: Text(
+                                                      l10n
+                                                          .party_floor_swap_after_save_hint,
+                                                    ),
+                                                  ),
+                                                );
+                                              }
+                                              return;
+                                            }
+                                            updateData['floor_key'] =
+                                                editSelectedFloorKey;
+                                            if (!FloorKeyUtils.isDefaultFloorKey(
+                                              editSelectedFloorKey,
+                                            )) {
+                                              final fl = editVenueModel
+                                                  ?.floorByKey(
+                                                    editSelectedFloorKey,
+                                                  )
+                                                  ?.label;
+                                              if (fl != null) {
+                                                updateData['floor_label'] = fl;
+                                              }
+                                            }
                                           }
 
                                           await FirebaseFirestore.instance

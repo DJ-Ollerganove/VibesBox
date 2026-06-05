@@ -13,7 +13,7 @@ import '../models/song_request.dart';
 import '../widgets/empty_list_message.dart';
 import '../widgets/sticky_pagination_layout.dart';
 import '../widgets/wish_card.dart';
-import '../widgets/no_active_party_display.dart';
+import '../widgets/dj_wish_party_scope.dart';
 import '../widgets/pro_promotion_banner.dart';
 import '../services/user_service.dart';
 import '../services/duplicate_check_service.dart';
@@ -22,6 +22,7 @@ import '../utils/wish_grouping_helper.dart';
 import '../services/wish_management_service.dart';
 import '../utils/debug_log.dart';
 import '../utils/string_utils.dart';
+import '../utils/wish_party_filter.dart';
 
 /// DJ-Übersicht: abgelehnte Wünsche (ehemals [AbgelehntPage]).
 class RejectedWishesPage extends StatefulWidget {
@@ -57,10 +58,6 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
     return _cachedRejectedWishesStream!;
   }
 
-  void _tearDownRejectedStream() {
-    _cachedRejectedStreamPartyId = null;
-    _cachedRejectedWishesStream = null;
-  }
 
   @override
   void initState() {
@@ -196,32 +193,14 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
       totalPages: 1,
       onPrevious: null,
       onNext: null,
-      child: ValueListenableBuilder<ActivePartyInfo?>(
-        valueListenable: ActivePartyService.storedSessionNotifier,
-        builder: (context, info, _) {
-          final effectivePartyId = info?.partyId;
-          if (effectivePartyId == null || effectivePartyId.isEmpty) {
-            _tearDownRejectedStream();
-            return const KeyedSubtree(
-              key: ValueKey<String>('none'),
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: Center(child: NoActivePartyDisplay()),
-                  ),
-                ],
-              ),
-            );
-          }
-          return KeyedSubtree(
-            key: ValueKey<String>(effectivePartyId),
-            child: StreamBuilder<QuerySnapshot>(
-              stream: _rejectedWishesStreamForParty(effectivePartyId),
-              builder: (context, snapshot) => _buildWishesListWithPartyId(
-                context,
-                snapshot,
-                effectivePartyId,
-              ),
+      child: DjWishPartyScope(
+        builder: (context, effectivePartyId) {
+          return StreamBuilder<QuerySnapshot>(
+            stream: _rejectedWishesStreamForParty(effectivePartyId),
+            builder: (context, snapshot) => _buildWishesListWithPartyId(
+              context,
+              snapshot,
+              effectivePartyId,
             ),
           );
         },
@@ -281,9 +260,9 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
     final partyFilteredDocs = wishesDocs
         .where((doc) {
           final data = doc.data() as Map<String, dynamic>;
-          final docPartyId = data['party_id'] as String?;
-          final matches = docPartyId == partyId;
+          final matches = wishDocDataMatchesPartyId(data, partyId);
           if (kDebugMode && !matches) {
+            final docPartyId = data['party_id'] ?? data['partyId'];
             debugLog(
               '🚫 PARTY-FILTER: Dokument ${doc.id} gehört zu Party "$docPartyId", erwartet "$partyId" - wird ausgeschlossen',
             );
@@ -340,13 +319,17 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
       );
     }
 
-    rejectedWishes.sort((a, b) =>
+    final primaryRejectedWishes =
+        WishGroupingHelper.withoutDuplicateShadowDocuments(rejectedWishes);
+
+    primaryRejectedWishes.sort((a, b) =>
         b.sortTimestampRejected.compareTo(a.sortTimestampRejected));
 
     final groupedResult = WishGroupingHelper.groupWishes(
-      rejectedWishes,
+      primaryRejectedWishes,
       listSort: WishGroupListSort.byRejectedTimestamp,
       sessionPartyId: partyId,
+      allRequestsForTimestamps: rejectedWishes,
     );
     final allGroupedList =
         groupedResult['groups'] as List<Map<String, dynamic>>;
@@ -441,7 +424,7 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
                 if (isFree && index % 6 == 5) {
                   return const ProPromotionBanner();
                 }
-                final dataIndex = index - (index ~/ 6);
+                final dataIndex = isFree ? index - (index ~/ 6) : index;
                 final groupedItem = paginatedGroupedList[dataIndex];
                 final groupKey = groupedItem['key'] as String;
                 final data = groupedItem['data'] as Map<String, dynamic>;

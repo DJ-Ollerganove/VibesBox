@@ -1,8 +1,9 @@
 import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
 import 'package:purchases_flutter/purchases_flutter.dart';
 
-import '../config/app_config.dart';
 import '../utils/debug_log.dart';
+import 'revenue_cat_api_key_stub.dart'
+    if (dart.library.io) 'revenue_cat_api_key_io.dart' as revenue_cat_api_key;
 
 /// Startet [Purchases.configure] kurz verzögert und koppelt alle SDK-Aufrufe daran,
 /// damit der Main-Thread beim Cold-Start weniger blockiert.
@@ -24,8 +25,9 @@ class RevenueCatBootstrap {
       if (kDebugMode) {
         await Purchases.setLogLevel(LogLevel.error);
       }
+      final apiKey = revenue_cat_api_key.resolveRevenueCatApiKey();
       await Purchases.configure(
-        PurchasesConfiguration(AppConfig.revenueCatApiKey),
+        PurchasesConfiguration(apiKey),
       );
       debugLog('💳 RevenueCat initialisiert');
     } catch (e) {

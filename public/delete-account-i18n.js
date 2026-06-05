@@ -72,7 +72,7 @@
     return list.length ? list.map(function (e) { return e.code; })
       : ((window.DEFAULT_PWA_LANGUAGES && window.DEFAULT_PWA_LANGUAGES.length)
         ? window.DEFAULT_PWA_LANGUAGES.map(function (e) { return e.code; })
-        : ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi']);
+        : ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi']);
   }
 
   function syncDeleteAccountDom(lang) {

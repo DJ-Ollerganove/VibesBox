@@ -1,4 +1,4 @@
-const CACHE_NAME = 'dj-wunschbox-v4';
+const CACHE_NAME = 'dj-wunschbox-v6';
 const urlsToCache = [
   '/vb/',
   '/vb/index.html',

@@ -3,9 +3,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../../../l10n/app_localizations.dart';
 import '../../../helpers/security_helper.dart';
+import '../../../services/countries_service.dart';
 import '../../../utils/sanitize.dart' show sanitizeInput, sanitizeEmail;
 import '../../../utils/ui_constants.dart';
 import '../../../utils/debug_log.dart';
+import '../../../utils/wish_paths.dart';
 /// Zentrale Klasse für die Profil-Bearbeiten-Dialoge (Daten, Name, E-Mail).
 /// Controller werden von der ProfilPage übergeben; Callbacks für UI-Updates (z. B. onSaved).
 class ProfileEditDialogs {
@@ -185,6 +187,28 @@ class ProfileEditDialogs {
     );
   }
 
+  static InputDecoration _countryFieldDecoration(String labelText) {
+    return InputDecoration(
+      labelText: labelText,
+      labelStyle: TextStyle(color: Colors.grey[400]),
+      prefixIcon: const Icon(Icons.public, color: Colors.white54),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: UIConstants.appOrange),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: UIConstants.appOrange.withValues(alpha: 0.7)),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: UIConstants.appOrange, width: 2),
+      ),
+      filled: true,
+      fillColor: Colors.black,
+    );
+  }
+
   /// Zeigt den Dialog "Persönliche Daten" (DJ Name, Echter Name, Telefon). Controller und onSaved werden übergeben.
   static Future<void> showPersonalDataDialog(
     BuildContext context,
@@ -197,15 +221,21 @@ class ProfileEditDialogs {
   }) async {
     if (!context.mounted) return;
     final localizations = AppLocalizations.of(context)!;
-    final doc = await FirebaseFirestore.instance
+    final docFuture = FirebaseFirestore.instance
         .collection('users')
         .doc(user.uid)
         .get();
+    final countriesFuture = isGuest
+        ? Future<List<CountryEntry>>.value(const [])
+        : CountriesService.getCountriesOnce();
+    final doc = await docFuture;
+    final countries = await countriesFuture;
     final data = doc.data() as Map<String, dynamic>? ?? {};
     djNameController.text =
         user.displayName ?? data['displayName'] as String? ?? '';
     realNameController.text = data['realName'] as String? ?? '';
     phoneController.text = data['phoneNumber'] as String? ?? '';
+    var selectedCountryCode = data['country'] as String?;
     final formKey = GlobalKey<FormState>();
     if (!context.mounted) return;
 
@@ -223,100 +253,159 @@ class ProfileEditDialogs {
             });
           }
         },
-        child: styledDialog(
-          context: context,
-          title: isGuest
-              ? (localizations.profile_guest_name_title)
-              : (localizations.profile_personal_data),
-          content: Form(
-            key: formKey,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  TextFormField(
-                    controller: djNameController,
-                    maxLength: 50,
-                    decoration: _personalFieldDecoration(
-                      dialogContext,
-                      isGuest
-                          ? (localizations.profile_field_name)
-                          : (localizations.dj_name_label),
-                      icon: Icons.person_outline,
-                    ),
-                    style: const TextStyle(color: Colors.white),
-                    textCapitalization: TextCapitalization.words,
-                    validator: (v) {
-                      if (v == null || v.trim().isEmpty)
-                        return localizations.name_cannot_be_empty;
-                      if (v.trim().length < 3)
-                        return localizations.name_too_short;
-                      if (_isNameBlocked(v))
-                        return localizations.name_not_allowed;
-                      return null;
-                    },
-                  ),
-                  if (!isGuest) ...[
-                    const SizedBox(height: 16),
+        child: StatefulBuilder(
+          builder: (dialogContext, setDialogState) => styledDialog(
+            context: context,
+            title: isGuest
+                ? (localizations.profile_guest_name_title)
+                : (localizations.profile_personal_data),
+            content: Form(
+              key: formKey,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
                     TextFormField(
-                      controller: realNameController,
-                      maxLength: 80,
+                      controller: djNameController,
+                      maxLength: 50,
                       decoration: _personalFieldDecoration(
                         dialogContext,
-                        localizations.real_name_label,
-                        icon: Icons.badge_outlined,
+                        isGuest
+                            ? (localizations.profile_field_name)
+                            : (localizations.dj_name_label),
+                        icon: Icons.person_outline,
                       ),
                       style: const TextStyle(color: Colors.white),
                       textCapitalization: TextCapitalization.words,
+                      validator: (v) {
+                        if (v == null || v.trim().isEmpty) {
+                          return localizations.name_cannot_be_empty;
+                        }
+                        if (v.trim().length < 3) {
+                          return localizations.name_too_short;
+                        }
+                        if (_isNameBlocked(v)) {
+                          return localizations.name_not_allowed;
+                        }
+                        return null;
+                      },
                     ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: phoneController,
-                      maxLength: 40,
-                      decoration: _personalFieldDecoration(
-                        dialogContext,
-                        localizations.phone_label,
-                        icon: Icons.phone_outlined,
+                    if (!isGuest) ...[
+                      const SizedBox(height: 16),
+                      TextFormField(
+                        controller: realNameController,
+                        maxLength: 80,
+                        decoration: _personalFieldDecoration(
+                          dialogContext,
+                          localizations.real_name_label,
+                          icon: Icons.badge_outlined,
+                        ),
+                        style: const TextStyle(color: Colors.white),
+                        textCapitalization: TextCapitalization.words,
                       ),
-                      style: const TextStyle(color: Colors.white),
-                      keyboardType: TextInputType.phone,
-                    ),
+                      const SizedBox(height: 16),
+                      if (countries.isEmpty)
+                        const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(12),
+                            child: SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          ),
+                        )
+                      else
+                        DropdownButtonFormField<String>(
+                          key: ValueKey<String?>(selectedCountryCode),
+                          initialValue: selectedCountryCode,
+                          isExpanded: true,
+                          menuMaxHeight: 400,
+                          itemHeight: 56,
+                          dropdownColor: const Color(0xFF1F2937),
+                          style: const TextStyle(color: Colors.white),
+                          decoration: _countryFieldDecoration(
+                            localizations.profile_country,
+                          ),
+                          items: countries
+                              .map(
+                                (c) => DropdownMenuItem<String>(
+                                  value: c.code,
+                                  child: SizedBox(
+                                    width: double.infinity,
+                                    child: Text(
+                                      c.name,
+                                      softWrap: true,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (v) {
+                            setDialogState(() => selectedCountryCode = v);
+                          },
+                          validator: (v) {
+                            if (v == null || v.isEmpty) {
+                              return '${localizations.profile_country}: '
+                                  '${localizations.party_not_selected}';
+                            }
+                            return null;
+                          },
+                        ),
+                      const SizedBox(height: 16),
+                      TextFormField(
+                        controller: phoneController,
+                        maxLength: 40,
+                        decoration: _personalFieldDecoration(
+                          dialogContext,
+                          localizations.phone_label,
+                          icon: Icons.phone_outlined,
+                        ),
+                        style: const TextStyle(color: Colors.white),
+                        keyboardType: TextInputType.phone,
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                FocusManager.instance.primaryFocus?.unfocus();
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (dialogContext.mounted)
-                    Navigator.of(dialogContext, rootNavigator: true).pop(false);
-                });
-              },
-              child: Text(localizations.cancel),
-            ),
-            TextButton(
-              onPressed: () {
-                if (formKey.currentState!.validate()) {
+            actions: [
+              TextButton(
+                onPressed: () {
                   FocusManager.instance.primaryFocus?.unfocus();
                   WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (dialogContext.mounted)
-                      Navigator.of(
-                        dialogContext,
-                        rootNavigator: true,
-                      ).pop(true);
+                    if (dialogContext.mounted) {
+                      Navigator.of(dialogContext, rootNavigator: true)
+                          .pop(false);
+                    }
                   });
-                }
-              },
-              style: TextButton.styleFrom(
-                foregroundColor: UIConstants.appOrange,
+                },
+                child: Text(localizations.cancel),
               ),
-              child: Text(localizations.save),
-            ),
-          ],
+              TextButton(
+                onPressed: () {
+                  if (formKey.currentState!.validate()) {
+                    FocusManager.instance.primaryFocus?.unfocus();
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (dialogContext.mounted) {
+                        Navigator.of(
+                          dialogContext,
+                          rootNavigator: true,
+                        ).pop(true);
+                      }
+                    });
+                  }
+                },
+                style: TextButton.styleFrom(
+                  foregroundColor: UIConstants.appOrange,
+                ),
+                child: Text(localizations.save),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -345,6 +434,9 @@ class ProfileEditDialogs {
         updateData['phoneNumber'] = newPhone.isEmpty
             ? FieldValue.delete()
             : newPhone;
+        if (selectedCountryCode != null && selectedCountryCode!.isNotEmpty) {
+          updateData['country'] = selectedCountryCode;
+        }
       }
       await FirebaseFirestore.instance
           .collection('users')
@@ -486,8 +578,7 @@ class ProfileEditDialogs {
       }
       if (oldName.isNotEmpty) {
         try {
-          final wishesQuery = await FirebaseFirestore.instance
-              .collection('wishes')
+          final wishesQuery = await WishPaths.allWishesCollectionGroup()
               .where('name', isEqualTo: oldName)
               .get();
           if (wishesQuery.docs.isNotEmpty) {
@@ -545,6 +636,7 @@ class ProfileEditDialogs {
     final confirmEmailController = TextEditingController();
     final reauthFormKey = GlobalKey<FormState>();
     final emailFormKey = GlobalKey<FormState>();
+    var showReauthPassword = false;
 
     TextButton compactActionButton({
       required BuildContext dialogContext,
@@ -570,56 +662,72 @@ class ProfileEditDialogs {
       final reauthConfirmed = await showDialog<bool>(
         context: context,
         barrierDismissible: false,
-        builder: (dialogContext) => styledDialog(
-          context: dialogContext,
-          title: localizations.confirm_password,
-          content: Form(
-            key: reauthFormKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  localizations.email_change_reauth_hint,
-                  style: const TextStyle(color: Colors.white70),
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: passwordController,
-                  obscureText: true,
-                  autofocus: true,
-                  decoration: _personalFieldDecoration(
-                    dialogContext,
-                    localizations.your_password,
-                    icon: Icons.lock_outline,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (dialogContext, setDialogState) => styledDialog(
+            context: dialogContext,
+            title: localizations.confirm_password,
+            content: Form(
+              key: reauthFormKey,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    localizations.email_change_reauth_hint,
+                    style: const TextStyle(color: Colors.white70),
                   ),
-                  style: const TextStyle(color: Colors.white),
-                  validator: (value) {
-                    if ((value ?? '').trim().isEmpty) {
-                      return localizations.password_cannot_be_empty;
-                    }
-                    return null;
-                  },
-                ),
-              ],
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: passwordController,
+                    obscureText: !showReauthPassword,
+                    autofocus: true,
+                    decoration: _personalFieldDecoration(
+                      dialogContext,
+                      localizations.your_password,
+                      icon: Icons.lock_outline,
+                    ).copyWith(
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                          showReauthPassword
+                              ? Icons.visibility
+                              : Icons.visibility_off,
+                          color: Colors.white54,
+                        ),
+                        onPressed: () {
+                          setDialogState(() {
+                            showReauthPassword = !showReauthPassword;
+                          });
+                        },
+                      ),
+                    ),
+                    style: const TextStyle(color: Colors.white),
+                    validator: (value) {
+                      if ((value ?? '').trim().isEmpty) {
+                        return localizations.password_cannot_be_empty;
+                      }
+                      return null;
+                    },
+                  ),
+                ],
+              ),
             ),
+            actions: [
+              compactActionButton(
+                dialogContext: dialogContext,
+                label: localizations.cancel,
+                onPressed: () =>
+                    Navigator.of(dialogContext, rootNavigator: true).pop(false),
+              ),
+              compactActionButton(
+                dialogContext: dialogContext,
+                label: localizations.confirm,
+                onPressed: () {
+                  if (reauthFormKey.currentState?.validate() != true) return;
+                  Navigator.of(dialogContext, rootNavigator: true).pop(true);
+                },
+              ),
+            ],
           ),
-          actions: [
-            compactActionButton(
-              dialogContext: dialogContext,
-              label: localizations.cancel,
-              onPressed: () =>
-                  Navigator.of(dialogContext, rootNavigator: true).pop(false),
-            ),
-            compactActionButton(
-              dialogContext: dialogContext,
-              label: localizations.confirm,
-              onPressed: () {
-                if (reauthFormKey.currentState?.validate() != true) return;
-                Navigator.of(dialogContext, rootNavigator: true).pop(true);
-              },
-            ),
-          ],
         ),
       );
 

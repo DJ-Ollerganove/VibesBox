@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../config/app_config.dart';
 import 'user_service.dart';
 import '../utils/debug_log.dart';
+import '../utils/wish_paths.dart';
 
 /// Statistik für eine einzelne Party
 class PartyStatistics {
@@ -66,11 +67,8 @@ class PartyStatisticsService {
       final effectiveDjId = _getEffectiveDjId(djId);
       debugLog('DEBUG STATS: Abfrage läuft für DJ-ID: $effectiveDjId (adminDjId: ${AppConfig.adminDjId})');
       
-      Query query = FirebaseFirestore.instance
-          .collection('wishes')
-          .where('party_id', isEqualTo: partyId);
+      Query query = WishPaths.partyWishes(partyId);
 
-      // Verwende die effektive DJ-ID für den Filter
       if (effectiveDjId.isNotEmpty) {
         query = query.where('djId', isEqualTo: effectiveDjId);
       }
@@ -164,11 +162,8 @@ class PartyStatisticsService {
     final effectiveDjId = _getEffectiveDjId(djId);
     debugLog('DEBUG STATS: Stream-Abfrage läuft für DJ-ID: $effectiveDjId (adminDjId: ${AppConfig.adminDjId})');
 
-    Query query = FirebaseFirestore.instance
-        .collection('wishes')
-        .where('party_id', isEqualTo: partyId);
+    Query query = WishPaths.partyWishes(partyId);
 
-    // Verwende die effektive DJ-ID für den Filter
     if (effectiveDjId.isNotEmpty) {
       query = query.where('djId', isEqualTo: effectiveDjId);
     }
@@ -281,10 +276,8 @@ class PartyStatisticsService {
       }
 
       // Finde pending-Wünsche für diese Party (mit djId-Filter für Sicherheit)
-      Query wishesQuery = FirebaseFirestore.instance
-          .collection('wishes')
-          .where('status', isEqualTo: 'pending')
-          .where('party_id', isEqualTo: partyId);
+      Query wishesQuery = WishPaths.partyWishes(partyId)
+          .where('status', isEqualTo: 'pending');
       
       // Zusätzlicher Filter nach djId für Sicherheit (verwendet die effektive DJ-ID)
       if (djId.isNotEmpty) {

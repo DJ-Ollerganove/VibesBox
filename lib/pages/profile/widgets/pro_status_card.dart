@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import '../../../l10n/app_localizations.dart';
+import '../../../utils/formatting_utils.dart';
 import '../../../pages/paywall_page.dart';
 import '../../../services/subscription_sync_service.dart';
 import '../../../services/user_service.dart';
@@ -46,9 +46,7 @@ class _ProStatusCardState extends State<ProStatusCard> {
           });
         }
 
-        final locale = Localizations.localeOf(context);
         final loc = AppLocalizations.of(context)!;
-        final dateFormat = DateFormat.yMd(locale.toString());
 
         return Column(
           children: [
@@ -112,7 +110,7 @@ class _ProStatusCardState extends State<ProStatusCard> {
                       const SizedBox(height: 8),
                       if (isActive && expiryDate != null)
                         Text(
-                          '${loc.pro_runs_until} ${dateFormat.format(expiryDate)}',
+                          '${loc.pro_runs_until} ${FormattingUtils.formatDateForLocale(expiryDate, context)}',
                           style: const TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w500),
                         )
                       else if (!isActive)

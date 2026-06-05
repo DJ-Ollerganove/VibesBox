@@ -7,7 +7,7 @@ import '../../services/party_session_service.dart';
 import '../../utils/ui_constants.dart';
 import '../../models/playlist_model.dart';
 import '../../services/history_pagination_service.dart';
-import '../../services/results_per_page_service.dart';
+import '../../services/guest_results_per_page_service.dart';
 import '../../utils/footer_helper.dart';
 import '../../widgets/scroll_indicator_overlay.dart';
 import 'widgets/song_tile.dart';
@@ -23,12 +23,14 @@ class HistoryGuestPage extends StatefulWidget {
 
 class _HistoryGuestPageState extends State<HistoryGuestPage> {
   int _currentPage = 1;
-  int _resultsPerPage = ResultsPerPageService.defaultResultsPerPage;
+  int _resultsPerPage = GuestResultsPerPageService.defaultResultsPerPage;
   final List<StreamSubscription<QuerySnapshot<Map<String, dynamic>>>> _trackSubscriptions = [];
   final StreamController<List<TrackEntry>> _tracksController = StreamController<List<TrackEntry>>.broadcast();
   List<QueryDocumentSnapshot<Map<String, dynamic>>>? _currentSessionDocs;
   String? _currentDjId;
   String? _currentPartyId;
+  /// Verhindert bei jedem [StreamBuilder]-Rebuild erneutes Listener-Setup / mehrfaches Fallback-Laden.
+  String? _lastTracksBindingKey;
 
   /// Nach erstem [PartySessionService]-Load: Header-Subtitle und Body nutzen dieselbe Quelle.
   bool _guestSessionResolved = false;
@@ -39,7 +41,7 @@ class _HistoryGuestPageState extends State<HistoryGuestPage> {
   void initState() {
     super.initState();
     unawaited(_resolveGuestSession());
-    ResultsPerPageService.load().then((v) {
+    GuestResultsPerPageService.load().then((v) {
       if (mounted) setState(() => _resultsPerPage = v);
     });
   }
@@ -476,16 +478,21 @@ class _HistoryGuestPageState extends State<HistoryGuestPage> {
                       _currentDjId = djId;
                       _currentPartyId = partyId;
 
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (!mounted) return;
-                        if (sessionId != null && sessionId.isNotEmpty) {
-                          _setupTracksStreamForSession(sessionId);
-                        } else {
-                          _setupTracksStreamForSession(null);
-                          // Fallback: letzte Tracks der Party einmalig laden
-                          _loadTracksFallback(djId, partyId);
-                        }
-                      });
+                      final bindingKey = sessionId != null && sessionId.isNotEmpty
+                          ? 'session:$sessionId'
+                          : 'fallback:$djId|$partyIdNorm';
+                      if (bindingKey != _lastTracksBindingKey) {
+                        _lastTracksBindingKey = bindingKey;
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (!mounted) return;
+                          if (sessionId != null && sessionId.isNotEmpty) {
+                            _setupTracksStreamForSession(sessionId);
+                          } else {
+                            _setupTracksStreamForSession(null);
+                            _loadTracksFallback(djId, partyId);
+                          }
+                        });
+                      }
 
                       // Immer Tracks-Stream anzeigen (initialData: [], kein Hänger)
                       return StreamBuilder<List<TrackEntry>>(

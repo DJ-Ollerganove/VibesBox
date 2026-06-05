@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart' as intl;
 import '../../../models/playlist_model.dart';
 import '../../../l10n/app_localizations.dart';
+import '../../../utils/formatting_utils.dart';
 import '../../../utils/relative_time_minutes.dart';
 
 /// Widget für die Anzeige eines einzelnen Songs in der History
@@ -119,8 +119,7 @@ class SongTile extends StatelessWidget {
       final hours = elapsed ~/ 60;
       return (l.history_time_hours_ago(hours));
     }
-    final tag = Localizations.localeOf(context).toString();
-    return intl.DateFormat.jm(tag).format(timestamp);
+    return FormattingUtils.formatTime(timestamp, context);
   }
 }
 

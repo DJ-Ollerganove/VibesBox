@@ -5,6 +5,7 @@ import 'dart:async';
 import 'main.dart' show buildFirebaseErrorWidget;
 import 'l10n/app_localizations.dart';
 import '../services/active_party_service.dart';
+import '../services/open_wishes_visibility_service.dart';
 import '../services/history_pagination_service.dart';
 import '../services/wish_management_service.dart';
 import '../services/user_blocking_service.dart';
@@ -12,12 +13,15 @@ import '../services/duplicate_check_service.dart';
 import '../services/results_per_page_service.dart';
 import '../utils/ui_constants.dart';
 import '../utils/string_utils.dart';
+import '../utils/pre_wish_helper.dart';
 import '../utils/wish_grouping_helper.dart';
 import '../models/song_request.dart';
 import '../widgets/empty_list_message.dart';
 import '../widgets/sticky_pagination_layout.dart';
 import '../widgets/wish_card.dart';
 import '../widgets/no_active_party_display.dart';
+import '../utils/wish_paths.dart';
+import '../utils/wish_party_filter.dart';
 import '../widgets/pro_promotion_banner.dart';
 import '../services/user_service.dart';
 import 'utils/debug_log.dart';
@@ -61,6 +65,8 @@ class _OffenPageState extends OffenPageState
   StreamSubscription<QuerySnapshot>? _favoritePresenceSub;
   String? _favoritePresencePartyId;
 
+  String? _lastHandledPartyId;
+
   Stream<QuerySnapshot> _pendingWishesStreamForParty(String partyId) {
     if (_cachedPendingStreamPartyId != partyId) {
       _cachedPendingStreamPartyId = partyId;
@@ -76,9 +82,7 @@ class _OffenPageState extends OffenPageState
     }
     unawaited(_favoritePresenceSub?.cancel());
     _favoritePresencePartyId = partyId;
-    _favoritePresenceSub = FirebaseFirestore.instance
-        .collection('wishes')
-        .where('party_id', isEqualTo: partyId)
+    _favoritePresenceSub = WishPaths.partyWishes(partyId)
         .where('status', isEqualTo: 'pending')
         .where('is_favorite', isEqualTo: true)
         .limit(1)
@@ -99,10 +103,119 @@ class _OffenPageState extends OffenPageState
     unawaited(_favoritePresenceSub?.cancel());
     _favoritePresenceSub = null;
     _favoritePresencePartyId = null;
+    _lastHandledPartyId = null;
+  }
+
+  void _handleActivePartyIdChanged(String? partyId) {
+    if (partyId == _lastHandledPartyId) return;
+    _lastHandledPartyId = partyId;
+    if (partyId == null || partyId.isEmpty) {
+      _tearDownPartyStreams();
+      return;
+    }
+    _ensureFavoritePresenceListener(partyId);
+  }
+
+  Future<void> _confirmHideGraceWishes(BuildContext context, String partyId) async {
+    final l = AppLocalizations.of(context)!;
+    final isRtl = ['ar', 'he', 'fa', 'ur']
+        .contains(Localizations.localeOf(context).languageCode);
+    const accent = UIConstants.frameOffen;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => Directionality(
+        textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
+        child: Dialog(
+          backgroundColor: Colors.transparent,
+          child: Container(
+            decoration: BoxDecoration(
+              gradient: UIConstants.colorGreyGradient,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: accent, width: 2),
+            ),
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: isRtl
+                  ? CrossAxisAlignment.end
+                  : CrossAxisAlignment.start,
+              children: [
+                Text(
+                  l.grace_period_hide_wishes_now,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  textAlign: isRtl ? TextAlign.right : TextAlign.left,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  l.grace_period_hide_wishes_confirm,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 15,
+                    height: 1.35,
+                  ),
+                  textAlign: isRtl ? TextAlign.right : TextAlign.left,
+                ),
+                const SizedBox(height: 24),
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.of(ctx).pop(false),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.grey.shade800,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                        child: Text(l.cancel),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.of(ctx).pop(true),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: accent,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                        child: Text(l.grace_period_hide_now),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    try {
+      await OpenWishesVisibilityService.hideWishesNow(partyId);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(l.snackbar_grace_wishes_hidden),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(l.error),
+          backgroundColor: Colors.red.shade800,
+        ),
+      );
+    }
   }
 
   @override
-  bool get wantKeepAlive => true; // Tab-State beim Wechsel zu Gespielt/Abgelehnt erhalten – verhindert dispose + Neubau
+  bool get wantKeepAlive => true;
 
   @override
   void initState() {
@@ -114,6 +227,7 @@ class _OffenPageState extends OffenPageState
     ResultsPerPageService.load().then((v) {
       if (mounted) setState(() => _resultsPerPage = v);
     });
+    widget.onPageOpened?.call();
   }
 
   /// Prüft ob Favoriten vorhanden sind
@@ -267,14 +381,13 @@ class _OffenPageState extends OffenPageState
       totalPages: 1,
       onPrevious: null,
       onNext: null,
-      child: ValueListenableBuilder<ActivePartyInfo?>(
-        valueListenable: ActivePartyService.storedSessionNotifier,
-        builder: (context, info, _) {
-          // Zentrale Session: nur storedSessionNotifier – kein Prefs-Fallback (Geister-Partys vermeiden).
-          // Key erzwingt sauberen Rebuild bei Party-Wechsel.
-          final activePartyId = info?.partyId;
+      child: StreamBuilder<OpenWishesVisibility?>(
+        stream: OpenWishesVisibilityService.watch(),
+        builder: (context, visibilitySnapshot) {
+          final visibility = visibilitySnapshot.data;
+          final activePartyId = visibility?.partyId;
           if (activePartyId == null || activePartyId.isEmpty) {
-            _tearDownPartyStreams();
+            _handleActivePartyIdChanged(null);
             return const KeyedSubtree(
               key: ValueKey<String>('none'),
               child: Stack(
@@ -286,16 +399,16 @@ class _OffenPageState extends OffenPageState
               ),
             );
           }
-          _ensureFavoritePresenceListener(activePartyId);
+          _handleActivePartyIdChanged(activePartyId);
           return KeyedSubtree(
             key: ValueKey<String>(activePartyId),
-            // Kein Prefs-Fallback: nur zentrale Session – sonst „Geister-Party“ bei verzögertem clear.
             child: StreamBuilder<QuerySnapshot>(
               stream: _pendingWishesStreamForParty(activePartyId),
               builder: (context, snapshot) => _buildWishesListWithPartyId(
                 context,
                 snapshot,
                 activePartyId,
+                visibility: visibility,
               ),
             ),
           );
@@ -307,8 +420,9 @@ class _OffenPageState extends OffenPageState
   Widget _buildWishesListWithPartyId(
     BuildContext context,
     AsyncSnapshot<QuerySnapshot> snapshot,
-    String partyId,
-  ) {
+    String partyId, {
+    OpenWishesVisibility? visibility,
+  }) {
     // Nur beim allerersten Laden ohne Daten: leere Platzhalter-UI (kein erneutes
     // „Leerflackern“ bei Stream-Neuaufbau, solange bereits Snapshots da waren).
     if (snapshot.connectionState == ConnectionState.waiting &&
@@ -343,7 +457,21 @@ class _OffenPageState extends OffenPageState
       return buildFirebaseErrorWidget(snapshot.error!);
     }
 
-    final wishesDocs = snapshot.data?.docs ?? [];
+    // Firestore-Snapshot: dieselbe doc.id darf nur einmal vorkommen (Cache/Listener-Grenzfall).
+    final wishesDocs = <QueryDocumentSnapshot>[];
+    final docsById = <String, QueryDocumentSnapshot>{};
+    for (final doc in snapshot.data?.docs ?? const <QueryDocumentSnapshot>[]) {
+      if (docsById.containsKey(doc.id)) {
+        if (kDebugMode) {
+          debugLog(
+            '⚠️ OffenPage: doppelte doc.id im Snapshot entfernt: ${doc.id}',
+          );
+        }
+        continue;
+      }
+      docsById[doc.id] = doc;
+      wishesDocs.add(doc);
+    }
 
     if (kDebugMode) {
       debugLog(
@@ -354,12 +482,12 @@ class _OffenPageState extends OffenPageState
       }
     }
 
-    // SICHERHEITS-PRÜFUNG: Filter nach party_id (partyId wie History/Gesperrt)
+    // Subcollection-Query: fehlendes party_id nicht hart ausfiltern (Migration).
     final partyFilteredDocs = wishesDocs.where((doc) {
       final data = doc.data() as Map<String, dynamic>;
-      final docPartyId = data['party_id'] as String?;
-      final matches = docPartyId == partyId;
+      final matches = wishDocDataMatchesPartyId(data, partyId);
       if (kDebugMode && !matches) {
+        final docPartyId = data['party_id'] ?? data['partyId'];
         debugLog(
           '🚫 PARTY-FILTER: Dokument ${doc.id} gehört zu Party "$docPartyId", erwartet "$partyId" - wird ausgeschlossen',
         );
@@ -392,7 +520,6 @@ class _OffenPageState extends OffenPageState
       }
     }
 
-    // Verwende partyFilteredDocs direkt (is_duplicate Filter entfernt, da Gruppierung jetzt party-spezifisch ist)
     final filteredDocs = partyFilteredDocs;
 
     if (kDebugMode) {
@@ -415,6 +542,7 @@ class _OffenPageState extends OffenPageState
       }
       try {
         final songRequest = SongRequest.fromDocument(doc);
+        if (PreWishHelper.isQueuedPreWishRequest(songRequest)) continue;
         openWishes.add(songRequest);
       } catch (e, stackTrace) {
         debugLog('❌ Fehler beim Konvertieren von Dokument ${doc.id}: $e');
@@ -425,22 +553,31 @@ class _OffenPageState extends OffenPageState
       }
     }
 
+    // Wie PWA / Gast „Deine Wünsche“: Shadow-Docs (`is_duplicate: true`) nicht als eigene Zeile.
+    final primaryOpenWishes =
+        WishGroupingHelper.withoutDuplicateShadowDocuments(openWishes);
+    if (kDebugMode && primaryOpenWishes.length != openWishes.length) {
+      debugLog(
+        '🔍 OffenPage: ${openWishes.length - primaryOpenWishes.length} is_duplicate-Shadow-Dokument(e) ausgeblendet',
+      );
+    }
+
     if (kDebugMode) {
       debugLog(
-        '🔍 [DEBUG] OffenPage: Nach Mapping: ${openWishes.length} SongRequest-Objekte erstellt',
+        '🔍 [DEBUG] OffenPage: Nach Mapping: ${primaryOpenWishes.length} primäre SongRequests (${openWishes.length} Docs gesamt)',
       );
     }
     if (kDebugMode && partyId == 'B5wSVwhA67bM5Igp7wj2') {
       debugLog(
-        '🔍 [DEBUG] OffenPage (Party B5wSVwhA67bM5Igp7wj2): docs=${wishesDocs.length} openWishes=${openWishes.length}',
+        '🔍 [DEBUG] OffenPage (Party B5wSVwhA67bM5Igp7wj2): docs=${wishesDocs.length} primaryOpen=${primaryOpenWishes.length}',
       );
     }
 
     // Favoriten-Filter: Nur Markierte anzeigen, wenn Filter aktiv
     final showOnlyFavorites = widget.showOnlyFavoritesNotifier?.value == true;
     final wishesToShow = showOnlyFavorites
-        ? openWishes.where((r) => r.isFavorite == true).toList()
-        : openWishes;
+        ? primaryOpenWishes.where((r) => r.isFavorite == true).toList()
+        : primaryOpenWishes;
     if (kDebugMode && partyId == 'B5wSVwhA67bM5Igp7wj2') {
       debugLog(
         '🔍 [DEBUG] OffenPage (Party B5wSVwhA67bM5Igp7wj2): showOnlyFavorites=$showOnlyFavorites wishesToShow=${wishesToShow.length}',
@@ -449,7 +586,7 @@ class _OffenPageState extends OffenPageState
 
     // Wenn Liste leer: Hinweis, ob Filter "Nur Favoriten" Wünsche ausblendet (verhindert "Song ist weg"-Eindruck)
     if (wishesToShow.isEmpty) {
-      final hiddenByFilter = showOnlyFavorites && openWishes.isNotEmpty;
+      final hiddenByFilter = showOnlyFavorites && primaryOpenWishes.isNotEmpty;
       final l10n = AppLocalizations.of(context)!;
       return SingleChildScrollView(
         padding: EdgeInsets.only(
@@ -487,7 +624,7 @@ class _OffenPageState extends OffenPageState
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: Text(
-                  l10n.offen_favorites_hidden(openWishes.length),
+                  l10n.offen_favorites_hidden(primaryOpenWishes.length),
                   style: TextStyle(
                     color: Theme.of(
                       context,
@@ -497,7 +634,7 @@ class _OffenPageState extends OffenPageState
                   textAlign: TextAlign.center,
                 ),
               ),
-            EmptyListMessage(),
+            if (!hiddenByFilter) EmptyListMessage(),
             const SizedBox(height: UIConstants.kFooterPadding * 2),
           ],
         ),
@@ -518,12 +655,17 @@ class _OffenPageState extends OffenPageState
     final groupedResult = WishGroupingHelper.groupWishes(
       sortedWishes,
       sessionPartyId: partyId,
+      allRequestsForTimestamps: openWishes,
     );
-    final allGroupedList =
-        groupedResult['groups'] as List<Map<String, dynamic>>;
     final groupedFirstRequests =
         groupedResult['firstRequests'] as Map<String, SongRequest>;
-    final groupedDocIds = groupedResult['docIds'] as Map<String, List<String>>;
+    final groupedDocIds = Map<String, List<String>>.from(
+      groupedResult['docIds'] as Map<String, List<String>>,
+    );
+    final allGroupedList = WishGroupingHelper.groupsWithUniqueDocumentIds(
+      groupedResult['groups'] as List<Map<String, dynamic>>,
+      groupedDocIds,
+    );
 
     // Paginierung: Berechne Seiten (Ergebnisse pro Seite aus Einstellungen)
     final totalPages = HistoryPaginationService.calculateTotalPages(
@@ -572,6 +714,26 @@ class _OffenPageState extends OffenPageState
         mainAxisSize: MainAxisSize.min,
         children: [
           const SizedBox(height: 24),
+          if (visibility?.showHideWishesButton == true)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () => _confirmHideGraceWishes(context, partyId),
+                  icon: const Icon(Icons.visibility_off, size: 20),
+                  label: Text(l10nList.grace_period_hide_wishes_now),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.orange,
+                    side: const BorderSide(color: Colors.orange),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                  ),
+                ),
+              ),
+            ),
           if (showOnlyFavorites && widget.showOnlyFavoritesNotifier != null)
             Padding(
               padding: const EdgeInsets.only(bottom: 16),
@@ -610,11 +772,17 @@ class _OffenPageState extends OffenPageState
                 if (isFree && index % 6 == 5) {
                   return const ProPromotionBanner();
                 }
-                final dataIndex = index - (index ~/ 6);
+                // Nur bei Free-Accounts Banner-Slots: sonst würde index~/6
+                // dieselbe Zeile zweimal rendern (gleiche doc.id, Löschen entfernt beide).
+                final dataIndex = isFree ? index - (index ~/ 6) : index;
                 final groupEntry = paginatedGroupedList[dataIndex];
                 final groupKey = groupEntry['key'] as String;
                 final data = groupEntry['data'] as Map<String, dynamic>;
-                final docIds = groupedDocIds[groupKey]!;
+                final docIds = groupedDocIds[groupKey] ?? const <String>[];
+                if (docIds.isEmpty) {
+                  return const SizedBox.shrink();
+                }
+                final primaryDocId = docIds.first;
 
                 final number =
                     allGroupedList.length -
@@ -646,9 +814,7 @@ class _OffenPageState extends OffenPageState
                 return Stack(
                   children: [
                     WishCard(
-                      key: ValueKey(
-                        'offen-$partyId-$groupKey-$dataIndex',
-                      ),
+                      key: ValueKey('offen-$partyId-$primaryDocId'),
                       request:
                           groupedFirstRequests[groupKey], // ✅ FIX: Übergib originales SongRequest mit clientId
                       groupedData: data,
@@ -661,15 +827,14 @@ class _OffenPageState extends OffenPageState
                         debugLog(
                           '>>> UI: Rufe jetzt den Dialog auf (von WishCard)',
                         );
-                        if (ActivePartyService.currentPartyId != null &&
-                            ActivePartyService.currentPartyId!.isNotEmpty) {
+                        if (partyId.isNotEmpty) {
                           WishManagementService.showConfirmUpdateGroupedStatusDialog(
                             ctx,
                             ids,
                             'played',
                             AppLocalizations.of(ctx)!.mark_as_played,
                             displayText,
-                            ActivePartyService.currentPartyId!,
+                            partyId,
                           );
                         } else {
                           debugLog(
@@ -684,15 +849,14 @@ class _OffenPageState extends OffenPageState
                             title.isNotEmpty && artist.isNotEmpty
                             ? '$title - $artist'
                             : (title.isNotEmpty ? title : artist);
-                        if (ActivePartyService.currentPartyId != null &&
-                            ActivePartyService.currentPartyId!.isNotEmpty) {
+                        if (partyId.isNotEmpty) {
                           WishManagementService.showConfirmUpdateGroupedStatusDialog(
                             ctx,
                             ids,
                             'rejected',
                             AppLocalizations.of(ctx)!.reject,
                             displayText,
-                            ActivePartyService.currentPartyId!,
+                            partyId,
                           );
                         } else {
                           debugLog(
@@ -707,13 +871,12 @@ class _OffenPageState extends OffenPageState
                             title.isNotEmpty && artist.isNotEmpty
                             ? '$title - $artist'
                             : (title.isNotEmpty ? title : artist);
-                        if (ActivePartyService.currentPartyId != null &&
-                            ActivePartyService.currentPartyId!.isNotEmpty) {
+                        if (partyId.isNotEmpty) {
                           WishManagementService.showConfirmDeleteGroupedDialog(
                             ctx,
                             ids,
                             displayText,
-                            ActivePartyService.currentPartyId!,
+                            partyId,
                           );
                         } else {
                           debugLog(

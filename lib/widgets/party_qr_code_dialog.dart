@@ -3,12 +3,14 @@ import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../l10n/app_localizations.dart';
 import '../l10n/locale_helper.dart';
+import 'language_menu_grid.dart';
 import '../services/party_pdf_service.dart';
 import '../services/qr_code_service.dart';
 import '../services/qr_dialog_options_service.dart';
 import '../utils/formatting_utils.dart';
 import '../utils/party_code_utils.dart';
 import '../utils/ui_constants.dart';
+import '../utils/party_export_filename_helper.dart';
 import '../config/app_config.dart';
 
 /// Daten für die Anzeige des QR-Code-Dialogs (Party-Infos für show()).
@@ -99,20 +101,6 @@ class PartyQrCodeDialog extends StatefulWidget {
   }
 }
 
-/// Sprachliste für Export (wie in main_main_page; Namen Englisch)
-const List<Map<String, String>> _kExportLanguages = [
-  {'code': 'de', 'flag': '🇩🇪', 'name': 'German'},
-  {'code': 'en', 'flag': '🇬🇧', 'name': 'English'},
-  {'code': 'fr', 'flag': '🇫🇷', 'name': 'French'},
-  {'code': 'ru', 'flag': '🇷🇺', 'name': 'Russian'},
-  {'code': 'zh', 'flag': '🇨🇳', 'name': 'Chinese'},
-  {'code': 'es', 'flag': '🇪🇸', 'name': 'Spanish'},
-  {'code': 'tr', 'flag': '🇹🇷', 'name': 'Turkish'},
-  {'code': 'pt', 'flag': '🇵🇹', 'name': 'Portuguese'},
-  {'code': 'it', 'flag': '\u{1F1EE}\u{1F1F9}', 'name': 'Italian'},
-  {'code': 'uk', 'flag': '\u{1F1FA}\u{1F1E6}', 'name': 'Ukrainian'},
-];
-
 class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
   /// Schalter: welche Felder im PDF/Bild angezeigt werden (werden aus SharedPreferences geladen)
   bool _showLocation = true;
@@ -169,6 +157,21 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
       showEmail: _showEmail,
       showAlternativeEmail: _showAlternativeEmail,
     );
+  }
+
+  String _pdfTemplateLabel(String format, AppLocalizations l10n) {
+    switch (format) {
+      case 'plakat':
+        return l10n.party_pdf_poster_a4;
+      case 'table_stand':
+        return l10n.party_pdf_table_stand;
+      case 'double_a5':
+        return l10n.party_pdf_a4_landscape_2xa5;
+      case 'flyer':
+        return l10n.party_pdf_flyer_4xa6;
+      default:
+        return 'PDF';
+    }
   }
 
   Future<void> _handlePdfExport(String format) async {
@@ -228,6 +231,12 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
           ? ['$contactLabel: $djExportName', contactPartsForQr.join(' | ')]
           : null;
 
+      final exportFileName = PartyExportFilenameHelper.build(
+        templateLabel: _pdfTemplateLabel(format, localizations),
+        partyName: widget.party.partyName,
+        partyStartDate: widget.party.startDate,
+      );
+
       void onBeforeLayoutPdf() {
         if (mounted) setState(() {
           _isDownloadingFont = false;
@@ -258,6 +267,7 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
             profileImageUrl: widget.profileImageUrl,
             localeLanguageCode: _exportLocale.languageCode,
             onBeforeLayoutPdf: onBeforeLayoutPdf,
+            exportFileName: exportFileName,
           );
           break;
         case 'table_stand':
@@ -283,6 +293,7 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
             profileImageUrl: widget.profileImageUrl,
             localeLanguageCode: _exportLocale.languageCode,
             onBeforeLayoutPdf: onBeforeLayoutPdf,
+            exportFileName: exportFileName,
           );
           break;
         case 'double_a5':
@@ -307,6 +318,7 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
             profileImageUrl: widget.profileImageUrl,
             localeLanguageCode: _exportLocale.languageCode,
             onBeforeLayoutPdf: onBeforeLayoutPdf,
+            exportFileName: exportFileName,
           );
           break;
         case 'flyer':
@@ -331,6 +343,7 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
             profileImageUrl: widget.profileImageUrl,
             localeLanguageCode: _exportLocale.languageCode,
             onBeforeLayoutPdf: onBeforeLayoutPdf,
+            exportFileName: exportFileName,
           );
           break;
       }
@@ -477,16 +490,19 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
                     ),
                     const SizedBox(height: 8),
                     // Block 1: Sprachauswahl (prominent zuerst)
-                    PopupMenuButton<String>(
-                      onSelected: (String languageCode) {
-                        final code = LocaleHelper.mapToSupportedOrEnglish(
-                          languageCode,
+                    InkWell(
+                      onTap: () {
+                        showLanguagePickerDialog(
+                          context,
+                          currentLanguageCode: _exportLocale.languageCode,
+                          onLanguageSelected: (languageCode) {
+                            final code = LocaleHelper.mapToSupportedOrEnglish(
+                              languageCode,
+                            );
+                            setState(() => _exportLocale = Locale(code));
+                          },
                         );
-                        setState(() => _exportLocale = Locale(code));
                       },
-                      offset: const Offset(0, 40),
-                      padding: EdgeInsets.zero,
-                      color: const Color(0xFF1E1E1E),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -498,33 +514,6 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
                           ),
                         ],
                       ),
-                      itemBuilder: (BuildContext context) {
-                        final sortedLanguages = List<Map<String, String>>.from(
-                          _kExportLanguages,
-                        )..sort(
-                            (a, b) =>
-                                (a['name'] as String).toLowerCase().compareTo(
-                                  (b['name'] as String).toLowerCase(),
-                                ),
-                          );
-                        return sortedLanguages.map((lang) {
-                          final code = lang['code'] as String;
-                          final flag = lang['flag'] as String;
-                          final name = lang['name'] as String;
-                          final isCurrent = code == _exportLocale.languageCode;
-                          return PopupMenuItem<String>(
-                            value: code,
-                            child: Row(
-                              children: [
-                                Text(flag, style: const TextStyle(fontSize: 20)),
-                                const SizedBox(width: 12),
-                                Flexible(child: Text(name, style: const TextStyle(color: Colors.white))),
-                                if (isCurrent) const Icon(Icons.check, color: Colors.green, size: 20),
-                              ],
-                            ),
-                          );
-                        }).toList();
-                      },
                     ),
                     const SizedBox(height: 12),
                     // Block 2: "Auf PDF einblenden:" + Checkboxen (2 pro Zeile)
@@ -833,6 +822,11 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
                             LocaleHelper.getTranslations(_exportLocale),
                             'party_from_dj',
                           );
+                          final imageFileName =
+                              PartyExportFilenameHelper.buildQrImageFileName(
+                            partyName: widget.party.partyName,
+                            partyStartDate: widget.party.startDate,
+                          );
                           final success = await QrCodeService.saveQRCodeAsImage(
                             _pwaUrl,
                             widget.party.partyCode!,
@@ -850,6 +844,7 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
                             showEmailInExport: _showEmail,
                             showPhoneInExport: _showPhone,
                             showAlternativeEmailInExport: _showAlternativeEmail,
+                            exportFileName: imageFileName,
                           );
                           if (success && context.mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(

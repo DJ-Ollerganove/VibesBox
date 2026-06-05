@@ -10,7 +10,9 @@ import '../helpers/security_helper.dart';
 import '../l10n/app_localizations.dart';
 import '../services/duplicate_check_service.dart';
 import '../services/spotify_service.dart';
+import '../services/user_service.dart';
 import '../utils/ui_constants.dart';
+import '../utils/wish_paths.dart';
 
 /// Gewählter Künstler (Name + ID für abhängige Suche) — identisch zur Gäste-[WishesFormWidget]-Logik.
 class _SelectedArtist {
@@ -92,7 +94,11 @@ class _ManualWishPageState extends State<ManualWishPage> {
     }
   }
 
+  bool get _enableSuggestions =>
+      UserService().currentUser.value?.wishboxSuggestionsEnabled ?? true;
+
   Future<void> _searchArtists(String query) async {
+    if (!_enableSuggestions) return;
     if (query.trim().isEmpty) {
       setState(() => _artistSuggestions = []);
       return;
@@ -119,6 +125,7 @@ class _ManualWishPageState extends State<ManualWishPage> {
   }
 
   Future<void> _searchTracks(String query, {bool catalogMode = false}) async {
+    if (!_enableSuggestions) return;
     setState(() => _titleLoading = true);
     final id = ++_titleSearchId;
     String searchQ;
@@ -444,8 +451,7 @@ class _ManualWishPageState extends State<ManualWishPage> {
         'is_dj_wish': true,
       };
 
-      await FirebaseFirestore.instance
-          .collection('wishes')
+      await WishPaths.partyWishes(widget.partyId)
           .add(SecurityHelper.sanitizeMap(wishData));
 
       if (!mounted) return;
@@ -622,16 +628,18 @@ class _ManualWishPageState extends State<ManualWishPage> {
                                   ],
                                 ),
                               ),
-                              const SizedBox(height: 16),
-                              Text(
-                                l.suggestionsAutoAppear,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 11,
+                              if (_enableSuggestions) ...[
+                                const SizedBox(height: 16),
+                                Text(
+                                  l.suggestionsAutoAppear,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                  ),
+                                  textAlign: TextAlign.center,
                                 ),
-                                textAlign: TextAlign.center,
-                              ),
-                              const SizedBox(height: 12),
+                                const SizedBox(height: 12),
+                              ],
                               // Titel * — wie Gäste-Wunschbox
                               _buildInputContainer(
                                 child: Column(

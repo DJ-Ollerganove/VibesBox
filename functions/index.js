@@ -14,6 +14,7 @@ const cors = require('cors')({
   ],
 });
 const { onRequest, onCall, HttpsError } = require('firebase-functions/v2/https');
+const { onDocumentCreated, onDocumentUpdated } = require('firebase-functions/v2/firestore');
 const { defineSecret, defineString } = require('firebase-functions/params');
 
 // Secrets (2nd Gen / Secret Manager)
@@ -28,6 +29,8 @@ const APPLE_DEVELOPER_TOKEN = defineSecret('APPLE_DEVELOPER_TOKEN');
 const SECRET_APPLE_PRIVATE_KEY = defineSecret('APPLE_PRIVATE_KEY');
 const SECRET_APPLE_KEY_ID = defineSecret('APPLE_KEY_ID');
 const SECRET_APPLE_TEAM_ID = defineSecret('APPLE_TEAM_ID');
+/** Grüße-Übersetzung (Gemini) — `firebase functions:secrets:set GEMINI_API_KEY` */
+const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
 
 // Firebase Admin initialisieren (nur einmal)
 if (!admin.apps.length) {
@@ -279,21 +282,34 @@ function sendInternalError(res, message = 'Ein interner Fehler ist aufgetreten.'
   res.status(500).json({ error: message });
 }
 
+/** Free-DJ-Stichtag: Tag aus free_period_start (UTC), sonst 1 (= 1. des Monats von created_at). Wie lib/services/limit_service.dart */
+function vbGetAnchorDayFromUserData(userData) {
+  if (!userData) return 1;
+  const fp = userData.free_period_start;
+  if (fp) {
+    let d = null;
+    if (typeof fp.toMillis === 'function') d = new Date(fp.toMillis());
+    else if (typeof fp.toDate === 'function') d = fp.toDate();
+    if (d && !Number.isNaN(d.getTime())) {
+      const day = d.getUTCDate();
+      if (day < 1) return 1;
+      if (day > 31) return 31;
+      return day;
+    }
+  }
+  const ca = userData.created_at;
+  if (ca) {
+    let d = null;
+    if (typeof ca.toMillis === 'function') d = new Date(ca.toMillis());
+    else if (typeof ca.toDate === 'function') d = ca.toDate();
+    if (d && !Number.isNaN(d.getTime())) return 1;
+  }
+  return 1;
+}
+
 // Stichtag-Logik für usedPartySlots (identisch zu Dart LimitService)
 function getAnchorDayFromUserData(data) {
-  if (!data) return 1;
-  let anchor = null;
-  const fp = data.free_period_start;
-  if (fp && fp.toDate) {
-    anchor = fp.toDate();
-  } else if (data.created_at && data.created_at.toDate) {
-    anchor = data.created_at.toDate();
-  }
-  if (!anchor) return 1;
-  const day = anchor.getUTCDate();
-  if (day < 1) return 1;
-  if (day > 31) return 31;
-  return day;
+  return vbGetAnchorDayFromUserData(data);
 }
 
 function stichtagForMonth(year, month, anchorDay) {
@@ -865,9 +881,10 @@ exports.closePendingWishesForEndedParty = functions.https.onRequest(async (req, 
 
     // Finde pending-Wünsche für diese Party
     const wishesSnap = await db
+      .collection('parties')
+      .doc(partyId)
       .collection('wishes')
       .where('status', '==', 'pending')
-      .where('party_id', '==', partyId)
       .get();
 
     if (wishesSnap.empty) {
@@ -2687,20 +2704,7 @@ exports.partyTimeoutCheck = functions.runWith({ memory: '512MB', timeoutSeconds:
 // Identisch zur Dart-Logik in LimitService
 // ==========================================
 function getAnchorDayFromUserData(userData) {
-  if (!userData) return 1;
-  let anchorMs = null;
-  const fp = userData.free_period_start;
-  if (fp && typeof fp.toMillis === 'function') anchorMs = fp.toMillis();
-  else {
-    const ca = userData.created_at;
-    if (ca && typeof ca.toMillis === 'function') anchorMs = ca.toMillis();
-  }
-  if (anchorMs == null) return 1;
-  const d = new Date(anchorMs);
-  let day = d.getUTCDate();
-  if (day < 1) return 1;
-  if (day > 31) return 31;
-  return day;
+  return vbGetAnchorDayFromUserData(userData);
 }
 
 function stichtagForMonth(year, month, anchorDay) {
@@ -2748,18 +2752,7 @@ function computePeriodSlotKey(partyStartDate, anchorDay) {
 // STICHTAG-LOGIK (usedPartySlots) – identisch zu Dart LimitService
 // ==========================================
 function getAnchorDayFromUserData(userData) {
-  if (!userData) return 1;
-  let anchor = null;
-  if (userData.free_period_start && userData.free_period_start.toDate) {
-    anchor = userData.free_period_start.toDate();
-  } else if (userData.created_at && userData.created_at.toDate) {
-    anchor = userData.created_at.toDate();
-  }
-  if (!anchor || !(anchor instanceof Date)) return 1;
-  const day = anchor.getUTCDate();
-  if (day < 1) return 1;
-  if (day > 31) return 31;
-  return day;
+  return vbGetAnchorDayFromUserData(userData);
 }
 
 function stichtagForMonth(year, month, anchorDay) {
@@ -2810,20 +2803,7 @@ function computePeriodSlotKey(partyStartDate, anchorDay) {
 // Berechnet den Perioden-Slot-Key (YYYY-MM-DD) für usedPartySlots.
 // anchorDay: 1-31 aus free_period_start oder created_at des Users.
 function getAnchorDayFromUserData(userData) {
-  if (!userData) return 1;
-  let anchor = null;
-  const fp = userData.free_period_start;
-  if (fp && fp.toMillis) {
-    anchor = fp.toDate();
-  } else {
-    const ca = userData.created_at;
-    if (ca && ca.toMillis) anchor = ca.toDate();
-  }
-  if (!anchor) return 1;
-  const day = anchor.getUTCDate();
-  if (day < 1) return 1;
-  if (day > 31) return 31;
-  return day;
+  return vbGetAnchorDayFromUserData(userData);
 }
 
 function stichtagForMonth(year, month, anchorDay) {
@@ -2869,16 +2849,7 @@ function computePeriodSlotKey(partyStartDate, anchorDay) {
 // STICHTAG-HELPERS (identisch zu LimitService / getAbrechnungsZeitraum)
 // ==========================================
 function getAnchorDayFromUserData(userData) {
-  if (!userData) return 1;
-  let anchor = null;
-  const fp = userData.free_period_start;
-  if (fp && fp.toDate) anchor = fp.toDate();
-  else if (userData.created_at && userData.created_at.toDate) anchor = userData.created_at.toDate();
-  if (!anchor) return 1;
-  const day = anchor.getDate ? anchor.getDate() : anchor.getUTCDate();
-  if (day < 1) return 1;
-  if (day > 31) return 31;
-  return day;
+  return vbGetAnchorDayFromUserData(userData);
 }
 
 function stichtagForMonth(year, month, anchorDay) {
@@ -2919,19 +2890,7 @@ function computePeriodSlotKey(partyStartDate, anchorDay) {
 // ==========================================
 /** Anker-Tag (1–31) aus User-Daten (free_period_start oder created_at). */
 function getAnchorDayFromUserData(userData) {
-  if (!userData) return 1;
-  let anchor = null;
-  const fp = userData.free_period_start;
-  if (fp && typeof fp.toDate === 'function') {
-    anchor = fp.toDate();
-  } else if (userData.created_at && typeof userData.created_at.toDate === 'function') {
-    anchor = userData.created_at.toDate();
-  }
-  if (!anchor) return 1;
-  const day = anchor.getUTCDate();
-  if (day < 1) return 1;
-  if (day > 31) return 31;
-  return day;
+  return vbGetAnchorDayFromUserData(userData);
 }
 /** Stichtag für einen Monat (JS Date, UTC). */
 function stichtagForMonth(year, month, anchorDay) {
@@ -2975,16 +2934,7 @@ function computePeriodSlotKey(partyStartDate, anchorDay) {
 
 // Stichtag-Logik für usedPartySlots (identisch zu LimitService.getAbrechnungsZeitraum)
 function getAnchorDayFromUserData(userData) {
-  if (!userData) return 1;
-  let anchor = null;
-  const fp = userData.free_period_start;
-  if (fp && fp.toDate) anchor = fp.toDate();
-  else if (userData.created_at && userData.created_at.toDate) anchor = userData.created_at.toDate();
-  if (!anchor) return 1;
-  const day = anchor.getDate();
-  if (day < 1) return 1;
-  if (day > 31) return 31;
-  return day;
+  return vbGetAnchorDayFromUserData(userData);
 }
 
 function stichtagForMonth(year, month, anchorDay) {
@@ -3250,6 +3200,135 @@ exports.getAppleMusicToken = onCall(
     } catch (err) {
       console.error('❌ getAppleMusicToken: token generation failed:', err);
       throw new HttpsError('internal', 'Token generation failed.');
+    }
+  },
+);
+
+// ==========================================
+// CALLABLE: Grüße-Übersetzung (Gemini Flash-Lite, nur Admin/DJ)
+// ==========================================
+const GEMINI_GREETING_MODEL = 'gemini-2.5-flash-lite';
+const {
+  normalizeGreetingLang,
+  GREETING_LANG_LABELS,
+} = require('./generated/greeting_languages');
+
+/**
+ * Übersetzt einen kurzen Grüßtext per Gemini REST API.
+ * @return {Promise<string>}
+ */
+async function translateGreetingViaGemini(apiKey, text, targetLang, sourceLang) {
+  const target = normalizeGreetingLang(targetLang);
+  const source = sourceLang ? normalizeGreetingLang(sourceLang) : null;
+  const targetLabel = GREETING_LANG_LABELS[target] || target;
+  const sourceHint = source
+    ? `The greeting is likely in ${GREETING_LANG_LABELS[source] || source}. `
+    : '';
+  const prompt =
+    `${sourceHint}Translate the following short party guest greeting for a DJ into ${targetLabel} (ISO 639-1: ${target}). ` +
+    'Return ONLY the translated greeting — no quotes, labels, or explanation. ' +
+    'Keep tone casual and natural. Do not add content that was not in the original.\n\n' +
+    `Greeting:\n${text}`;
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_GREETING_MODEL}:generateContent`;
+  const response = await axios.post(
+    url,
+    {
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.2,
+        maxOutputTokens: 256,
+      },
+    },
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
+      },
+      timeout: 25000,
+    },
+  );
+
+  const parts = response.data?.candidates?.[0]?.content?.parts;
+  const translated =
+    Array.isArray(parts) &&
+    parts
+      .map((p) => (p && typeof p.text === 'string' ? p.text.trim() : ''))
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+  if (!translated) {
+    const blockReason =
+      response.data?.candidates?.[0]?.finishReason ||
+      response.data?.promptFeedback?.blockReason;
+    throw new Error(
+      `Gemini empty response${blockReason ? ` (${blockReason})` : ''}`,
+    );
+  }
+  return translated;
+}
+
+exports.translateGreeting = onCall(
+  {
+    region: 'us-central1',
+    timeoutSeconds: 30,
+    enforceAppCheck: false,
+    secrets: [GEMINI_API_KEY],
+  },
+  async (request) => {
+    await assertCallerIsAdminOrDj(request);
+
+    const data = request.data || {};
+    const text = typeof data.text === 'string' ? data.text.trim() : '';
+    if (!text) {
+      throw new HttpsError('invalid-argument', 'text ist erforderlich.');
+    }
+    if (text.length > 200) {
+      throw new HttpsError(
+        'invalid-argument',
+        'text ist zu lang (max. 200 Zeichen).',
+      );
+    }
+
+    const targetLanguage = normalizeGreetingLang(data.targetLanguage);
+    const sourceLanguage =
+      data.sourceLanguage != null && String(data.sourceLanguage).trim() !== ''
+        ? normalizeGreetingLang(data.sourceLanguage)
+        : null;
+
+    if (sourceLanguage && sourceLanguage === targetLanguage) {
+      return { skipped: true, translatedText: null };
+    }
+
+    const uid = request.auth.uid;
+    const hour = Math.floor(Date.now() / 3600000);
+    await assertAuthEmailRateLimit(`greeting_tr_${uid}_${hour}`, 300);
+
+    const apiKey = (GEMINI_API_KEY.value() || '').trim();
+    if (!apiKey) {
+      throw new HttpsError(
+        'failed-precondition',
+        'GEMINI_API_KEY fehlt (firebase functions:secrets:set GEMINI_API_KEY).',
+      );
+    }
+
+    try {
+      const translatedText = await translateGreetingViaGemini(
+        apiKey,
+        text,
+        targetLanguage,
+        sourceLanguage,
+      );
+      if (!translatedText || translatedText === text) {
+        return { skipped: true, translatedText: null };
+      }
+      return { skipped: false, translatedText };
+    } catch (err) {
+      console.error('translateGreeting: Gemini failed', err?.message || err);
+      throw new HttpsError(
+        'internal',
+        'Übersetzung fehlgeschlagen. Bitte später erneut versuchen.',
+      );
     }
   },
 );
@@ -4175,6 +4254,343 @@ exports.applyDeviceBlockFusion = onCall(
         typeof bData.party_id === 'string' ? bData.party_id : null,
       dj_id: typeof bData.dj_id === 'string' ? bData.dj_id.trim() : null,
     };
+  },
+);
+
+/** Kurzer Text für FCM (UTF-16-safe genug für UI-Zwecke). */
+function truncateUtf16(str, max) {
+  const s = String(str || '').trim();
+  if (!s) return '';
+  if (s.length <= max) return s;
+  return `${s.slice(0, Math.max(0, max - 1))}…`;
+}
+
+/**
+ * True, wenn Push für neue Wünsche erlaubt ist: User-Root ODER mindestens ein
+ * `users/{uid}/dj_device_prefs/*` mit notifyNewWishes=true (Flutter speichert dort).
+ */
+function resolveDjNotifyNewWishesEnabled(userData, devicePrefsDocs) {
+  if (userData.notifyNewWishes === true) return true;
+  for (const d of devicePrefsDocs) {
+    const p = d.data() || {};
+    if (p.notifyNewWishes === true) return true;
+  }
+  return false;
+}
+
+/**
+ * FCM-Ton: ohne Geräte-Docs wie User-Root; mit Docs — wenn irgendein Doc das Feld
+ * setzt, reicht ein „an“ für Ton; nur wenn alle gesetzten Felder explizit aus sind, stumm.
+ */
+function resolveDjWishPushSoundEnabled(userData, devicePrefsDocs) {
+  const rootOn = userData.enableNotificationSound !== false;
+  if (!devicePrefsDocs || devicePrefsDocs.length === 0) return rootOn;
+  let sawExplicit = false;
+  let anyOn = false;
+  for (const d of devicePrefsDocs) {
+    const p = d.data() || {};
+    if (Object.prototype.hasOwnProperty.call(p, 'enableNotificationSound')) {
+      sawExplicit = true;
+      if (p.enableNotificationSound !== false) anyOn = true;
+    }
+  }
+  if (sawExplicit) return anyOn;
+  return rootOn;
+}
+
+/**
+ * Party „läuft jetzt“ (analog Flutter [ActivePartyService._isPartyDocumentRunningNow]).
+ * Vorab-Wünsche: Party noch nicht im Zeitfenster → false.
+ */
+function isPartyDocumentRunningNowForPush(partyData, nowMs = Date.now()) {
+  if (!partyData || typeof partyData !== 'object') return false;
+  const lifecycle = partyData.lifecycle_status;
+  if (
+    lifecycle === 'finished' ||
+    lifecycle === 'standby' ||
+    partyData.finished_at != null
+  ) {
+    return false;
+  }
+
+  let start = null;
+  let end = null;
+  if (partyData.start_date && typeof partyData.start_date.toDate === 'function') {
+    start = partyData.start_date.toDate();
+  } else if (typeof partyData.start_time_posix === 'number') {
+    start = new Date(partyData.start_time_posix * 1000);
+  }
+  if (partyData.end_date && typeof partyData.end_date.toDate === 'function') {
+    end = partyData.end_date.toDate();
+  } else if (typeof partyData.end_time_posix === 'number') {
+    end = new Date(partyData.end_time_posix * 1000);
+  }
+
+  if (!start || !end) {
+    const wishboxEnabled = partyData.wishbox_enabled === true;
+    const partyName =
+      typeof partyData.party_name === 'string' ? partyData.party_name : '';
+    return wishboxEnabled && partyName === 'VibesBox manuell';
+  }
+
+  const now = new Date(nowMs);
+  const inWindow = now >= start && now < end;
+  if (!inWindow) return false;
+
+  const status = partyData.status;
+  const isActiveFlag = partyData.isActive === true;
+  return lifecycle === 'active' || status === 'active' || isActiveFlag;
+}
+
+/**
+ * Sofortiger Push an das Gerät des Party-DJs bei neuem Pending-Wunsch
+ * (Firestore-Listener ist im Hintergrund oft stark verzögert).
+ */
+exports.notifyDjOnNewWishPush = onDocumentCreated(
+  {
+    document: 'parties/{partyId}/wishes/{wishId}',
+    region: 'us-central1',
+  },
+  async (event) => {
+    const wishId = event.params.wishId;
+    const partyId = event.params.partyId;
+    const snap = event.data;
+    if (!snap) return;
+    const data = snap.data();
+    if (!data || data.status !== 'pending') return;
+    if (data.is_pre_wish === true) {
+      console.log(
+        'notifyDjOnNewWishPush: skip — Vorab-Wunsch',
+        wishId,
+        partyId,
+      );
+      return;
+    }
+    const djId =
+      typeof data.dj_id === 'string' ? data.dj_id.trim() : '';
+    if (!djId) return;
+
+    let partySnap;
+    try {
+      partySnap = await db.collection('parties').doc(partyId).get();
+    } catch (e) {
+      console.error('notifyDjOnNewWishPush: party read failed', e);
+      return;
+    }
+    if (!partySnap.exists) {
+      console.log(
+        'notifyDjOnNewWishPush: skip — Party fehlt',
+        partyId,
+      );
+      return;
+    }
+    if (!isPartyDocumentRunningNowForPush(partySnap.data())) {
+      console.log(
+        'notifyDjOnNewWishPush: skip — Party läuft nicht',
+        partyId,
+        wishId,
+      );
+      return;
+    }
+
+    let userSnap;
+    try {
+      userSnap = await db.collection('users').doc(djId).get();
+    } catch (e) {
+      console.error('notifyDjOnNewWishPush: user read failed', e);
+      return;
+    }
+    if (!userSnap.exists) return;
+    const u = userSnap.data() || {};
+
+    let devicePrefsDocs = [];
+    try {
+      const prefsSnap = await db
+        .collection('users')
+        .doc(djId)
+        .collection('dj_device_prefs')
+        .limit(50)
+        .get();
+      devicePrefsDocs = prefsSnap.docs;
+    } catch (e) {
+      console.error('notifyDjOnNewWishPush: dj_device_prefs read failed', e);
+    }
+
+    if (!resolveDjNotifyNewWishesEnabled(u, devicePrefsDocs)) {
+      return;
+    }
+
+    const token =
+      typeof u.fcm_token === 'string' ? u.fcm_token.trim() : '';
+    if (!token) {
+      console.log(
+        'notifyDjOnNewWishPush: skip — kein fcm_token für DJ',
+        djId,
+      );
+      return;
+    }
+
+    const soundOn = resolveDjWishPushSoundEnabled(u, devicePrefsDocs);
+
+    const rawTitle = typeof data.title === 'string' ? data.title : '';
+    const rawArtist = typeof data.artist === 'string' ? data.artist : '';
+    let bodyLine = '—';
+    if (rawArtist && rawTitle) {
+      bodyLine = `${truncateUtf16(rawArtist, 72)} – ${truncateUtf16(rawTitle, 72)}`;
+    } else if (rawTitle) {
+      bodyLine = truncateUtf16(rawTitle, 140);
+    } else if (rawArtist) {
+      bodyLine = truncateUtf16(rawArtist, 140);
+    }
+
+    const androidNotification = {
+      channelId: 'new_wishes_channel',
+    };
+    if (soundOn) {
+      androidNotification.sound = 'notification';
+    }
+    const apsPayload = {};
+    if (soundOn) {
+      // Gleicher Ton wie Android `res/raw/notification.mp3` → ios/Runner/notification.caf
+      apsPayload.sound = 'notification.caf';
+    }
+
+    const message = {
+      token,
+      notification: {
+        title: 'VibesBox',
+        body: truncateUtf16(bodyLine, 178),
+      },
+      data: {
+        type: 'dj_new_wish',
+        wishId: String(wishId),
+        party_id: partyId,
+      },
+      android: {
+        priority: 'high',
+        notification: androidNotification,
+      },
+      apns: {
+        payload: {
+          aps: apsPayload,
+        },
+      },
+    };
+
+    try {
+      await admin.messaging().send(message);
+      console.log(
+        'notifyDjOnNewWishPush: gesendet wish=',
+        wishId,
+        'dj=',
+        djId,
+      );
+    } catch (e) {
+      console.error('notifyDjOnNewWishPush: send fehlgeschlagen', e);
+    }
+  },
+);
+
+function floorLabelFromVenueData(venueData, floorKey) {
+  const defKey = 'default';
+  if (!floorKey || floorKey === defKey) return null;
+  const floors = venueData && Array.isArray(venueData.floors) ? venueData.floors : [];
+  for (let i = 0; i < floors.length; i++) {
+    const f = floors[i];
+    if (f && f.key === floorKey && f.label) return String(f.label);
+  }
+  return floorKey;
+}
+
+function partyFloorUpdateFields(venueData, floorKey) {
+  const key = floorKey || 'default';
+  const update = { floor_key: key };
+  if (key === 'default') {
+    update.floor_label = admin.firestore.FieldValue.delete();
+  } else {
+    const label = floorLabelFromVenueData(venueData, key);
+    if (label) update.floor_label = label;
+  }
+  return update;
+}
+
+/**
+ * Tauscht floor_key/floor_label auf beiden Partys, wenn Tausch-Anfrage angenommen wurde.
+ */
+exports.applyFloorSwapOnAccept = onDocumentUpdated(
+  {
+    document: 'floor_swap_requests/{requestId}',
+    region: 'us-central1',
+  },
+  async (event) => {
+    const before = event.data.before.data();
+    const after = event.data.after.data();
+    if (!before || !after) return;
+    if (before.status !== 'pending' || after.status !== 'accepted') return;
+
+    const requestId = event.params.requestId;
+    const fromPartyId = after.from_party_id;
+    const toPartyId = after.to_party_id;
+    const venueId = after.venue_id;
+    const fromFloorKey = after.from_floor_key;
+    const toFloorKey = after.to_floor_key;
+
+    if (!fromPartyId || !toPartyId || !venueId) {
+      console.warn('applyFloorSwapOnAccept: unvollständige Anfrage', requestId);
+      return;
+    }
+
+    const requestRef = db.collection('floor_swap_requests').doc(requestId);
+    const fromRef = db.collection('parties').doc(fromPartyId);
+    const toRef = db.collection('parties').doc(toPartyId);
+    const venueRef = db.collection('venues').doc(venueId);
+
+    try {
+      await db.runTransaction(async (tx) => {
+        const [reqSnap, fromSnap, toSnap, venueSnap] = await Promise.all([
+          tx.get(requestRef),
+          tx.get(fromRef),
+          tx.get(toRef),
+          tx.get(venueRef),
+        ]);
+
+        if (!reqSnap.exists) return;
+        const reqData = reqSnap.data();
+        if (!reqData || reqData.status !== 'accepted') return;
+        if (!fromSnap.exists || !toSnap.exists) {
+          throw new Error('Party fehlt für Floor-Tausch');
+        }
+
+        const fromData = fromSnap.data();
+        const toData = toSnap.data();
+        const currentFromKey = fromData.floor_key || 'default';
+        const currentToKey = toData.floor_key || 'default';
+
+        if (currentFromKey !== fromFloorKey || currentToKey !== toFloorKey) {
+          throw new Error('Floor-Keys haben sich geändert — Tausch abgebrochen');
+        }
+
+        const venueData = venueSnap.exists ? venueSnap.data() : null;
+        tx.update(fromRef, partyFloorUpdateFields(venueData, toFloorKey));
+        tx.update(toRef, partyFloorUpdateFields(venueData, fromFloorKey));
+        if (!reqData.responded_at) {
+          tx.update(requestRef, {
+            responded_at: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
+      });
+      console.log('applyFloorSwapOnAccept: OK', requestId);
+    } catch (e) {
+      console.error('applyFloorSwapOnAccept: Fehler', requestId, e);
+      try {
+        await requestRef.update({
+          status: 'rejected',
+          responded_at: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      } catch (e2) {
+        console.error('applyFloorSwapOnAccept: Rollback fehlgeschlagen', e2);
+      }
+    }
   },
 );
 

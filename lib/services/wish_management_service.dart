@@ -9,6 +9,9 @@ import '../services/user_service.dart';
 import '../utils/string_utils.dart';
 import '../utils/ui_constants.dart';
 import '../utils/debug_log.dart';
+import '../utils/pre_wish_helper.dart';
+import '../utils/wish_paths.dart';
+import 'active_party_service.dart';
 
 /// Service für die Verwaltung von Musikwünschen in Firestore
 /// Enthält Datenoperationen und UI-Dialoge für Wunsch-Verwaltung
@@ -19,6 +22,20 @@ class WishManagementService {
 
   static bool _isAdminUser() =>
       AppConfig.isAdminRole(UserService().currentUser.value);
+
+  static Future<String> _requirePartyId([String? partyId]) async {
+    if (partyId != null && partyId.isNotEmpty) return partyId;
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      throw StateError('WishManagementService: nicht eingeloggt');
+    }
+    final info = await ActivePartyService.getActivePartyInfo(user.uid);
+    final id = info?.partyId;
+    if (id == null || id.isEmpty) {
+      throw StateError('WishManagementService: keine aktive Party');
+    }
+    return id;
+  }
 
   /// Stream-Funktion für Wünsche einer bestimmten Party mit Status-Filter
   ///
@@ -53,17 +70,40 @@ class WishManagementService {
 
     // Admin-Globalmodus: keine party_id-Filter (nur wenn explizit angefordert)
     if (forceGlobalForAdmin && _isAdminUser()) {
-      return FirebaseFirestore.instance
-          .collection('wishes')
+      return WishPaths.allWishesCollectionGroup()
           .where('status', isEqualTo: status)
           .snapshots();
     }
 
-    return FirebaseFirestore.instance
-        .collection('wishes')
-        .where('party_id', isEqualTo: partyId)
+    return WishPaths.partyWishes(partyId)
         .where('status', isEqualTo: status)
         .snapshots();
+  }
+
+  /// Nur Vorab-Wünsche (Party-Karte / Übersicht) — kein voller pending-Stream.
+  static Stream<QuerySnapshot> getPreWishOverviewStream(String partyId) {
+    return WishPaths.partyWishes(partyId)
+        .where('status', isEqualTo: 'pending')
+        .where('is_pre_wish', isEqualTo: true)
+        .limit(200)
+        .snapshots();
+  }
+
+  /// Mindestens ein Vorab-Wunsch noch nicht in Offen freigegeben (DJ-Tab „Vorab“).
+  static bool snapshotHasQueuedPreWishes(QuerySnapshot snapshot) {
+    for (final doc in snapshot.docs) {
+      final data = doc.data() as Map<String, dynamic>?;
+      if (PreWishHelper.isQueuedPreWish(data)) return true;
+    }
+    return false;
+  }
+
+  static Stream<bool> watchHasQueuedPreWishes(String partyId) {
+    if (partyId.isEmpty) {
+      return Stream.value(false);
+    }
+    return getPreWishOverviewStream(partyId)
+        .map(snapshotHasQueuedPreWishes);
   }
 
   /// Stream-Funktion für favorisierte Wünsche einer bestimmten Party
@@ -83,16 +123,13 @@ class WishManagementService {
     );
 
     if (forceGlobalForAdmin && _isAdminUser()) {
-      return FirebaseFirestore.instance
-          .collection('wishes')
+      return WishPaths.allWishesCollectionGroup()
           .where('status', isEqualTo: status)
           .where('is_favorite', isEqualTo: true)
           .snapshots();
     }
 
-    return FirebaseFirestore.instance
-        .collection('wishes')
-        .where('party_id', isEqualTo: partyId)
+    return WishPaths.partyWishes(partyId)
         .where('status', isEqualTo: status)
         .where('is_favorite', isEqualTo: true)
         .snapshots();
@@ -102,15 +139,24 @@ class WishManagementService {
   ///
   /// [docId] - Die Document-ID des Wunsches
   /// [status] - Der neue Status ('pending', 'played', 'rejected')
-  static Future<void> updateWishStatus(String docId, String status) async {
-    await updateStatus(docId, status);
+  static Future<void> updateWishStatus(
+    String docId,
+    String status, {
+    String? partyId,
+  }) async {
+    await updateStatus(docId, status, partyId: partyId);
   }
 
   /// Aktualisiert den Status eines einzelnen Wunsches (interne Methode)
   ///
   /// [docId] - Die Document-ID des Wunsches
   /// [status] - Der neue Status ('pending', 'played', 'rejected')
-  static Future<void> updateStatus(String docId, String status) async {
+  static Future<void> updateStatus(
+    String docId,
+    String status, {
+    String? partyId,
+  }) async {
+    final pid = await _requirePartyId(partyId);
     final now = Timestamp.now();
     final updateData = <String, dynamic>{'status': status};
 
@@ -132,17 +178,15 @@ class WishManagementService {
       updateData['rejected_at'] = FieldValue.delete();
     }
 
-    await FirebaseFirestore.instance
-        .collection('wishes')
-        .doc(docId)
-        .update(_sanitizeWriteMap(updateData));
+    await WishPaths.partyWish(pid, docId).update(_sanitizeWriteMap(updateData));
   }
 
   /// Löscht einen einzelnen Wunsch
   ///
   /// [docId] - Die Document-ID des zu löschenden Wunsches
-  static Future<void> deleteWish(String docId) async {
-    await FirebaseFirestore.instance.collection('wishes').doc(docId).delete();
+  static Future<void> deleteWish(String docId, {String? partyId}) async {
+    final pid = await _requirePartyId(partyId);
+    await WishPaths.partyWish(pid, docId).delete();
     // Erhöhe deleted_count
     await incrementDeletedCount();
   }
@@ -171,9 +215,7 @@ class WishManagementService {
     for (final docId in docIds) {
       try {
         // SICHERHEITS-PRÜFUNG: Lade Dokument und prüfe party_id
-        final docRef = FirebaseFirestore.instance
-            .collection('wishes')
-            .doc(docId);
+        final docRef = WishPaths.partyWish(partyId, docId);
         final docSnapshot = await docRef.get();
 
         if (!docSnapshot.exists) {
@@ -184,11 +226,9 @@ class WishManagementService {
           continue;
         }
 
-        final docData = docSnapshot.data() as Map<String, dynamic>?;
-        final docPartyId = docData?['party_id'] as String?;
+        final docData = docSnapshot.data();
 
         if (status == 'pending' &&
-            docPartyId == partyId &&
             (docData?['status'] as String?) == 'rejected') {
           final rr = docData?['rejection_reason'] as String?;
           final autoBlk = docData?['auto_rejected_by_block'] == true;
@@ -200,16 +240,6 @@ class WishManagementService {
           }
         }
 
-        // WICHTIG: Nur aktualisieren, wenn party_id übereinstimmt
-        if (docPartyId != partyId) {
-          debugLog(
-            '🚫 updateGroupedStatus: Dokument $docId gehört zu Party "$docPartyId", erwartet "$partyId" - überspringe Update',
-          );
-          skippedUpdates++;
-          continue;
-        }
-
-        // Party-ID stimmt überein - Update vorbereiten
         final updateData = <String, dynamic>{
           'status': status,
           'status_changed_at': now,
@@ -283,6 +313,34 @@ class WishManagementService {
     }
   }
 
+  /// Vorab-Wunsch in die offene Liste übernehmen ([pre_wish_published], [is_pre_wish] bleibt).
+  static Future<void> publishPreWishToOpen(
+    List<String> docIds,
+    String partyId,
+  ) async {
+    final batch = FirebaseFirestore.instance.batch();
+    var valid = 0;
+
+    for (final docId in docIds) {
+      final docRef = WishPaths.partyWish(partyId, docId);
+      final snap = await docRef.get();
+      if (!snap.exists) continue;
+      final data = snap.data();
+      if (data == null || data['is_pre_wish'] != true) continue;
+      batch.update(docRef, {
+        'pre_wish_published': true,
+        'status': 'pending',
+      });
+      valid++;
+    }
+
+    if (valid == 0) {
+      throw Exception('Keine Vorab-Wünsche konnten freigegeben werden');
+    }
+    await batch.commit();
+    debugLog('✅ publishPreWishToOpen: $valid Dokument(e) für Party $partyId');
+  }
+
   /// Löscht mehrere Wünsche (Batch-Operation)
   ///
   /// [docIds] - Liste der Document-IDs der zu löschenden Wünsche
@@ -302,9 +360,7 @@ class WishManagementService {
     for (final docId in docIds) {
       try {
         // SICHERHEITS-PRÜFUNG: Lade Dokument und prüfe party_id
-        final docRef = FirebaseFirestore.instance
-            .collection('wishes')
-            .doc(docId);
+        final docRef = WishPaths.partyWish(partyId, docId);
         final docSnapshot = await docRef.get();
 
         if (!docSnapshot.exists) {
@@ -315,19 +371,6 @@ class WishManagementService {
           continue;
         }
 
-        final docData = docSnapshot.data() as Map<String, dynamic>?;
-        final docPartyId = docData?['party_id'] as String?;
-
-        // WICHTIG: Nur löschen, wenn party_id übereinstimmt
-        if (docPartyId != partyId) {
-          debugLog(
-            '🚫 deleteGroupedWishes: Dokument $docId gehört zu Party "$docPartyId", erwartet "$partyId" - überspringe Löschung',
-          );
-          skippedDeletes++;
-          continue;
-        }
-
-        // Party-ID stimmt überein - Löschung vorbereiten
         batch.delete(docRef);
         validDeletes++;
       } catch (e) {

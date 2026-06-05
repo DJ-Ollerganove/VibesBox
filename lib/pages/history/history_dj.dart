@@ -618,7 +618,8 @@ class _HistoryDjPageState extends State<HistoryDjPage> {
                                     if (isFree && index % 6 == 5) {
                                       return const ProPromotionBanner();
                                     }
-                                    final dataIndex = index - (index ~/ 6);
+                                    final dataIndex =
+                                        isFree ? index - (index ~/ 6) : index;
                                     final data = paginatedTrackData[dataIndex];
                                     final track = data['track'] as TrackEntry;
                                     final sessionId = data['sessionId'] as String;

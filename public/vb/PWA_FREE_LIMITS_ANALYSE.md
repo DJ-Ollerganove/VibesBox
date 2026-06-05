@@ -65,11 +65,11 @@
 - **Reines JavaScript**, keine Frameworks (kein Vue/React).
 - **Eine zentrale Datei:** `public/index.html` enthält HTML, CSS und den gesamten App-JS-Code inline.
 - **Weitere Dateien:**  
-  - `translations.js` – Übersetzungen (i18n).  
+  - `lang/*.js` – Übersetzungen (i18n, aus `babel/locales/*.json`).  
   - `styles/theme.js` – Theme.  
   - `service-worker.js` – PWA-SW.  
   - `manifest.json`, `robots.txt`, ggf. Bilder.
-- **Kein Build-Step** für die PWA im public-Ordner; Änderungen direkt in `index.html` (und ggf. `translations.js`) vornehmen.
+- **Kein Build-Step** für die PWA im public-Ordner; Texte in `babel/locales/*.json`, dann `node scripts/pwa-lang-import-babel.js`.
 
 ---
 
@@ -77,8 +77,9 @@
 
 ```
 public/
-├── index.html          ← Alle Firebase-/Party-/DJ-/UI-Logik, Logo, Social, Kontakt
-├── translations.js     ← Nur Texte (optional: neue Keys für Free-Hinweise)
+├── vb/index.html       ← PWA-UI
+├── vb/app.js           ← Firebase-/Party-/DJ-/UI-Logik
+├── vb/lang/*.js        ← i18n (aus babel/locales)
 ├── styles/theme.js
 ├── service-worker.js
 ├── manifest.json

@@ -1,0 +1,10 @@
+/* Info.plist yerelleştirmesi – VibesBox */
+"NSLocalNetworkUsageDescription" = "Flutter ve Xcode’un uygulamaya bağlanabilmesi (geliştirirken örneğin Hot Reload için) VibesBox’un yerel ağınızdaki cihazlara erişmesi gerekir.";
+"NSMicrophoneUsageDescription" = "VibesBox, çalan müziği analiz etmek ve tanımak için mikrofona ihtiyaç duyar.";
+"NSAppleMusicUsageDescription" = "VibesBox, müzik tanımayı Apple Music ile ilişkilendirmek için medya kitaplığınıza erişebilir.";
+"NSCameraUsageDescription" = "VibesBox QR kodları taramak ve fotoğraf çekmek için kameraya ihtiyaç duyar.";
+"NSPhotoLibraryUsageDescription" = "Profil fotoğrafı seçmeniz ve parti görsellerini kullanabilmeniz için fotoğraflarınıza erişmemiz gerekir.";
+"NSPhotoLibraryAddUsageDescription" = "İsterseniz QR kodları veya parti fotoğrafları gibi görselleri galerinize kaydederiz.";
+"NSLocationWhenInUseUsageDescription" = "Haritayı parti konumunuz üzerinde ortalamak için konumunuzu kullanırız.";
+"NSCalendarsUsageDescription" = "Parti tarihlerini takviminize aktarmak için gereklidir.";
+"NSFaceIDUsageDescription" = "Face ID yönetici ayarlarını korur; hassas seçeniklere yalnızca siz erişebilirsiniz.";

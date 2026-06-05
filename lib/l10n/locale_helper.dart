@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
@@ -7,17 +9,8 @@ import 'dart:ui' as ui;
 
 import '../models/user_model.dart';
 import 'app_localizations_de.dart';
-import 'app_localizations_en.dart';
-import 'app_localizations_fr.dart';
-import 'app_localizations_ru.dart';
-import 'app_localizations_zh.dart';
-import 'app_localizations_es.dart';
-import 'app_localizations_tr.dart';
-import 'app_localizations_ar.dart';
-import 'app_localizations_pt.dart';
-import 'app_localizations_it.dart';
-import 'app_localizations_uk.dart';
-import 'app_localizations_hi.dart';
+import 'generated/language_registry.g.dart';
+import 'generated/locale_translations.g.dart';
 import '../utils/debug_log.dart';
 
 /// Zentrale Locale-Logik: Gerät → unterstützte Sprache oder Englisch; eingeloggte Nutzer:
@@ -26,21 +19,9 @@ class LocaleHelper {
   static const String _permanentLocaleKey = 'permanent_user_locale';
   static const String _legacyLocaleKey = 'language_code';
 
-  /// Alle in der App verfügbaren Sprachen (Reihenfolge wie UI / delegate).
-  static const List<String> supportedLanguageCodes = [
-    'de',
-    'en',
-    'fr',
-    'ru',
-    'zh',
-    'es',
-    'tr',
-    // 'ar', // deaktiviert: nicht wählbar, kein Auto-Wechsel (s. mapToSupportedOrEnglish)
-    'pt',
-    'it',
-    'uk',
-    'hi',
-  ];
+  /// Alle in der App verfügbaren Sprachen — aus [l10n/languages.json] generiert.
+  static const List<String> supportedLanguageCodes =
+      LanguageRegistry.supportedLanguageCodes;
 
   static final ValueNotifier<Locale> localeNotifier =
       ValueNotifier<Locale>(const Locale('en'));
@@ -64,6 +45,13 @@ class LocaleHelper {
     if (first.startsWith('it')) return 'it';
     if (first == 'ua' || first.startsWith('uk')) return 'uk';
     if (first == 'hi' || first.startsWith('hi')) return 'hi';
+    if (first == 'sq' || first.startsWith('sq') || first == 'al') return 'sq';
+    if (first == 'vi' || first.startsWith('vi')) return 'vi';
+    if (first == 'ja' || first.startsWith('ja') || first == 'jp') return 'ja';
+    if (first == 'el' || first.startsWith('el') || first == 'gr') return 'el';
+    if (first == 'nl' || first.startsWith('nl')) return 'nl';
+    if (first == 'pl' || first.startsWith('pl')) return 'pl';
+    if (first == 'cs' || first.startsWith('cs') || first == 'cz') return 'cs';
     return 'en';
   }
 
@@ -85,6 +73,7 @@ class LocaleHelper {
     final prefs = await SharedPreferences.getInstance();
     final user = FirebaseAuth.instance.currentUser;
     late String code;
+    var backfillLanguageToFirestore = false;
 
     if (user != null) {
       try {
@@ -98,10 +87,13 @@ class LocaleHelper {
           code = mapToSupportedOrEnglish(fromProfile);
         } else {
           code = _deviceLocaleToSupportedOrEnglish();
+          // Admin-UI / Support: fehlende Felder nachtragen (einmalig pro Gerät mit App-Start)
+          backfillLanguageToFirestore = true;
         }
       } catch (e) {
         debugLog('🌍 initializeAppLocale Profil-Lesen: $e');
         code = _deviceLocaleToSupportedOrEnglish();
+        backfillLanguageToFirestore = true;
       }
       await prefs.setString(_legacyLocaleKey, code);
       await prefs.setString(_permanentLocaleKey, code);
@@ -118,6 +110,26 @@ class LocaleHelper {
 
     localeNotifier.value = Locale(code);
     debugLog('🌍 initializeAppLocale → $code');
+
+    if (user != null && backfillLanguageToFirestore) {
+      unawaited(_backfillLanguageToFirestore(user.uid, code));
+    }
+  }
+
+  /// Schreibt `language` / `selected_language`, wenn sie im Profil fehlen (für Admin-Ansicht & Konsistenz).
+  static Future<void> _backfillLanguageToFirestore(String uid, String code) async {
+    try {
+      await FirebaseFirestore.instance.collection('users').doc(uid).set(
+        <String, dynamic>{
+          'language': code,
+          'selected_language': code,
+        },
+        SetOptions(merge: true),
+      );
+      debugLog('🌍 Firestore Sprache nachgetragen ($code)');
+    } catch (e) {
+      debugLog('🌍 Firestore Sprache nachtragen fehlgeschlagen: $e');
+    }
   }
 
   /// Nach Firestore-Profil-Updates: gespeicherte `language` / `locale` erzwingen.
@@ -221,32 +233,6 @@ class LocaleHelper {
   }
 
   static Map<String, String> getTranslations(Locale locale) {
-    switch (locale.languageCode) {
-      case 'en':
-        return AppLocalizationsEN.translations;
-      case 'fr':
-        return AppLocalizationsFR.translations;
-      case 'ru':
-        return AppLocalizationsRU.translations;
-      case 'zh':
-        return AppLocalizationsZH.translations;
-      case 'es':
-        return AppLocalizationsES.translations;
-      case 'tr':
-        return AppLocalizationsTR.translations;
-      case 'ar':
-        return AppLocalizationsAR.translations;
-      case 'pt':
-        return AppLocalizationsPT.translations;
-      case 'it':
-        return AppLocalizationsIT.translations;
-      case 'uk':
-        return AppLocalizationsUK.translations;
-      case 'hi':
-        return AppLocalizationsHI.translations;
-      case 'de':
-      default:
-        return AppLocalizationsDE.translations;
-    }
+    return translationsForLanguageCode(locale.languageCode);
   }
 }

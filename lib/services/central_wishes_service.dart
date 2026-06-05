@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../models/song_request.dart';
 import 'active_party_service.dart';
 import '../utils/debug_log.dart';
+import '../utils/wish_paths.dart';
 
 /// Zentrale Service-Klasse für die Verwaltung aller Wünsche
 /// Bietet einen einzigen Stream für alle wishes-Dokumente einer DJ-ID
@@ -53,9 +54,7 @@ class CentralWishesService {
     _wishesController = StreamController<List<SongRequest>>.broadcast();
 
     // Erstelle Firebase-Query: NUR nach party_id (lange Dokument-ID) filtern
-    Query query = FirebaseFirestore.instance
-        .collection('wishes')
-        .where('party_id', isEqualTo: partyId);
+    Query query = WishPaths.partyWishes(partyId);
 
     debugLog('🔍 CentralWishesService: Initialisiere Stream mit Filter: party_id == $partyId');
 

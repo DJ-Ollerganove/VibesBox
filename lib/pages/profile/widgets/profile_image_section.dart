@@ -7,15 +7,12 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:image/image.dart' as img;
-import 'package:url_launcher/url_launcher.dart';
-
 import '../../../l10n/app_localizations.dart';
 import '../../../models/user_model.dart';
 import '../../../services/user_service.dart';
 import '../../../utils/network_image_url.dart';
 import '../../../utils/role_helper.dart';
 import '../../../utils/ui_constants.dart';
-import '../../../services/vibesbox_social_service.dart';
 import '../../../widgets/free_feature_locked.dart';
 import '../../../utils/debug_log.dart';
 
@@ -430,46 +427,6 @@ class _ProfileImageSectionState extends State<ProfileImageSection> {
     return image;
   }
 
-  Future<void> _openVibesboxProfileLink(String url) async {
-    final uri = Uri.tryParse(url);
-    if (uri == null) return;
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
-  }
-
-  Widget _vibesboxProfileLink(BuildContext context, String label, String url) {
-    return InkWell(
-      onTap: () => _openVibesboxProfileLink(url),
-      child: Text(
-        label,
-        style: const TextStyle(
-          color: UIConstants.appOrange,
-          fontWeight: FontWeight.w600,
-          decoration: TextDecoration.underline,
-          fontSize: 13,
-        ),
-      ),
-    );
-  }
-
-  String _labelForVibesboxEntry(String id, AppLocalizations l) {
-    switch (id.toLowerCase()) {
-      case 'instagram':
-        return l.vibesbox_social_instagram_label;
-      case 'facebook':
-        return l.vibesbox_social_facebook_label;
-      case 'website':
-        return l.vibesbox_social_website_label;
-      case 'tiktok':
-        return l.tiktok;
-      case 'youtube':
-        return l.youtube;
-      case 'spotify':
-        return l.spotify;
-      default:
-        return id;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<SessionProStatus?>(
@@ -513,58 +470,76 @@ class _ProfileImageSectionState extends State<ProfileImageSection> {
     final children = <Widget>[];
     if (widget.showAvatar) {
       children.add(
-        Center(
-          child: Stack(
-            children: [
-              profileCircleAvatar,
-              Positioned(
-                bottom: 0,
-                right: 0,
-                child: CircleAvatar(
-                  radius: 20,
-                  backgroundColor: Theme.of(context).colorScheme.primary,
-                  child: _isLoadingImage
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation<Color>(Colors.white)),
-                        )
-                      : PopupMenuButton<String>(
-                          icon: const Icon(Icons.camera_alt, size: 20, color: Colors.white),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                          onSelected: (value) {
-                            if (value == 'upload') _pickAndUploadImage();
-                            else if (value == 'delete') _deleteProfileImage();
-                          },
-                          itemBuilder: (context) => [
-                            PopupMenuItem(
-                              value: 'upload',
-                              child: Row(
-                                children: [
-                                  const Icon(Icons.camera_alt, size: 20),
-                                  const SizedBox(width: 8),
-                                  Text(localizations.change_image),
-                                ],
-                              ),
-                            ),
-                            if (isHttpImageUrl(widget.profileImageUrl))
-                              PopupMenuItem(
-                                value: 'delete',
-                                child: Row(
-                                  children: [
-                                    const Icon(Icons.delete, size: 20, color: Colors.red),
-                                    const SizedBox(width: 8),
-                                    Text(localizations.delete_image, style: const TextStyle(color: Colors.red)),
-                                  ],
+        Column(
+          children: [
+            Center(
+              child: Stack(
+                children: [
+                  profileCircleAvatar,
+                  Positioned(
+                    bottom: 0,
+                    right: 0,
+                    child: CircleAvatar(
+                      radius: 20,
+                      backgroundColor: Theme.of(context).colorScheme.primary,
+                      child: _isLoadingImage
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation<Color>(Colors.white)),
+                            )
+                          : PopupMenuButton<String>(
+                              icon: const Icon(Icons.camera_alt, size: 20, color: Colors.white),
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(),
+                              onSelected: (value) {
+                                if (value == 'upload') _pickAndUploadImage();
+                                else if (value == 'delete') _deleteProfileImage();
+                              },
+                              itemBuilder: (context) => [
+                                PopupMenuItem(
+                                  value: 'upload',
+                                  child: Row(
+                                    children: [
+                                      const Icon(Icons.camera_alt, size: 20),
+                                      const SizedBox(width: 8),
+                                      Text(localizations.change_image),
+                                    ],
+                                  ),
                                 ),
-                              ),
-                          ],
-                        ),
+                                if (isHttpImageUrl(widget.profileImageUrl))
+                                  PopupMenuItem(
+                                    value: 'delete',
+                                    child: Row(
+                                      children: [
+                                        const Icon(Icons.delete, size: 20, color: Colors.red),
+                                        const SizedBox(width: 8),
+                                        Text(localizations.delete_image, style: const TextStyle(color: Colors.red)),
+                                      ],
+                                    ),
+                                  ),
+                              ],
+                            ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (!widget.showBranding) ...[
+              const SizedBox(height: 10),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Text(
+                  localizations.profile_picture_account_hint,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Colors.white70,
+                        height: 1.35,
+                      ),
                 ),
               ),
             ],
-          ),
+          ],
         ),
       );
     }
@@ -591,7 +566,7 @@ class _ProfileImageSectionState extends State<ProfileImageSection> {
                   children: [
                     Row(
                       children: [
-                        const Icon(Icons.branding_watermark, size: 20, color: Colors.white70),
+                        const Icon(Icons.image_outlined, size: 20, color: Colors.white70),
                         const SizedBox(width: 8),
                         Text(
                           localizations.dj_branding,
@@ -603,55 +578,6 @@ class _ProfileImageSectionState extends State<ProfileImageSection> {
                         ],
                       ],
                     ),
-                    if (!isPro) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        localizations.vibesbox_follow_updates_intro,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: Colors.white,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                            ),
-                      ),
-                      const SizedBox(height: 10),
-                      FutureBuilder<List<VibesboxSocialEntry>>(
-                        future: getVibesboxSocialPlatforms(),
-                        builder: (context, snap) {
-                          if (snap.connectionState == ConnectionState.waiting &&
-                              !snap.hasData) {
-                            return const Padding(
-                              padding: EdgeInsets.symmetric(vertical: 8),
-                              child: SizedBox(
-                                width: 22,
-                                height: 22,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: UIConstants.appOrange,
-                                ),
-                              ),
-                            );
-                          }
-                          final entries = snap.data ?? [];
-                          if (entries.isEmpty) {
-                            return const SizedBox.shrink();
-                          }
-                          return Wrap(
-                            spacing: 14,
-                            runSpacing: 8,
-                            children: entries
-                                .map(
-                                  (e) => _vibesboxProfileLink(
-                                    context,
-                                    _labelForVibesboxEntry(e.id, localizations),
-                                    e.url,
-                                  ),
-                                )
-                                .toList(),
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 12),
-                    ],
                     const SizedBox(height: 16),
                     Text(
                       localizations.logo_preview,

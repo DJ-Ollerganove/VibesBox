@@ -40,10 +40,40 @@ class PartyAutostartService {
     return _currentDjId == user.uid;
   }
 
+  /// Verzögerter Nachzug: auf manchen Geräten (z. B. iPad) kommt die Party-Session kurz nach dem Autostart-Init.
+  static const Duration _delayedAutostartCatchUpDelay = Duration(seconds: 2);
+
+  void _scheduleDelayedAutostartCatchUp() {
+    unawaited(
+      Future<void>.delayed(_delayedAutostartCatchUpDelay, () async {
+        if (!_isInitialized) return;
+        await _delayedAutostartCatchUpAsync();
+      }),
+    );
+  }
+
+  Future<void> _delayedAutostartCatchUpAsync() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+      if (!_isInitialized) return;
+      if (_shazamService.isEnabled) return;
+      final stored = ActivePartyService.getStoredSession();
+      if (stored == null) return;
+      debugLog(
+        'PartyAutostartService: Nachzug nach ${_delayedAutostartCatchUpDelay.inSeconds}s — Party aktiv, Erkennung noch aus → Autostart prüfen.',
+      );
+      await _startRecognitionIfAllowed();
+    } catch (e) {
+      debugLog('PartyAutostartService: Nachzug Autostart: $e');
+    }
+  }
+
   /// Initialisiert Listener (einmal pro Prozess). Keine Firestore-get auf users – Einstellungen aus [UserModel].
   Future<void> initialize() async {
     if (_isInitialized) {
       await reconcileAfterResume();
+      _scheduleDelayedAutostartCatchUp();
       return;
     }
 
@@ -69,6 +99,7 @@ class PartyAutostartService {
     _evaluateStoredSessionOnce();
 
     await reconcileAfterResume();
+    _scheduleDelayedAutostartCatchUp();
   }
 
   /// Nach App-Resume: Session + Autostart aus Cache prüfen (ohne Cold-Start-Sperre).
@@ -196,10 +227,40 @@ class PartyAutostartService {
     }
     final mic = await Permission.microphone.status;
     if (!mic.isGranted) {
+      debugLog(
+        'PartyAutostartService: Musikerkennung nicht gestartet — Mikrofon nicht erlaubt (Status: $mic).',
+      );
       return RecognitionStartOutcome.denied;
     }
     try {
-      return await _shazamService.startAutoScanning();
+      final outcome = await _shazamService.startAutoScanning();
+      switch (outcome) {
+        case RecognitionStartOutcome.blockedByOtherDevice:
+          debugLog(
+            'PartyAutostartService: Autostart blockiert — Musikerkennung läuft schon auf einem anderen Gerät '
+            '(oder alter Lock). Bitte dort ausschalten oder ein paar Minuten warten.',
+          );
+          break;
+        case RecognitionStartOutcome.lockAcquireFailed:
+          debugLog(
+            'PartyAutostartService: Autostart fehlgeschlagen (Lock/Firestore). Kurz warten und App wieder öffnen.',
+          );
+          break;
+        case RecognitionStartOutcome.denied:
+          debugLog(
+            'PartyAutostartService: Musikerkennung nicht gestartet (z. B. Pro/Mikrofon).',
+          );
+          break;
+        case RecognitionStartOutcome.failed:
+          debugLog(
+            'PartyAutostartService: startAutoScanning ist mit Fehler ausgegangen.',
+          );
+          break;
+        case RecognitionStartOutcome.started:
+        case RecognitionStartOutcome.alreadyRunning:
+          break;
+      }
+      return outcome;
     } catch (e) {
       debugLog(
         '❌ PartyAutostartService: Fehler beim Starten der Musikerkennung: $e',

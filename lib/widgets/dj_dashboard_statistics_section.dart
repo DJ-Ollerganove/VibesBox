@@ -1,9 +1,9 @@
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 
 import '../l10n/app_localizations.dart';
 import '../services/dj_dashboard_statistics_service.dart';
+import '../widgets/home_cells/stats_pie_chart_shared.dart';
 
 class DjDashboardStatisticsSection extends StatelessWidget {
   final Widget Function(BuildContext context, Widget child) cardBuilder;
@@ -20,6 +20,7 @@ class DjDashboardStatisticsSection extends StatelessWidget {
   });
 
   Widget _buildPieChart({
+    required StatsPieChartMetrics metrics,
     required int played,
     required int rejected,
     required int open,
@@ -27,80 +28,37 @@ class DjDashboardStatisticsSection extends StatelessWidget {
   }) {
     final total = played + rejected + open + deleted;
     if (total == 0) {
-      // Leerzustand: identische Größe, aber komplett weiß gefüllt
-      return Center(
-        child: Container(
-          width: double.infinity,
-          height: double.infinity,
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            shape: BoxShape.circle,
-          ),
-        ),
-      );
+      return StatsPieChartEmptyCircle(metrics: metrics);
     }
 
-    final playedPercent = (played / total * 100);
-    final rejectedPercent = (rejected / total * 100);
-    final openPercent = (open / total * 100);
-    final deletedPercent = (deleted / total * 100);
-
-    return PieChart(
-      PieChartData(
-        sectionsSpace: 2,
-        centerSpaceRadius: 40,
-        startDegreeOffset: 270,
-        sections: [
-          if (deleted > 0)
-            PieChartSectionData(
-              value: deleted.toDouble(),
-              title: '${deletedPercent.toStringAsFixed(1)}%',
-              color: Colors.black,
-              radius: 60,
-              titleStyle: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-              ),
-            ),
-          if (played > 0)
-            PieChartSectionData(
-              value: played.toDouble(),
-              title: '${playedPercent.toStringAsFixed(1)}%',
-              color: Colors.green,
-              radius: 60,
-              titleStyle: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-              ),
-            ),
-          if (rejected > 0)
-            PieChartSectionData(
-              value: rejected.toDouble(),
-              title: '${rejectedPercent.toStringAsFixed(1)}%',
-              color: Colors.red,
-              radius: 60,
-              titleStyle: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-              ),
-            ),
-          if (open > 0)
-            PieChartSectionData(
-              value: open.toDouble(),
-              title: '${openPercent.toStringAsFixed(1)}%',
-              color: Colors.blue,
-              radius: 60,
-              titleStyle: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-              ),
-            ),
-        ],
-      ),
+    return buildStatsPieChart(
+      metrics: metrics,
+      sections: [
+        if (deleted > 0)
+          StatsPieChartSlice(
+            value: deleted.toDouble(),
+            title: statsPiePercentLabel(deleted, total),
+            color: Colors.black,
+          ),
+        if (played > 0)
+          StatsPieChartSlice(
+            value: played.toDouble(),
+            title: statsPiePercentLabel(played, total),
+            color: Colors.green,
+          ),
+        if (rejected > 0)
+          StatsPieChartSlice(
+            value: rejected.toDouble(),
+            title: statsPiePercentLabel(rejected, total),
+            color: Colors.red,
+          ),
+        if (open > 0)
+          StatsPieChartSlice(
+            value: open.toDouble(),
+            title: statsPiePercentLabel(open, total),
+            color: Colors.blue,
+          ),
+      ],
     );
   }
 
@@ -137,27 +95,26 @@ class DjDashboardStatisticsSection extends StatelessWidget {
               final deleted = data?.chartDeleted ?? 0;
               final total = data?.totalWishes ?? 0;
 
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
+              return LayoutBuilder(
+                builder: (context, constraints) {
+                  final metrics = StatsPieChartMetrics.resolve(
+                    context,
+                    maxLayoutWidth: constraints.maxWidth,
+                  );
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        flex: 2,
-                        child: AspectRatio(
-                          aspectRatio: 1,
-                          child: _buildPieChart(
-                            played: played,
-                            rejected: rejected,
-                            open: open,
-                            deleted: deleted,
-                          ),
+                      StatsPieChartLegendRow(
+                        metrics: metrics,
+                        pie: _buildPieChart(
+                          metrics: metrics,
+                          played: played,
+                          rejected: rejected,
+                          open: open,
+                          deleted: deleted,
                         ),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: Column(
+                        legend: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -239,17 +196,17 @@ class DjDashboardStatisticsSection extends StatelessWidget {
                           ],
                         ),
                       ),
+                      if (total == 0) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          l.djDashboardEmptyState,
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
                     ],
-                  ),
-                  if (total == 0) ...[
-                    const SizedBox(height: 12),
-                    Text(
-                      l.djDashboardEmptyState,
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                  ],
-                ],
+                  );
+                },
               );
             },
           ),

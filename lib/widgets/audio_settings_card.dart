@@ -242,15 +242,25 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
           }
         }
 
-        // Firestore hat bei Login Vorrang für Statuszeilen-Schalter (geräteübergreifend)
-        final statusNotification = data?['show_status_notification'] as bool?;
-        if (statusNotification != null) {
-          statusNotifForService = statusNotification;
+        // Firestore / gemergtes UserModel: Statuszeilen-Schalter (pro Gerät via UserService)
+        final merged = UserService().currentUser.value;
+        if (merged != null && merged.id == user.uid) {
+          statusNotifForService = merged.showStatusNotification;
           final prefsWrite = await SharedPreferences.getInstance();
           await prefsWrite.setBool(
             _prefsKey(user.uid, 'show_status_notification'),
-            statusNotification,
+            merged.showStatusNotification,
           );
+        } else {
+          final statusNotification = data?['show_status_notification'] as bool?;
+          if (statusNotification != null) {
+            statusNotifForService = statusNotification;
+            final prefsWrite = await SharedPreferences.getInstance();
+            await prefsWrite.setBool(
+              _prefsKey(user.uid, 'show_status_notification'),
+              statusNotification,
+            );
+          }
         }
       } else {
         _profileIsFree = UserService().currentUser.value?.isFree ?? true;

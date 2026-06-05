@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import '../config/app_config.dart';
 import '../utils/debug_log.dart';
+import '../utils/wish_paths.dart';
 
 /// Datenklasse für User-Statistiken
 class UserStatistics {
@@ -137,8 +138,7 @@ class StatisticsService {
     try {
       // Lade alle Wünsche des Users (nach aktuellem Namen)
       final currentName = user.displayName ?? user.email?.split('@').first ?? '';
-      final wishesQuery = await FirebaseFirestore.instance
-          .collection('wishes')
+      final wishesQuery = await WishPaths.allWishesCollectionGroup()
           .where('name', isEqualTo: currentName)
           .get();
 
@@ -166,8 +166,120 @@ class StatisticsService {
     }
   }
 
-  /// Berechnet Admin-Statistiken aus einer Liste von Dokumenten
-  static AdminStatistics _calculateAdminStatistics(List<QueryDocumentSnapshot> docs) {
+  /// Vereinigt Wunsch-Docs aus Partys-Pfad und collectionGroup (dedupliziert nach Pfad).
+  static List<QueryDocumentSnapshot<Map<String, dynamic>>> _mergeWishDocuments(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> viaParties,
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> viaGroup,
+  ) {
+    final byPath = <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
+    for (final doc in viaParties) {
+      byPath[doc.reference.path] = doc;
+    }
+    for (final doc in viaGroup) {
+      byPath.putIfAbsent(doc.reference.path, () => doc);
+    }
+    return byPath.values.toList();
+  }
+
+  /// Alle Wünsche aller DJs (nur sinnvoll mit Firestore-Admin-Rechten).
+  /// Primär: alle Partys + Subcollections; zusätzlich collectionGroup (Union).
+  static Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
+      _loadAllWishDocumentsForAdmin() async {
+    final viaParties = await _loadAllWishDocumentsViaParties();
+
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> viaGroup = [];
+    try {
+      final groupSnap = await WishPaths.allWishesCollectionGroup().get();
+      viaGroup = groupSnap.docs;
+    } catch (e, st) {
+      debugLog('❌ Admin-Statistik collectionGroup: $e');
+      debugLog('$st');
+    }
+
+    final merged = _mergeWishDocuments(viaParties, viaGroup);
+    debugLog(
+      '📊 Admin-Statistik: Partys=${viaParties.length}, '
+      'collectionGroup=${viaGroup.length}, merged=${merged.length}',
+    );
+    return merged;
+  }
+
+  static Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
+      _loadAllWishDocumentsViaParties() async {
+    final partiesSnap =
+        await FirebaseFirestore.instance.collection('parties').get();
+    final all = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+
+    for (final partyDoc in partiesSnap.docs) {
+      try {
+        final wishesSnap = await WishPaths.partyWishes(partyDoc.id).get();
+        all.addAll(wishesSnap.docs);
+      } catch (e) {
+        debugLog(
+          '⚠️ Admin-Statistik: wishes für Party ${partyDoc.id} übersprungen: $e',
+        );
+      }
+    }
+
+    debugLog(
+      '📊 Admin-Statistik: ${all.length} Wünsche aus ${partiesSnap.docs.length} Partys',
+    );
+    return all;
+  }
+
+  static int _nowUnixUtc() =>
+      DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
+
+  /// Party-IDs, die gerade laufen (gleiche Logik wie DJ-Startseite / Plattform-Statistik).
+  static Future<Set<String>> loadCurrentlyActivePartyIds() async {
+    final nowUnix = _nowUnixUtc();
+    final ids = <String>{};
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('parties')
+          .where('lifecycle_status', isEqualTo: 'active')
+          .get();
+      for (final doc in snap.docs) {
+        final d = doc.data();
+        if (d['lifecycle_status'] == 'finished' ||
+            d['lifecycle_status'] == 'standby' ||
+            d['finished_at'] != null) {
+          continue;
+        }
+        final start = d['start_time_posix'] as int?;
+        final end = d['end_time_posix'] as int?;
+        if (start != null && end != null) {
+          if (nowUnix >= start && nowUnix < end) {
+            ids.add(doc.id);
+          }
+          continue;
+        }
+        if (d['isActive'] == true) {
+          ids.add(doc.id);
+        }
+      }
+    } catch (e) {
+      debugLog('StatisticsService: aktive Partys: $e');
+    }
+    return ids;
+  }
+
+  static bool _pendingCountsAsOpen(
+    Map<String, dynamic> data,
+    Set<String> activePartyIds,
+  ) {
+    final partyId = data['party_id'] as String?;
+    if (partyId == null || partyId.isEmpty) return false;
+    return activePartyIds.contains(partyId);
+  }
+
+  /// Berechnet Admin-Statistiken aus einer Liste von Dokumenten.
+  /// `pending`/`open` zählen nur bei **laufenden** Partys; sonst → `not_played`
+  /// (wie bei beendeter Party im DJ-Dashboard).
+  static AdminStatistics _calculateAdminStatistics(
+    List<QueryDocumentSnapshot> docs, {
+    required Set<String> activePartyIds,
+  }) {
     int total = 0;
     int pending = 0;
     int played = 0;
@@ -178,7 +290,7 @@ class StatisticsService {
     for (final doc in docs) {
       final data = doc.data() as Map<String, dynamic>;
       total++;
-      
+
       final isDeleted = data['deleted'] as bool? ?? false;
       final status = isDeleted
           ? 'unknown'
@@ -188,9 +300,18 @@ class StatisticsService {
         played++;
       } else if (status == 'rejected') {
         rejected++;
-      } else if (status == 'pending' || status == 'open') {
-        pending++;
-      } else if (status == 'not_played' || status == 'notplayed' || status == 'skipped') {
+      } else if (status == 'pending' ||
+          status == 'open' ||
+          status == null ||
+          status.isEmpty) {
+        if (_pendingCountsAsOpen(data, activePartyIds)) {
+          pending++;
+        } else {
+          notPlayed++;
+        }
+      } else if (status == 'not_played' ||
+          status == 'notplayed' ||
+          status == 'skipped') {
         notPlayed++;
       } else {
         unknown++;
@@ -212,15 +333,26 @@ class StatisticsService {
     );
   }
 
+  static Future<AdminStatistics> _calculateAdminStatisticsAsync(
+    List<QueryDocumentSnapshot> docs,
+  ) async {
+    final activePartyIds = await loadCurrentlyActivePartyIds();
+    return _calculateAdminStatistics(docs, activePartyIds: activePartyIds);
+  }
+
   /// Stream für globale Admin-Statistiken (alle Wünsche über alle Partys).
-  /// Hinweis: Für Admin-Home wird bevorzugt [loadAdminStatistics] (einmaliger get-Call) genutzt.
+  /// Nutzt Partys-Snapshot als Trigger und lädt vollständig über alle Subcollections
+  /// (collectionGroup allein liefert ohne globale Admin-Rechte nur eigene DJ-Wünsche).
   static Stream<AdminStatistics> loadAdminStatisticsStream() {
     return FirebaseFirestore.instance
-        .collection('wishes')
+        .collection('parties')
         .snapshots()
-        .map((snapshot) {
-      debugLog('📊 StatisticsService Stream: ${snapshot.docs.length} Dokumente aktualisiert (global)');
-      return _calculateAdminStatistics(snapshot.docs);
+        .asyncMap((_) async {
+      final docs = await _loadAllWishDocumentsForAdmin();
+      debugLog(
+        '📊 StatisticsService Stream: ${docs.length} Wünsche (global, Partys-Pfad)',
+      );
+      return _calculateAdminStatisticsAsync(docs);
     }).distinct((prev, next) {
       return prev.totalWishes == next.totalWishes &&
           prev.pendingWishes == next.pendingWishes &&
@@ -287,84 +419,25 @@ class StatisticsService {
     }
   }
 
-  /// Lädt die globale Admin-Statistik EINMALIG (alle Wünsche über alle Partys).
+  /// Lädt die globale Admin-Statistik EINMALIG (alle Wünsche aller DJs / Partys).
   static Future<AdminStatistics> loadAdminStatistics() async {
     try {
-      debugLog('🔍 StatisticsService: Starte loadAdminStatistics()');
-      
-      // Prüfe, ob Firebase initialisiert ist
-      try {
-        final app = FirebaseFirestore.instance.app;
-        debugLog('🔍 StatisticsService: Firebase App: ${app.name}');
-        debugLog('🔍 StatisticsService: Firebase Project ID: ${app.options.projectId}');
-        debugLog('🔍 StatisticsService: Firebase App ID: ${app.options.appId}');
-      } catch (e) {
-        debugLog('❌ StatisticsService: Firebase nicht initialisiert: $e');
-        throw Exception('Firebase nicht initialisiert');
-      }
-      
-      debugLog('🔍 StatisticsService: Führe globale Query auf collection("wishes").get() aus...');
-      final wishesQuery = await FirebaseFirestore.instance
-          .collection('wishes')
-          .get();
-
-      debugLog('✅ StatisticsService: Query erfolgreich abgeschlossen!');
-      debugLog('📊 StatisticsService: Gefundene Dokumente: ${wishesQuery.docs.length} (global)');
-      
-      if (wishesQuery.docs.isEmpty) {
-        debugLog('⚠️ StatisticsService: KEINE DOKUMENTE GEFUNDEN!');
-        debugLog('⚠️ StatisticsService: Mögliche Ursachen:');
-        debugLog('   1. Firestore-Regeln blockieren den Zugriff');
-        debugLog('   2. Collection "wishes" ist leer');
-        debugLog('   3. Paketname/SHA-1 stimmt nicht mit Firebase überein');
-        debugLog('   4. App muss nach SHA-1-Hinterlegung neu gebaut werden');
-      } else {
-        debugLog('✅ StatisticsService: ${wishesQuery.docs.length} Dokumente gefunden');
-        // Zeige erste 3 Dokumente zur Debugging
-        for (int i = 0; i < wishesQuery.docs.length && i < 3; i++) {
-          final doc = wishesQuery.docs[i];
-          final data = doc.data() as Map<String, dynamic>;
-          debugLog('   Dokument $i: ID=${doc.id}, status=${data['status']}, name=${data['name']}');
-        }
-      }
-
-      // Verwende die gemeinsame Berechnungsmethode
-      final stats = _calculateAdminStatistics(wishesQuery.docs);
-      
-      // Debug-Ausgabe um zu sehen, welche Status-Werte existieren
-      debugLog('=== Admin-Statistik: Alle Wünsche ALLER DJs ===');
-      debugLog('Total: ${stats.totalWishes}');
-      debugLog('Pending: ${stats.pendingWishes}');
-      debugLog('Played: ${stats.playedWishes}');
-      debugLog('Rejected: ${stats.rejectedWishes}');
-      debugLog('Not Played: ${stats.notPlayedWishes}');
-      debugLog('Unknown: ${stats.unknownWishes}');
-
-      debugLog('=== Diagramm-Daten ===');
-      debugLog('Total Wünsche: ${stats.totalWishes}');
-      debugLog('Pending (ORANGE): ${stats.chartPending}');
-      debugLog('Gespielt (GRÜN): ${stats.chartPlayed}');
-      debugLog('Abgelehnt (ROT): ${stats.chartRejected}');
-      debugLog('Nicht gespielt (BLAU): ${stats.chartNotPlayed}');
-      debugLog('Unbekannt (GRAU): ${stats.chartUnknown}');
-      debugLog('Summe im Diagramm: ${stats.chartPending + stats.chartPlayed + stats.chartRejected + stats.chartNotPlayed + stats.chartUnknown}');
-
+      debugLog('🔍 StatisticsService: loadAdminStatistics()');
+      final docs = await _loadAllWishDocumentsForAdmin();
+      final stats = await _calculateAdminStatisticsAsync(docs);
+      debugLog(
+        '=== Admin-Statistik (${docs.length} Wünsche) total=${stats.totalWishes} ===',
+      );
       return stats;
     } catch (e, stackTrace) {
-      debugLog('❌ StatisticsService: FEHLER beim Laden der Admin-Statistiken: $e');
-      debugLog('❌ StatisticsService: Stack Trace: $stackTrace');
-      debugLog('❌ StatisticsService: Fehler-Typ: ${e.runtimeType}');
-      
-      // Prüfe spezifische Fehlertypen
-      if (e.toString().contains('DEVELOPER_ERROR') || e.toString().contains('SecurityException')) {
-        debugLog('⚠️ StatisticsService: DEVELOPER_ERROR erkannt!');
-        debugLog('⚠️ StatisticsService: Mögliche Ursachen:');
-        debugLog('   1. SHA-1 nicht in Firebase Console hinterlegt');
-        debugLog('   2. App muss nach SHA-1-Hinterlegung neu gebaut werden');
-        debugLog('   3. Paketname stimmt nicht mit google-services.json überein');
-        debugLog('   4. google-services.json ist veraltet oder fehlt');
-      }
-      
+      debugLog('❌ StatisticsService: loadAdminStatistics: $e');
+      debugLog('$stackTrace');
+      try {
+        final fallback = await _loadAllWishDocumentsViaParties();
+        if (fallback.isNotEmpty) {
+          return _calculateAdminStatisticsAsync(fallback);
+        }
+      } catch (_) {}
       return AdminStatistics(
         totalWishes: 0,
         pendingWishes: 0,
@@ -415,10 +488,7 @@ class StatisticsService {
       // Lade Wünsche nach party_id
       if (partyIds.isNotEmpty) {
         for (final partyId in partyIds) {
-          final wishesQuery = await FirebaseFirestore.instance
-              .collection('wishes')
-              .where('party_id', isEqualTo: partyId)
-              .get();
+          final wishesQuery = await WishPaths.partyWishes(partyId).get();
           allWishes.addAll(wishesQuery.docs);
         }
       }

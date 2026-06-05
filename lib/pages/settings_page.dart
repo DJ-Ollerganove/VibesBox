@@ -11,13 +11,20 @@ import '../widgets/custom_page_header.dart';
 import '../services/pro_feature_guard.dart';
 import '../services/shazam_service.dart';
 import '../services/translation_settings_service.dart';
+import '../services/wishbox_suggestions_settings_service.dart';
 import '../widgets/text_scale_settings_section.dart';
+import '../widgets/results_per_page_settings_section.dart';
+import '../widgets/grace_period_settings_section.dart';
+import '../services/dj_wish_fcm_service.dart';
 import '../services/dj_wish_notification_service.dart';
 import '../services/user_service.dart';
+import '../services/dj_device_notification_prefs_service.dart';
+import '../helpers/security_helper.dart';
 import '../config/app_config.dart';
 import '../models/user_model.dart';
+import '../pages/diagnostic_log_page.dart';
+import '../services/app_diagnostic_log_service.dart';
 import '../utils/ui_constants.dart';
-
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
@@ -27,6 +34,7 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   bool _showGreetingTranslations = true;
+  bool _wishboxSuggestionsEnabled = true;
   bool _isLoading = true;
   @override
   void initState() {
@@ -37,9 +45,23 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _loadSettings() async {
     try {
       final enabled = await TranslationSettingsService.isTranslationEnabled();
+      final wishboxSuggestions =
+          await WishboxSuggestionsSettingsService.isEnabledForDj();
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid != null) {
+        final guestSnap =
+            await WishboxSuggestionsSettingsService.guestLiveRef(uid).get();
+        if (!guestSnap.exists) {
+          await WishboxSuggestionsSettingsService.setEnabledForDj(
+            wishboxSuggestions,
+            userId: uid,
+          );
+        }
+      }
       if (mounted) {
         setState(() {
           _showGreetingTranslations = enabled;
+          _wishboxSuggestionsEnabled = wishboxSuggestions;
           _isLoading = false;
         });
       }
@@ -57,9 +79,33 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  Future<void> _saveWishboxSuggestions(bool value) async {
+    try {
+      await WishboxSuggestionsSettingsService.setEnabledForDj(value);
+      if (mounted) setState(() => _wishboxSuggestionsEnabled = value);
+    } catch (_) {}
+  }
+
   /// Gleicher Präfix wie [AudioSettingsCard] / [ShazamSettingsSection] für Offline-Cache.
   String _audioSettingsPrefsKey(String uid, String key) =>
       'audio_settings_${uid}_$key';
+
+  Future<void> _writeDjDeviceNotificationFields(
+    String uid,
+    Map<String, dynamic> fields,
+  ) async {
+    final installId =
+        await DjDeviceNotificationPrefsService.getOrCreateInstallId();
+    final ref = DjDeviceNotificationPrefsService.deviceDocRef(uid, installId);
+    await ref.set(
+      SecurityHelper.sanitizeMap({
+        ...fields,
+        'platform': DjDeviceNotificationPrefsService.platformTag(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }),
+      SetOptions(merge: true),
+    );
+  }
 
   Future<void> _persistShowStatusNotification(
     BuildContext context,
@@ -72,7 +118,7 @@ class _SettingsPageState extends State<SettingsPage> {
         _audioSettingsPrefsKey(uid, 'show_status_notification'),
         enabled,
       );
-      await FirebaseFirestore.instance.collection('users').doc(uid).update({
+      await _writeDjDeviceNotificationFields(uid, {
         'show_status_notification': enabled,
       });
       await ShazamService().setShowStatusNotificationEnabled(enabled);
@@ -230,19 +276,45 @@ class _SettingsPageState extends State<SettingsPage> {
 
               TextScaleSettingsSection(textDirectionRtl: isRtl),
 
-              // DJ: Benachrichtigungen (Firestore users/{uid}) — inkl. Statusleiste Musikerkennung
+              // DJ: Treffer pro Seite (Listen-Paginierung)
+              ValueListenableBuilder<UserModel?>(
+                valueListenable: UserService().currentUser,
+                builder: (context, userModel, _) {
+                  if (user == null || userModel == null) {
+                    return const SizedBox.shrink();
+                  }
+                  if (AppConfig.isGuestRole(userModel)) {
+                    return const SizedBox.shrink();
+                  }
+                  return ResultsPerPageSettingsSection(textDirectionRtl: isRtl);
+                },
+              ),
+
+              // DJ: Nachlaufzeit Wunschliste
+              ValueListenableBuilder<UserModel?>(
+                valueListenable: UserService().currentUser,
+                builder: (context, userModel, _) {
+                  if (user == null || userModel == null) {
+                    return const SizedBox.shrink();
+                  }
+                  if (AppConfig.isGuestRole(userModel)) {
+                    return const SizedBox.shrink();
+                  }
+                  return GracePeriodSettingsSection(textDirectionRtl: isRtl);
+                },
+              ),
+
+              // DJ: Benachrichtigungen — pro Installation unter users/{uid}/dj_device_prefs
               if (user != null)
-                StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                  stream: FirebaseFirestore.instance
-                      .collection('users')
-                      .doc(user.uid)
-                      .snapshots(),
-                  builder: (context, snap) {
-                    final data = snap.data?.data();
-                    final notifyOn = data?['notifyNewWishes'] == true;
-                    final soundOn = data?['enableNotificationSound'] != false;
-                    final statusBarOn =
-                        data?['show_status_notification'] == true;
+                ValueListenableBuilder<UserModel?>(
+                  valueListenable: UserService().currentUser,
+                  builder: (context, djUser, _) {
+                    if (djUser == null || djUser.id != user.uid) {
+                      return const SizedBox.shrink();
+                    }
+                    final notifyOn = djUser.notifyNewWishes;
+                    final soundOn = djUser.enableNotificationSound;
+                    final statusBarOn = djUser.showStatusNotification;
                     return Container(
                       margin: const EdgeInsets.only(bottom: 16),
                       decoration: BoxDecoration(
@@ -283,13 +355,16 @@ class _SettingsPageState extends State<SettingsPage> {
                                     await DjWishNotificationService
                                         .requestNotificationPermissionIfNeeded();
                                   }
-                                  await FirebaseFirestore.instance
-                                      .collection('users')
-                                      .doc(u.uid)
-                                      .set(
-                                        {'notifyNewWishes': v},
-                                        SetOptions(merge: true),
-                                      );
+                                  await _writeDjDeviceNotificationFields(
+                                    u.uid,
+                                    {'notifyNewWishes': v},
+                                  );
+                                  if (v) {
+                                    unawaited(
+                                      DjWishFcmService.instance
+                                          .syncTokenForCurrentUserIfEligible(),
+                                    );
+                                  }
                                 })());
                               },
                             ),
@@ -306,15 +381,17 @@ class _SettingsPageState extends State<SettingsPage> {
                                         final u = FirebaseAuth
                                             .instance.currentUser;
                                         if (u == null) return;
-                                        await FirebaseFirestore.instance
-                                            .collection('users')
-                                            .doc(u.uid)
-                                            .set(
-                                              {
-                                                'enableNotificationSound': v,
-                                              },
-                                              SetOptions(merge: true),
-                                            );
+                                        final wasSoundOff = !soundOn;
+                                        if (v && wasSoundOff) {
+                                          await DjWishNotificationService
+                                              .requestNotificationPermissionIfNeeded();
+                                        }
+                                        await _writeDjDeviceNotificationFields(
+                                          u.uid,
+                                          {
+                                            'enableNotificationSound': v,
+                                          },
+                                        );
                                       })());
                                     }
                                   : null,
@@ -366,7 +443,63 @@ class _SettingsPageState extends State<SettingsPage> {
                   },
                 ),
 
-              // Zelle 2: Grüße übersetzen — nur DJ/Admin/Location, nicht Gastkonten.
+              // Zelle: Wunschbox-Wortvorschläge — nur DJ/Admin/Location.
+              ValueListenableBuilder<UserModel?>(
+                valueListenable: UserService().currentUser,
+                builder: (context, userModel, _) {
+                  final authUser = FirebaseAuth.instance.currentUser;
+                  if (authUser == null || userModel == null) {
+                    return const SizedBox.shrink();
+                  }
+                  if (AppConfig.isGuestRole(userModel)) {
+                    return const SizedBox.shrink();
+                  }
+                  return Container(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E1E1E),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.orange, width: 1.5),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12.0),
+                      child: Column(
+                        crossAxisAlignment: isRtl
+                            ? CrossAxisAlignment.end
+                            : CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            l.settings_wishbox_suggestions_title,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(
+                              l.settings_wishbox_suggestions_subtitle,
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 13,
+                              ),
+                            ),
+                            value: _wishboxSuggestionsEnabled,
+                            activeThumbColor: Colors.orange,
+                            onChanged: _saveWishboxSuggestions,
+                            controlAffinity: isRtl
+                                ? ListTileControlAffinity.leading
+                                : ListTileControlAffinity.trailing,
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+
+              // Zelle: Grüße übersetzen — nur DJ/Admin/Location, nicht Gastkonten.
               ValueListenableBuilder<UserModel?>(
                 valueListenable: UserService().currentUser,
                 builder: (context, userModel, _) {
@@ -421,6 +554,49 @@ class _SettingsPageState extends State<SettingsPage> {
                   );
                 },
               ),
+
+              // Admin-DJ: Geräte-Diagnose (Abstürze, Shazam, Lifecycle)
+              if (user != null &&
+                  AppDiagnosticLogService.canAccessDiagnosticUi())
+                Container(
+                  margin: const EdgeInsets.only(bottom: 16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E1E1E),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.orange, width: 1.5),
+                  ),
+                  child: ListTile(
+                    leading: const Icon(
+                      Icons.bug_report_outlined,
+                      color: Colors.orange,
+                    ),
+                    title: const Text(
+                      'Diagnose-Log',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    subtitle: Text(
+                      'Fehler & Ereignisse auf diesem Gerät protokollieren',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.65),
+                        fontSize: 12,
+                      ),
+                    ),
+                    trailing: const Icon(
+                      Icons.chevron_right,
+                      color: Colors.white54,
+                    ),
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const DiagnosticLogPage(),
+                        ),
+                      );
+                    },
+                  ),
+                ),
 
               // Schwarzer Leerraum am Ende (verhindert Ankleben an Navigation)
               const SizedBox(height: 100),

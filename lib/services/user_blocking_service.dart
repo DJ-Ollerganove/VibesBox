@@ -4,10 +4,125 @@ import 'package:flutter/material.dart';
 import '../l10n/app_localizations.dart';
 import '../models/song_request.dart';
 import '../utils/debug_log.dart';
+import '../utils/wish_paths.dart';
 
 /// Service für die Verwaltung von User-Blockierungen
 /// Enthält Dialog-Logik und Firestore-Operationen für das Sperren von Usern und Gästen
 class UserBlockingService {
+  static const Map<String, dynamic> _rejectByBlockUpdate = {
+    'status': 'rejected',
+    'auto_rejected_by_block': true,
+    'rejection_reason': 'user_blocked',
+  };
+
+  static bool _wishBelongsToBlockedGuest(
+    Map<String, dynamic> data,
+    String blockedClientId,
+    String? blockedUserId,
+  ) {
+    final cid = (data['client_id'] ?? '').toString().trim();
+    final uid = (data['user_id'] ?? '').toString().trim();
+    if (cid.isNotEmpty && cid == blockedClientId) return true;
+    if (blockedUserId != null &&
+        blockedUserId.isNotEmpty &&
+        uid.isNotEmpty &&
+        uid == blockedUserId) {
+      return true;
+    }
+    return false;
+  }
+
+  /// Original-ID für Dubletten-Kette (abgelehntes Original → Schatten anderer Gäste hochstufen).
+  static void _trackOriginalForDuplicatePromotion(
+    Set<String> originalsForPromotion,
+    String wishDocId,
+    Map<String, dynamic> data,
+  ) {
+    if (data['is_duplicate'] == true) {
+      final originalId = (data['original_wish_id'] ?? '').toString().trim();
+      if (originalId.isNotEmpty) originalsForPromotion.add(originalId);
+    } else if (wishDocId.isNotEmpty) {
+      originalsForPromotion.add(wishDocId);
+    }
+  }
+
+  /// Felder für ein Schatten-Dokument, das nach Sperre des Erstwünschenden sichtbar wird.
+  static Map<String, dynamic> _promotedPrimaryWishFields(Map<String, dynamic> shadow) {
+    final guestName = (shadow['name'] ?? '').toString().trim();
+    final requestedBy = guestName.isNotEmpty ? <String>[guestName] : <String>[];
+
+    final greetings = <Map<String, dynamic>>[];
+    final singleGreeting = (shadow['greeting'] ?? '').toString().trim();
+    if (singleGreeting.isNotEmpty && guestName.isNotEmpty) {
+      greetings.add({'name': guestName, 'greeting': singleGreeting});
+    } else if (shadow['greetings'] is List) {
+      for (final entry in shadow['greetings'] as List) {
+        if (entry is! Map) continue;
+        final n = (entry['name'] ?? '').toString().trim();
+        if (guestName.isNotEmpty && n != guestName) continue;
+        greetings.add(Map<String, dynamic>.from(entry));
+      }
+    }
+
+    final isRegisteredUsers = <String, bool>{};
+    if (guestName.isNotEmpty) {
+      final reg = shadow['is_registered_users'];
+      if (reg is Map && reg[guestName] == true) {
+        isRegisteredUsers[guestName] = true;
+      } else if (shadow['is_registered_user'] == true) {
+        isRegisteredUsers[guestName] = true;
+      }
+    }
+
+    return {
+      'is_duplicate': false,
+      'original_wish_id': FieldValue.delete(),
+      'duplicate_count': 0,
+      'requested_by': requestedBy,
+      'greetings': greetings,
+      'greeting': FieldValue.delete(),
+      'is_registered_users': isRegisteredUsers,
+    };
+  }
+
+  /// Nach Sperre: andere Gäste behalten ihren Wunsch in „Offen“ (Schatten → Primary).
+  static Future<void> _promoteOtherGuestsDuplicateWishes({
+    required WriteBatch batch,
+    required Set<String> originalWishIds,
+    required String blockedClientId,
+    required String? blockedUserId,
+    required String partyId,
+  }) async {
+    for (final originalId in originalWishIds) {
+      if (originalId.isEmpty) continue;
+
+      final shadows = await WishPaths.partyWishes(partyId)
+          .where('original_wish_id', isEqualTo: originalId)
+          .where('status', isEqualTo: 'pending')
+          .get();
+
+      for (final doc in shadows.docs) {
+        final data = doc.data();
+        if (data['is_duplicate'] != true) continue;
+
+        if (_wishBelongsToBlockedGuest(data, blockedClientId, blockedUserId)) {
+          batch.update(doc.reference, {
+            ..._rejectByBlockUpdate,
+            'rejectedAt': FieldValue.serverTimestamp(),
+          });
+          debugLog(
+            '✅ Dublette des gesperrten Gastes abgelehnt: ${doc.id}',
+          );
+          continue;
+        }
+
+        batch.update(doc.reference, _promotedPrimaryWishFields(data));
+        debugLog(
+          '✅ Dubletten-Schatten hochgestuft (bleibt in Offen): ${doc.id}',
+        );
+      }
+    }
+  }
   /// Sperrt einen User oder Gast in Firestore (immer party-spezifisch)
   static Future<void> blockUser(
     BuildContext context,
@@ -114,10 +229,7 @@ class UserBlockingService {
       String? triggerWishTitle;
       if (currentWishId != null && currentWishId.isNotEmpty) {
         try {
-          final wishDoc = await FirebaseFirestore.instance
-              .collection('wishes')
-              .doc(currentWishId)
-              .get();
+          final wishDoc = await WishPaths.partyWish(partyId, currentWishId).get();
           
           if (wishDoc.exists) {
             final wishData = wishDoc.data() as Map<String, dynamic>;
@@ -186,25 +298,35 @@ class UserBlockingService {
       
       // B. & C. Song-Markierung: Setze alle pending Wünsche auf rejected mit rejection_reason
       try {
+        final originalsForPromotion = <String>{};
+
         // Wenn eine aktuelle Wunsch-ID übergeben wurde, markiere diesen Wunsch direkt
         if (currentWishId != null && currentWishId.isNotEmpty) {
           try {
-            final wishRef = FirebaseFirestore.instance.collection('wishes').doc(currentWishId);
+            final wishRef = WishPaths.partyWish(partyId, currentWishId);
             final wishDoc = await wishRef.get();
             if (wishDoc.exists) {
               final wishData = wishDoc.data() as Map<String, dynamic>;
               final currentStatus = wishData['status'] as String?;
               if (currentStatus != 'rejected') {
-              batch.update(wishRef, {
-                'status': 'rejected',
-                'auto_rejected_by_block': true, // Kompatibilität
-                'rejection_reason': 'user_blocked', // ✅ WICHTIG: Für präzise Entsperr-Logik
-                'rejectedAt': FieldValue.serverTimestamp(),
-              });
+                batch.update(wishRef, {
+                  ..._rejectByBlockUpdate,
+                  'rejectedAt': FieldValue.serverTimestamp(),
+                });
+                _trackOriginalForDuplicatePromotion(
+                  originalsForPromotion,
+                  currentWishId,
+                  wishData,
+                );
                 rejectedCount++;
                 debugLog('✅ Aktueller Wunsch wird abgelehnt markiert');
               } else {
                 debugLog('⚠️ Aktueller Wunsch ist bereits abgelehnt');
+                _trackOriginalForDuplicatePromotion(
+                  originalsForPromotion,
+                  currentWishId,
+                  wishData,
+                );
               }
             } else {
               debugLog('⚠️ Aktueller Wunsch existiert nicht');
@@ -221,19 +343,14 @@ class UserBlockingService {
         if (finalClientId != null && finalClientId.isNotEmpty && partyId != null && partyId != 'manual' && partyId.isNotEmpty) {
           // Suche nach client_id, party_id UND status='pending' (am spezifischsten)
           debugLog('🔍 KASKADIEREND: KASKADIEREND: pending (client_id + party_id)');
-          wishesQuery = FirebaseFirestore.instance
-              .collection('wishes')
+          wishesQuery = WishPaths.partyWishes(partyId)
               .where('client_id', isEqualTo: finalClientId)
-              .where('party_id', isEqualTo: partyId)
-              .where('status', isEqualTo: 'pending'); // ✅ NUR pending Wünsche ablehnen
+              .where('status', isEqualTo: 'pending');
         } else if (userId != null && partyId != null && partyId != 'manual' && partyId.isNotEmpty) {
-          // Suche nach user_id, party_id UND status='pending' (auch spezifisch)
           debugLog('🔍 KASKADIEREND: KASKADIEREND: pending (user_id + party_id)');
-          wishesQuery = FirebaseFirestore.instance
-              .collection('wishes')
+          wishesQuery = WishPaths.partyWishes(partyId)
               .where('user_id', isEqualTo: userId)
-              .where('party_id', isEqualTo: partyId)
-              .where('status', isEqualTo: 'pending'); // ✅ NUR pending Wünsche ablehnen
+              .where('status', isEqualTo: 'pending');
         }
         // Kein Fallback nach Name - zu gefährlich bei mehreren Gästen mit gleichem Namen!
         
@@ -254,11 +371,14 @@ class UserBlockingService {
             // Alle pending Wünsche automatisch ablehnen
             if (currentStatus == 'pending') {
               batch.update(wishDoc.reference, {
-                'status': 'rejected',
-                'auto_rejected_by_block': true, // Kompatibilität
-                'rejection_reason': 'user_blocked', // ✅ WICHTIG: Für präzise Entsperr-Logik
+                ..._rejectByBlockUpdate,
                 'rejectedAt': FieldValue.serverTimestamp(),
               });
+              _trackOriginalForDuplicatePromotion(
+                originalsForPromotion,
+                wishDoc.id,
+                wishData,
+              );
               rejectedCount++;
               debugLog('✅ KASKADIEREND: KASKADIEREND: Wunsch abgelehnt');
             } else {
@@ -268,7 +388,17 @@ class UserBlockingService {
         } else {
           debugLog('⚠️ Keine client_id/user_id oder party_id für kaskadierendes Ablehnen');
         }
-        
+
+        if (originalsForPromotion.isNotEmpty) {
+          await _promoteOtherGuestsDuplicateWishes(
+            batch: batch,
+            originalWishIds: originalsForPromotion,
+            blockedClientId: finalClientId,
+            blockedUserId: userId,
+            partyId: partyId,
+          );
+        }
+
         // ✅ BATCH COMMIT: Alles zusammen ausführen (blocked_guests + block_history + rejected wishes)
         if (rejectedCount > 0 || true) { // Immer committen, auch wenn keine Wünsche abgelehnt wurden (blocked_guests + block_history müssen gespeichert werden)
           await batch.commit();

@@ -9,6 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="/vb/scripts/default-pwa-languages.js"></script>
+  <script src="/lang-menu-columns.js"></script>
   <script src="/lang_menu_shared.js"></script>
   <script src="/delete-account-i18n.js"></script>
   <style>
@@ -86,17 +87,48 @@
       right: 0;
       margin-top: 8px;
       min-width: 200px;
+      max-width: min(96vw, 680px);
       background: #1A1A1A;
       border: 1px solid var(--accent);
       border-radius: 10px;
       box-shadow: 0 8px 24px rgba(212, 131, 77, 0.25);
-      padding: 6px 0;
+      padding: 10px;
       z-index: 150;
       display: none;
-      overflow: hidden;
-      flex-direction: column;
+      overflow-x: auto;
+      overflow-y: hidden;
     }
-    .main-lang-dropdown.show { display: flex; }
+    .main-lang-dropdown.show { display: block; }
+    .lang-menu-columns {
+      display: flex;
+      flex-direction: row;
+      align-items: flex-start;
+      gap: 10px;
+      width: max-content;
+      max-width: 100%;
+    }
+    .lang-menu-column {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      flex: 0 0 auto;
+      width: min(148px, 42vw);
+    }
+    .lang-menu-scroll-wrap { position: relative; width: 100%; }
+    .lang-menu-scroll-area { overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
+    .lang-menu-scroll-peek { flex: 0 0 20px; width: 20px; }
+    .lang-menu-scroll-fade { position: absolute; top: 0; bottom: 0; width: 36px; pointer-events: none; z-index: 2; opacity: 0; transition: opacity 0.2s; }
+    .lang-menu-scroll-wrap.lang-menu-scroll--scrollable:not(.lang-menu-scroll--at-end) .lang-menu-scroll-fade--right { opacity: 1; }
+    .lang-menu-scroll-wrap.lang-menu-scroll--scrollable:not(.lang-menu-scroll--at-start) .lang-menu-scroll-fade--left { opacity: 1; }
+    .lang-menu-scroll-fade--left { left: 0; background: linear-gradient(to right, #1A1A1A 40%, transparent); }
+    .lang-menu-scroll-fade--right { right: 0; background: linear-gradient(to left, #1A1A1A 40%, transparent); }
+    .lang-menu-scroll-chevron { position: absolute; top: 50%; transform: translateY(-50%); z-index: 3; width: 30px; height: 30px; border: 1px solid var(--accent); border-radius: 50%; background: rgba(0,0,0,0.55); color: var(--accent); font-size: 20px; cursor: pointer; display: none; }
+    .lang-menu-scroll-wrap.lang-menu-scroll--scrollable:not(.lang-menu-scroll--at-start) .lang-menu-scroll-chevron--left,
+    .lang-menu-scroll-wrap.lang-menu-scroll--scrollable:not(.lang-menu-scroll--at-end) .lang-menu-scroll-chevron--right { display: flex; align-items: center; justify-content: center; }
+    .lang-menu-scroll-chevron--left { left: 2px; }
+    .lang-menu-scroll-chevron--right { right: 2px; }
+    .lang-menu-scroll-hint { margin-top: 6px; font-size: 11px; color: var(--accent); text-align: center; }
+    .lang-menu-scroll-hint::before { content: '↔ '; }
     .main-lang-option {
       display: flex;
       align-items: center;

@@ -8,6 +8,8 @@ import '../helpers/security_helper.dart';
 import '../services/party_session_service.dart';
 import '../utils/string_utils.dart';
 import '../utils/ui_constants.dart';
+import '../utils/wish_paths.dart';
+import '../utils/formatting_utils.dart';
 
 // Hilfsfunktion zum Anzeigen von Firebase-Fehlern mit klickbaren Links
 Widget buildFirebaseErrorWidget(Object error) {
@@ -238,11 +240,11 @@ class _DeineWunschePageState extends State<DeineWunschePage> {
   }
 
   String _formatDate(DateTime date) {
-    return '${date.day}.${date.month}.${date.year}';
+    return FormattingUtils.formatDateForLocale(date, context);
   }
 
   String _formatTime(DateTime date) {
-    return '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+    return FormattingUtils.formatClockWithSuffix(date, context);
   }
 
   Color _statusColor(String status) {
@@ -295,6 +297,38 @@ class _DeineWunschePageState extends State<DeineWunschePage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Status-Chip für Vorab-Wünsche in „Deine Wünsche“ (lila, wie Offen/Gespielt).
+  Widget _buildPreWishStatusBadge(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
+    const color = UIConstants.colorPreWish;
+    return Tooltip(
+      message: l.pre_wish_badge_tooltip,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color, width: 1.5),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.playlist_add, size: 14, color: color),
+            const SizedBox(width: 4),
+            Text(
+              l.pre_wish_badge,
+              style: const TextStyle(
+                color: color,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -652,9 +686,7 @@ class _DeineWunschePageState extends State<DeineWunschePage> {
                   // Nur party_id + user_id: Firestore-Regeln erlauben Lesen nur für eigene
                   // Dokumente (isWishOwnerByData). party_id + name liefert ggf. fremde
                   // Einträge gleichen Namens → gesamte Query permission-denied.
-                  stream: FirebaseFirestore.instance
-                      .collection('wishes')
-                      .where('party_id', isEqualTo: partyId)
+                  stream: WishPaths.partyWishes(partyId)
                       .where('user_id', isEqualTo: user.uid)
                       .snapshots(),
                   builder: (context, snapshot) {
@@ -716,6 +748,7 @@ class _DeineWunschePageState extends State<DeineWunschePage> {
                         );
                         final greeting = _extractGreeting(data);
                         final status = (data['status'] ?? 'pending') as String;
+                        final isPreWish = data['is_pre_wish'] == true;
                         final ts = data['createdAt'];
                         final created = ts is Timestamp
                             ? ts.toDate()
@@ -737,11 +770,21 @@ class _DeineWunschePageState extends State<DeineWunschePage> {
                         return _GuestWishCardCell(
                           number: number,
                           displayText: displayText,
-                          createdText: _formatDate(created),
+                          createdText: isPreWish
+                              ? FormattingUtils.formatCompactDateTimeLine(
+                                  created,
+                                  context,
+                                )
+                              : _formatDate(created),
                           greeting: greeting,
                           status: status,
-                          borderColor: _statusColor(status),
-                          statusBadge: _buildStatusBadge(context, status),
+                          isPreWish: isPreWish,
+                          borderColor: isPreWish
+                              ? UIConstants.colorPreWish
+                              : _statusColor(status),
+                          statusBadge: isPreWish
+                              ? _buildPreWishStatusBadge(context)
+                              : _buildStatusBadge(context, status),
                           onDelete: () async {
                             final shouldDelete = await _confirmDeleteWish(
                               context,
@@ -796,6 +839,7 @@ class _GuestWishCardCell extends StatelessWidget {
     required this.createdText,
     required this.greeting,
     required this.status,
+    this.isPreWish = false,
     required this.borderColor,
     required this.statusBadge,
     this.onEdit,
@@ -807,6 +851,7 @@ class _GuestWishCardCell extends StatelessWidget {
   final String createdText;
   final String greeting;
   final String status;
+  final bool isPreWish;
   final Color borderColor;
   final Widget statusBadge;
   final VoidCallback? onEdit;
@@ -817,7 +862,7 @@ class _GuestWishCardCell extends StatelessWidget {
     final normalized = status.toLowerCase();
     final isOpen = normalized == 'pending';
     final showDelete = isOpen;
-    final showEdit = isOpen && greeting.trim().isNotEmpty;
+    final showEdit = isOpen && (isPreWish || greeting.trim().isNotEmpty);
     final titleColor = isOpen ? Colors.white : Colors.white70;
     final secondaryTextColor = isOpen
         ? Colors.white.withValues(alpha: 0.78)
@@ -848,17 +893,27 @@ class _GuestWishCardCell extends StatelessWidget {
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8, top: 2),
-                        child: Text(
-                          '$number.',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: secondaryTextColor,
-                            fontWeight: FontWeight.bold,
+                      if (isPreWish) ...[
+                        Padding(
+                          padding: const EdgeInsets.only(right: 10, top: 1),
+                          child: Icon(
+                            Icons.playlist_add,
+                            size: 22,
+                            color: UIConstants.colorPreWish,
                           ),
                         ),
-                      ),
+                      ] else
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8, top: 2),
+                          child: Text(
+                            '$number.',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: secondaryTextColor,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
                       Expanded(
                         child: Text(
                           displayText,

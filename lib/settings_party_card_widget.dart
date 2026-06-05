@@ -11,6 +11,8 @@ import 'utils/ui_constants.dart';
 import 'widgets/common/pwa_widget_cell.dart';
 import 'utils/calendar_export_helper.dart';
 import 'widgets/party_status_badge.dart';
+import 'widgets/party_grace_countdown.dart';
+import 'widgets/party_pre_wishes_row.dart';
 import 'utils/debug_log.dart';
 
 /// Widget für eine einzelne Party-Karte
@@ -48,6 +50,10 @@ class SettingsPartyCard extends StatefulWidget {
   final Color? borderColor;
   /// True = Karte deaktiviert (z. B. Free-DJ-Limit erreicht, zukünftige Party nicht nutzbar)
   final bool isDeactivated;
+  /// Vorab-Wünsche für Gäste vor Partybeginn aktiviert
+  final bool allowPreWishes;
+  /// Nachlaufzeit: Countdown bis Wünsche ausgeblendet werden (Dashboard).
+  final DateTime? gracePeriodEndsAt;
 
   const SettingsPartyCard({
     super.key,
@@ -82,6 +88,8 @@ class SettingsPartyCard extends StatefulWidget {
     this.hideBorder = false,
     this.borderColor,
     this.isDeactivated = false,
+    this.allowPreWishes = false,
+    this.gracePeriodEndsAt,
   });
 
   @override
@@ -211,7 +219,7 @@ class _SettingsPartyCardState extends State<SettingsPartyCard> {
                         maxLines: 1,
                       ),
                     ),
-                    // Rechts: Aktions-Buttons (nur wenn nicht versteckt und nicht deaktiviert)
+                    // Rechts: Aktions-Buttons (aktive Karte: voll; Standby/Kontingent: nur Löschen)
                     if (!widget.hideActions && !widget.isDeactivated) ...[
                       const SizedBox(width: 8),
                       Row(
@@ -273,6 +281,22 @@ class _SettingsPartyCardState extends State<SettingsPartyCard> {
                     ],
                   ],
                 ),
+                // Standby / Kontingent-Karte: ausschließlich Löschen (kein Bearbeiten, QR, …)
+                if (widget.isDeactivated &&
+                    !widget.hideActions &&
+                    widget.onDelete != null) ...[
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: IconButton(
+                      padding: EdgeInsets.zero,
+                      iconSize: 18,
+                      icon: const Icon(Icons.delete),
+                      color: Colors.red,
+                      onPressed: widget.onDelete,
+                      tooltip: l10n.party_delete,
+                    ),
+                  ),
+                ],
                 
                 const SizedBox(height: 6),
                 
@@ -383,13 +407,30 @@ class _SettingsPartyCardState extends State<SettingsPartyCard> {
                   ),
                 ],
                 const SizedBox(height: 8),
-                // Nur dieses Badge tickt pro Sekunde; Liste und Karte bleiben stabil
-                PartyStatusBadge(
-                  startDate: widget.startDate,
-                  endDate: widget.endDate,
-                  startTimePosix: widget.startTimePosix,
-                  status: widget.status,
-                ),
+                if (widget.gracePeriodEndsAt != null) ...[
+                  Text(
+                    AppLocalizations.of(context)!.party_status_ended_label,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey.shade400,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  PartyGraceCountdown(graceEndsAt: widget.gracePeriodEndsAt!),
+                ] else
+                  PartyStatusBadge(
+                    startDate: widget.startDate,
+                    endDate: widget.endDate,
+                    startTimePosix: widget.startTimePosix,
+                    status: widget.status,
+                  ),
+                if (widget.allowPreWishes)
+                  PartyPreWishesRow(
+                    partyId: widget.partyId,
+                    partyName: widget.partyName,
+                    dimColor: dimColor,
+                  ),
               ],
             );
         
@@ -467,28 +508,58 @@ class _SettingsPartyCardState extends State<SettingsPartyCard> {
     final l = AppLocalizations.of(context)!;
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1E1E1E),
-        title: Text(
-          l.party_standby_info_title,
-          style: const TextStyle(color: Colors.white),
-        ),
-        content: SingleChildScrollView(
-          child: Text(
-            l.party_standby_info_text,
-            style: const TextStyle(color: Colors.white70, height: 1.4),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(
-              l.close,
-              style: const TextStyle(color: Colors.white70),
+      builder: (ctx) {
+        final maxH = MediaQuery.sizeOf(ctx).height * 0.55;
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 420),
+            decoration: BoxDecoration(
+              gradient: UIConstants.colorGreyGradient,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: UIConstants.appOrange, width: 2),
+            ),
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  l.party_standby_info_title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: maxH),
+                  child: SingleChildScrollView(
+                    child: Text(
+                      l.party_standby_info_text,
+                      style: const TextStyle(color: Colors.white70, height: 1.45, fontSize: 15),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: UIConstants.appOrange,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    child: Text(l.close),
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 

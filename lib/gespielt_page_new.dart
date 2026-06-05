@@ -6,6 +6,8 @@ import '../l10n/app_localizations.dart';
 import '../models/song_request.dart';
 import '../services/history_pagination_service.dart';
 import '../utils/string_utils.dart';
+import '../utils/wish_paths.dart';
+import '../services/active_party_service.dart';
 
 class GespieltPage extends StatefulWidget {
   final List<SongRequest> requests;
@@ -712,12 +714,22 @@ class _GespieltPageState extends State<GespieltPage> {
               IconButton(
                 icon: const Icon(Icons.refresh, color: Colors.blue),
                 tooltip: AppLocalizations.of(context)!.back_to_open,
-                onPressed: () => _updateWishStatusGrouped(context, docIds, 'pending'),
+                onPressed: () => _updateWishStatusGrouped(
+                  context,
+                  docIds,
+                  'pending',
+                  firstRequest.partyId ?? '',
+                ),
               ),
               IconButton(
                 icon: const Icon(Icons.delete, color: Colors.red),
                 tooltip: AppLocalizations.of(context)!.delete,
-                onPressed: () => _confirmDeleteGrouped(context, docIds, displayText),
+                onPressed: () => _confirmDeleteGrouped(
+                  context,
+                  docIds,
+                  displayText,
+                  firstRequest.partyId ?? '',
+                ),
               ),
             ],
           ),
@@ -727,12 +739,21 @@ class _GespieltPageState extends State<GespieltPage> {
   }
   
   /// Aktualisiert Status für alle Wünsche in einer Gruppe
-  Future<void> _updateWishStatusGrouped(BuildContext context, List<String> docIds, String status) async {
+  Future<void> _updateWishStatusGrouped(
+    BuildContext context,
+    List<String> docIds,
+    String status,
+    String partyId,
+  ) async {
     final loc = AppLocalizations.of(context)!;
+    final pid = partyId.isNotEmpty
+        ? partyId
+        : (ActivePartyService.getStoredSession()?.partyId ?? '');
+    if (pid.isEmpty) return;
     try {
       final batch = FirebaseFirestore.instance.batch();
       for (final docId in docIds) {
-        final docRef = FirebaseFirestore.instance.collection('wishes').doc(docId);
+        final docRef = WishPaths.partyWish(pid, docId);
         batch.update(docRef, {
           'status': status,
           'status_changed_at': FieldValue.serverTimestamp(),
@@ -754,7 +775,12 @@ class _GespieltPageState extends State<GespieltPage> {
   }
   
   /// Löscht alle Wünsche in einer Gruppe
-  Future<void> _confirmDeleteGrouped(BuildContext context, List<String> docIds, String displayText) async {
+  Future<void> _confirmDeleteGrouped(
+    BuildContext context,
+    List<String> docIds,
+    String displayText,
+    String partyId,
+  ) async {
     final loc = AppLocalizations.of(context)!;
     final confirmed = await showDialog<bool>(
       context: context,
@@ -775,10 +801,14 @@ class _GespieltPageState extends State<GespieltPage> {
     );
     
     if (confirmed == true) {
+      final pid = partyId.isNotEmpty
+          ? partyId
+          : (ActivePartyService.getStoredSession()?.partyId ?? '');
+      if (pid.isEmpty) return;
       try {
         final batch = FirebaseFirestore.instance.batch();
         for (final docId in docIds) {
-          final docRef = FirebaseFirestore.instance.collection('wishes').doc(docId);
+          final docRef = WishPaths.partyWish(pid, docId);
           batch.delete(docRef);
         }
         await batch.commit();

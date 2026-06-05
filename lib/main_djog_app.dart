@@ -44,20 +44,7 @@ class _DJOgAppState extends State<DJOgApp> {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      supportedLocales: const [
-        Locale('de'),
-        Locale('en'),
-        Locale('fr'),
-        Locale('ru'),
-        Locale('zh'),
-        Locale('es'),
-        Locale('tr', ''),
-        // Locale('ar'), // deaktiviert: siehe LocaleHelper.supportedLanguageCodes
-        Locale('pt'),
-        Locale('it'),
-        Locale('uk'),
-        Locale('hi'),
-      ],
+      supportedLocales: LanguageRegistry.materialLocales,
       builder: (context, child) {
         final rawChild = child ?? const SizedBox.shrink();
         final media = MediaQuery.of(context);

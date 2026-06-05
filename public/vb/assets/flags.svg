@@ -68,6 +68,44 @@
       <path fill="#0057b7" d="M0 0h640v240H0z"/>
       <path fill="#ffd700" d="M0 240h640v240H0z"/>
     </symbol>
+    <!-- flag-sq (Albania) -->
+    <symbol id="flag-sq" viewBox="0 0 640 480">
+      <path fill="#e41e20" d="M0 0h640v480H0z"/>
+      <path fill="#000" d="M320 52c-88 0-160 72-160 160 0 118 160 256 160 256s160-138 160-256c0-88-72-160-160-160zm0 56c57 0 104 47 104 104 0 77-104 176-104 176S216 289 216 212c0-57 47-104 104-104zm-36 88c-8 28 12 56 36 68v-36c-12-6-22-18-36-32zm72 0c-14 14-24 26-36 32v36c24-12 44-40 36-68z"/>
+    </symbol>
+    <!-- flag-vi (Vietnam) -->
+    <symbol id="flag-vi" viewBox="0 0 640 480">
+      <path fill="#da251d" d="M0 0h640v480H0z"/>
+      <path fill="#ff0" d="M320 157.4 353.6 261h108.9l-88 64 33.6 103.6L320 364.8l-87.1 63.8 33.6-103.6-88-64h108.9z"/>
+    </symbol>
+    <!-- flag-ja (Japan) -->
+    <symbol id="flag-ja" viewBox="0 0 640 480">
+      <path fill="#fff" d="M0 0h640v480H0z"/>
+      <circle cx="320" cy="240" r="120" fill="#bc002d"/>
+    </symbol>
+    <!-- flag-el (Greece) -->
+    <symbol id="flag-el" viewBox="0 0 640 480">
+      <path fill="#0d5eaf" d="M0 0h640v53.3H0zm0 106.7h640v53.3H0zm0 106.6h640V320H0zm0 106.7h640v53.3H0zm0 106.6h640V480H0z"/>
+      <path fill="#fff" d="M0 0h320v320H0z"/>
+      <path fill="#0d5eaf" d="M0 0h106.7v106.7H0zm213.3 0H320v106.7H213.3zM0 213.3h106.7V320H0zm213.3 0H320v106.7H213.3z"/>
+    </symbol>
+    <!-- flag-nl (Netherlands) -->
+    <symbol id="flag-nl" viewBox="0 0 640 480">
+      <path fill="#ae1c28" d="M0 0h640v160H0z"/>
+      <path fill="#fff" d="M0 160h640v160H0z"/>
+      <path fill="#21468b" d="M0 320h640v160H0z"/>
+    </symbol>
+    <!-- flag-pl (Poland) -->
+    <symbol id="flag-pl" viewBox="0 0 640 480">
+      <path fill="#fff" d="M0 0h640v240H0z"/>
+      <path fill="#dc143c" d="M0 240h640v240H0z"/>
+    </symbol>
+    <!-- flag-cs (Czech Republic) -->
+    <symbol id="flag-cs" viewBox="0 0 640 480">
+      <path fill="#fff" d="M0 0h640v240H0z"/>
+      <path fill="#d7141a" d="M0 240h640v240H0z"/>
+      <path fill="#11457e" d="M0 0L360 240 0 480z"/>
+    </symbol>
     <!-- flag-hi (Hindi / Indien, vereinfachte Tricolor) -->
     <symbol id="flag-hi" viewBox="0 0 640 480">
       <path fill="#FF9933" d="M0 0h640v160H0z"/>

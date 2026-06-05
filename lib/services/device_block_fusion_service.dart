@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/debug_log.dart';
+import '../utils/ios_stable_device_id.dart';
 
 /// Account-übergreifende Sperr-Fusion: [blocked_devices] → nach Login [users] via Cloud Function.
 class DeviceBlockFusionService {
@@ -29,8 +30,7 @@ class DeviceBlockFusionService {
         final a = await DeviceInfoPlugin().androidInfo;
         resolved = a.id.trim();
       } else if (Platform.isIOS) {
-        final i = await DeviceInfoPlugin().iosInfo;
-        resolved = (i.identifierForVendor ?? '').trim();
+        resolved = await getStableIosDeviceId(mirrorPrefsKey: 'guest_device_id');
       }
       if (resolved.isEmpty) {
         final p = await SharedPreferences.getInstance();

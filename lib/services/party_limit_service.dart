@@ -1,9 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../models/user_model.dart';
+import 'limit_service.dart';
 
 /// Service für die Synchronisation des Party-Status (active vs. standby) bei Free-DJs.
 /// Free: Nur die erste Party (nach start_date) im aktuellen 30-Tage-Zyklus bleibt active, Rest → standby.
+/// Block-Start: [UserModel.freePeriodStart] falls gesetzt, sonst wie [LimitService.effectiveFreeBillingAnchorDate] (1. des Monats von created_at).
 /// Pro: Alle standby-Partys werden auf active gesetzt.
 class PartyLimitService {
   PartyLimitService._();
@@ -27,7 +29,8 @@ class PartyLimitService {
         .get();
 
     if (user.isFree) {
-      final periodStart = user.freePeriodStart ?? user.createdAt?.toDate();
+      final periodStart =
+          user.freePeriodStart ?? LimitService.effectiveFreeBillingAnchorDate(user);
       if (periodStart == null) return;
 
       final now = DateTime.now();
@@ -81,7 +84,8 @@ class PartyLimitService {
   /// Für Free-DJ: wenn >= 1, muss neue Party als standby gespeichert werden.
   static Future<int> countActivePartiesInCurrentPeriod(UserModel user) async {
     if (!user.isFree) return 0;
-    final periodStart = user.freePeriodStart ?? user.createdAt?.toDate();
+    final periodStart =
+        user.freePeriodStart ?? LimitService.effectiveFreeBillingAnchorDate(user);
     if (periodStart == null) return 0;
 
     final now = DateTime.now();

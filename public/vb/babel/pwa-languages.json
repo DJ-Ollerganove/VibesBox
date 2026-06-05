@@ -1,0 +1,122 @@
+{
+  "sourceLanguage": "de",
+  "excludeFromMenu": [
+    "ar"
+  ],
+  "languages": [
+    {
+      "code": "de",
+      "name": "German",
+      "icon": "de",
+      "langKey": "lang_german"
+    },
+    {
+      "code": "en",
+      "name": "English",
+      "icon": "en",
+      "langKey": "lang_english"
+    },
+    {
+      "code": "fr",
+      "name": "French",
+      "icon": "fr",
+      "langKey": "lang_french"
+    },
+    {
+      "code": "ru",
+      "name": "Russian",
+      "icon": "ru",
+      "langKey": "lang_russian"
+    },
+    {
+      "code": "zh",
+      "name": "Chinese",
+      "icon": "zh",
+      "langKey": "lang_chinese"
+    },
+    {
+      "code": "es",
+      "name": "Spanish",
+      "icon": "es",
+      "langKey": "lang_spanish"
+    },
+    {
+      "code": "tr",
+      "name": "Turkish",
+      "icon": "tr",
+      "langKey": "lang_turkish"
+    },
+    {
+      "code": "pt",
+      "name": "Portuguese",
+      "icon": "pt",
+      "langKey": "lang_portuguese"
+    },
+    {
+      "code": "it",
+      "name": "Italian",
+      "icon": "it",
+      "langKey": "lang_italian"
+    },
+    {
+      "code": "uk",
+      "name": "Ukrainian",
+      "icon": "uk",
+      "langKey": "lang_ukrainian"
+    },
+    {
+      "code": "hi",
+      "name": "Hindi",
+      "icon": "hi",
+      "langKey": "lang_hindi"
+    },
+    {
+      "code": "sq",
+      "name": "Albanian",
+      "icon": "sq",
+      "langKey": "lang_albanian"
+    },
+    {
+      "code": "vi",
+      "name": "Vietnamese",
+      "icon": "vi",
+      "langKey": "lang_vietnamese"
+    },
+    {
+      "code": "ja",
+      "name": "Japanese",
+      "icon": "ja",
+      "langKey": "lang_japanese"
+    },
+    {
+      "code": "el",
+      "name": "Greek",
+      "icon": "el",
+      "langKey": "lang_greek"
+    },
+    {
+      "code": "nl",
+      "name": "Dutch",
+      "icon": "nl",
+      "langKey": "lang_dutch"
+    },
+    {
+      "code": "pl",
+      "name": "Polish",
+      "icon": "pl",
+      "langKey": "lang_polish"
+    },
+    {
+      "code": "cs",
+      "name": "Czech",
+      "icon": "cs",
+      "langKey": "lang_czech"
+    },
+    {
+      "code": "ar",
+      "name": "Arabic",
+      "icon": "ar",
+      "langKey": "lang_arabic"
+    }
+  ]
+}

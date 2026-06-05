@@ -9,6 +9,13 @@
       --gray-text: #E5E7EB;
       --orange-dark: #FF8C00;
       --orange-light: rgba(255, 165, 0, 0.4);
+      /* Vorab-Wünsche – Sync Flutter UIConstants.colorPreWish / party_shared.js VB_PRE_WISH */
+      --pre-wish-primary: #7986CB;
+      --pre-wish-text: #E8EAF6;
+      --pre-wish-gradient-end: #764BA2;
+      --pre-wish-bg-subtle: rgba(121, 134, 203, 0.15);
+      --pre-wish-border: rgba(121, 134, 203, 0.45);
+      --pre-wish-shadow: rgba(121, 134, 203, 0.3);
       /* Info-Zellen (Über, Impressum, DSGVO): zentrales Template – grauer Verlauf + oranger Rahmen */
       --info-cell-bg: linear-gradient(135deg, #1F2937 0%, #121417 100%);
       --info-cell-border-color: var(--orange-primary);
@@ -102,46 +109,39 @@
       padding: 0 10px; /* ✅ Leichtes seitliches Padding, damit Rahmen nicht am Glasrand kleben */
     }
 
-    /* ✅ Hamburger-Menü Button */
-    /* ✅ Container für Titel und Hamburger-Icon (vertikal gestapelt) */
+    /* Rechte Header-Säule: nur Hamburger (fest unter Erdkugel-Slot) */
     .header-title-menu-container {
+      flex: 0 0 48px;
+      width: 48px;
+      min-width: 48px;
+      align-self: flex-start;
+      margin: 0;
+      padding: 38px 0 6px 0;
+      box-sizing: border-box;
       display: flex;
       flex-direction: column;
       align-items: center;
-      flex-shrink: 0;
-    }
-
-    /* ✅ Aktueller Seitentitel im Header */
-    .current-page-title {
-      color: orange;
-      font-weight: bold;
-      font-size: 0.75rem;
-      margin-bottom: 2px;
-      text-transform: uppercase;
-      white-space: nowrap;
-      text-align: center;
-      letter-spacing: 0.5px;
-    }
-
-    @media (max-width: 600px) {
-      .current-page-title {
-        font-size: 0.7rem;
-      }
+      justify-content: flex-start;
     }
 
     .hamburger-menu {
-      position: relative; /* ✅ Relativ statt absolut, da jetzt in Flexbox-Container */
+      position: relative;
       z-index: 10002;
       background: transparent;
       border: none;
       cursor: pointer;
       padding: 8px;
+      margin: 0;
+      width: 40px;
+      height: 40px;
+      box-sizing: border-box;
       display: flex;
       flex-direction: column;
+      align-items: center;
+      justify-content: center;
       gap: 4px;
       transition: transform 0.3s ease;
-      flex-shrink: 0; /* ✅ Button bleibt immer sichtbar */
-      align-self: center; /* ✅ Zentriert unter dem Titel */
+      flex: 0 0 40px;
     }
     
     .hamburger-menu:hover {
@@ -435,7 +435,7 @@
       border: 2px solid var(--orange-primary); /* ✅ Oranger Rahmen */
       border-radius: 20px;
       padding: 0;
-      max-width: 320px;
+      max-width: min(96vw, 680px);
       width: calc(100% - 40px); /* ✅ Responsive: 20px Padding links/rechts */
       max-height: 80vh;
       min-height: 300px; /* ✅ Mindesthöhe für Portrait-Format */
@@ -560,10 +560,133 @@
     }
 
     .language-modal-grid {
-      display: grid;
-      grid-template-columns: 1fr; /* Menü-Layout einheitlich: Buttons sauber untereinander */
-      gap: 8px;
+      display: block;
       overflow: visible;
+    }
+
+    /* Sprachmenü: Spalten à 5 (alphabetisch von oben nach unten, dann nächste Spalte) */
+    .lang-menu-columns {
+      display: flex;
+      flex-direction: row;
+      align-items: flex-start;
+      gap: 10px;
+      width: max-content;
+      max-width: 100%;
+    }
+
+    .lang-menu-column {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      flex: 0 0 auto;
+      width: min(148px, 42vw);
+    }
+
+    .lang-menu-scroll-wrap {
+      position: relative;
+      width: 100%;
+    }
+
+    .lang-menu-scroll-area {
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 165, 0, 0.55) transparent;
+      padding-bottom: 4px;
+    }
+
+    .lang-menu-scroll-area::-webkit-scrollbar {
+      height: 5px;
+    }
+
+    .lang-menu-scroll-area::-webkit-scrollbar-thumb {
+      background: rgba(255, 165, 0, 0.55);
+      border-radius: 3px;
+    }
+
+    .lang-menu-scroll-peek {
+      flex: 0 0 24px;
+      width: 24px;
+      min-width: 24px;
+    }
+
+    .lang-menu-scroll-fade {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 40px;
+      pointer-events: none;
+      z-index: 2;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+
+    .lang-menu-scroll-wrap.lang-menu-scroll--scrollable.lang-menu-scroll--at-end .lang-menu-scroll-fade--right {
+      opacity: 0;
+    }
+
+    .lang-menu-scroll-wrap.lang-menu-scroll--scrollable:not(.lang-menu-scroll--at-end) .lang-menu-scroll-fade--right {
+      opacity: 1;
+    }
+
+    .lang-menu-scroll-wrap.lang-menu-scroll--scrollable:not(.lang-menu-scroll--at-start) .lang-menu-scroll-fade--left {
+      opacity: 1;
+    }
+
+    .lang-menu-scroll-fade--left {
+      left: 0;
+      background: linear-gradient(to right, #121417 35%, rgba(18, 20, 23, 0));
+    }
+
+    .lang-menu-scroll-fade--right {
+      right: 0;
+      background: linear-gradient(to left, #121417 35%, rgba(18, 20, 23, 0));
+    }
+
+    .lang-menu-scroll-chevron {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      z-index: 3;
+      width: 32px;
+      height: 32px;
+      border: 1px solid var(--orange-primary);
+      border-radius: 50%;
+      background: rgba(0, 0, 0, 0.55);
+      color: var(--orange-primary);
+      font-size: 22px;
+      line-height: 1;
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 0 0 2px 0;
+    }
+
+    .lang-menu-scroll-wrap.lang-menu-scroll--scrollable:not(.lang-menu-scroll--at-start) .lang-menu-scroll-chevron--left,
+    .lang-menu-scroll-wrap.lang-menu-scroll--scrollable:not(.lang-menu-scroll--at-end) .lang-menu-scroll-chevron--right {
+      display: flex;
+    }
+
+    .lang-menu-scroll-chevron--left { left: 2px; }
+    .lang-menu-scroll-chevron--right { right: 2px; }
+
+    .lang-menu-scroll-hint {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      margin-top: 8px;
+      font-size: 11px;
+      font-weight: 500;
+      color: rgba(255, 165, 0, 0.92);
+      text-align: center;
+    }
+
+    .lang-menu-scroll-hint::before {
+      content: '↔';
+      font-size: 14px;
     }
 
     .language-modal-option {
@@ -917,6 +1040,17 @@
       margin-bottom: 30px;
     }
 
+    .party-code-error-modal-message.vb-party-ended-overlay-message {
+      white-space: normal;
+      word-break: normal;
+      overflow-wrap: break-word;
+    }
+
+    .party-code-error-modal-message .vb-party-ended-emphasis {
+      font-weight: 700;
+      color: #ffffff;
+    }
+
     .party-code-error-modal-button {
       padding: 14px 24px;
       border-radius: 12px;
@@ -1043,7 +1177,8 @@
       color: #FFFFFF;
       font-size: 18px;
       font-weight: 500;
-      margin-bottom: 8px;
+      margin: 0 0 8px 0;
+      text-align: center;
     }
 
     .branding-content {
@@ -1057,10 +1192,14 @@
     }
 
     .branding-dj-logo {
+      display: block;
       max-height: 72px; /* ✅ Kompakt unter der Namenszeile (Ziel 60–80px) */
       max-width: 90%;
       width: auto;
       height: auto;
+      margin-left: auto;
+      margin-right: auto;
+      align-self: center;
       object-fit: contain;
       border-radius: 4px;
     }
@@ -1070,6 +1209,8 @@
       font-size: 22px;
       font-weight: 600;
       line-height: 1.25;
+      margin: 0;
+      text-align: center;
     }
 
     /* ✅ Statischer App-Header (außerhalb der Pages, immer sichtbar) */
@@ -1084,7 +1225,7 @@
       justify-content: space-between; /* ✅ Logo links, Titel/Hamburger rechts */
       gap: 16px; /* ✅ Abstand zwischen Elementen */
       min-height: 80px; /* ✅ Etwas höher für Titel + Icon */
-      position: relative;
+      position: relative; /* Anker für .header-lang-btn */
       z-index: 1000;
       /* ✅ Card-Design: Eigener vollständig umlaufender oranger Rahmen */
       border: 2px solid var(--orange-primary);
@@ -1093,6 +1234,43 @@
       box-sizing: border-box;
     }
     
+    /* Erdkugel: absolut oben rechts — kein Einfluss auf ≡ / Seitentitel */
+    .header-lang-btn {
+      position: absolute;
+      top: 4px;
+      right: 8px;
+      z-index: 1003;
+      width: 30px;
+      height: 30px;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1rem;
+      line-height: 1;
+      font-family: inherit;
+      background: rgba(0, 0, 0, 0.72);
+      border: 1px solid var(--orange-primary);
+      border-radius: 8px;
+      color: var(--orange-primary);
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+      transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .header-lang-btn:hover,
+    .header-lang-btn:focus-visible {
+      background: rgba(255, 165, 0, 0.18);
+      box-shadow: 0 0 12px rgba(255, 165, 0, 0.35);
+      outline: none;
+    }
+
+    .header-lang-btn:active {
+      transform: scale(0.96);
+    }
+
     /* ✅ Header-Logo (links, fixiert) */
     .header-logo {
       height: 75px; /* ✅ Vergrößert von 60px auf 75px für bessere Sichtbarkeit */
@@ -1209,6 +1387,112 @@
       gap: 4px;
       flex-wrap: wrap;
     }
+    .header-party-info.pre-wish-header {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+    }
+    .header-party-info.pre-wish-header .header-party-info-text,
+    .header-party-info.pre-wish-header .header-party-info-name {
+      color: var(--pre-wish-primary);
+    }
+    .pre-wish-banner {
+      margin: 0 0 16px 0;
+      padding: 14px 16px;
+      background: var(--pre-wish-bg-subtle);
+      border: 1px solid var(--pre-wish-border);
+      border-radius: 12px;
+    }
+    .pre-wish-banner p {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.45;
+      color: var(--pre-wish-text);
+    }
+    .guest-floor-switch-btn {
+      display: block;
+      width: 100%;
+      margin: 0 0 12px 0;
+      padding: 12px 16px;
+      border: 2px solid var(--app-orange, #ff6b35);
+      border-radius: 12px;
+      background: transparent;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .guest-floor-switch-btn:hover {
+      background: rgba(255, 107, 53, 0.12);
+    }
+    .guest-floor-picker {
+      margin: 0 0 16px 0;
+      padding: 16px;
+      background: #000;
+      border: 2px solid var(--app-orange, #ff6b35);
+      border-radius: 12px;
+      text-align: center;
+    }
+    .guest-floor-picker-title {
+      margin: 0 0 8px 0;
+      color: #fff;
+      font-size: 16px;
+      font-weight: 700;
+    }
+    .guest-floor-picker-subtitle {
+      margin: 0 0 12px 0;
+      color: #aaa;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .guest-floor-picker-info {
+      margin: 0 0 16px 0;
+      color: #ffcc80;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .guest-floor-picker-options {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .guest-floor-picker-option {
+      width: 100%;
+      padding: 14px 12px;
+      border: 2px solid var(--app-orange, #ff6b35);
+      border-radius: 12px;
+      background: transparent;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .guest-floor-picker-option:hover:not(:disabled) {
+      background: rgba(255, 107, 53, 0.12);
+    }
+    .guest-floor-picker-option:disabled {
+      opacity: 0.6;
+      cursor: wait;
+    }
+    .pre-party-wait-mode {
+      padding: 32px;
+      margin: 24px 0;
+      background: linear-gradient(
+        135deg,
+        var(--pre-wish-primary) 0%,
+        var(--pre-wish-gradient-end) 100%
+      );
+      border-radius: 16px;
+      text-align: center;
+      color: white;
+      box-shadow: 0 8px 24px var(--pre-wish-shadow);
+    }
+    .header-party-info-row {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
     .header-party-info-text {
       font-size: 13px;
       color: var(--green-success);
@@ -1275,9 +1559,20 @@
         border-radius: 10px; /* ✅ Leicht kleinerer border-radius für Mobile */
         min-height: 75px; /* ✅ Etwas höher für Titel + Icon auf Mobile */
       }
-      
+
+      .header-lang-btn {
+        top: 3px;
+        right: 6px;
+        width: 28px;
+        height: 28px;
+        font-size: 0.9rem;
+      }
+
       .header-title-menu-container {
-        gap: 2px; /* ✅ Minimaler Abstand zwischen Titel und Icon */
+        width: 44px;
+        min-width: 44px;
+        flex: 0 0 44px;
+        padding-top: 34px;
       }
       
       /* ✅ Mobile: Blaue Trennzeile unverändert 25px */
@@ -2077,6 +2372,16 @@
       visibility: hidden !important;
       pointer-events: none !important;
     }
+    /* Erfolg: DJ-Branding oben ausblenden — Bestätigung rutscht nach oben */
+    .form-container.success-open #brandingLine,
+    .form-container.success-open #preWishBanner {
+      display: none !important;
+      visibility: hidden !important;
+      height: 0 !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      overflow: hidden !important;
+    }
 
     /* ✅ Erfolg-Animation: Checkmark mit Konfetti-Effekt */
     @keyframes fadeInSuccess {
@@ -2456,6 +2761,22 @@
       visibility: hidden;
     }
 
+    /* Vorab-Wünsche: roter DJ-Disclaimer aus (nur lilafarbener Vorab-Banner) */
+    body.pre-wish-mode .wishbox-intro-disclaimer,
+    body.pre-wish-mode .wish-sent-disclaimer,
+    body.pre-wish-mode .wishbox-intro-disclaimer,
+    body.pre-wish-mode .wish-sent-disclaimer,
+    #page-wunschbox.pre-wish-mode .wishbox-intro-disclaimer,
+    #page-wunschbox.pre-wish-mode .wish-sent-disclaimer {
+      display: none !important;
+    }
+
+    /* Vorab ohne Limit: keine Limit-Zeile; mit Limit: .pre-wish-limit-active */
+    body.pre-wish-mode:not(.pre-wish-limit-active) #wishLimitInfo,
+    #page-wunschbox.pre-wish-mode:not(.pre-wish-limit-active) #wishLimitInfo {
+      display: none !important;
+    }
+
     /* ✅ Hinweistext oben in der Wunschbox (klein, gleicher Inhalt wie Erfolgs-Popup) */
     .wishbox-intro-disclaimer {
       font-size: 0.8rem;
@@ -2465,6 +2786,16 @@
       padding: 0;
       text-align: center;
       max-width: 100%;
+    }
+
+    /* Zwischen Interpret und Titel (wie Flutter suggestionsAutoAppear) */
+    .wishbox-suggestions-hint {
+      color: #ffffff;
+      font-size: 11px;
+      line-height: 1.35;
+      text-align: center;
+      margin: 0 0 12px 0;
+      padding: 0 4px;
     }
 
     .wishbox-inactive-message {

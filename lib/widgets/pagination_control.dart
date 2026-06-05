@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../l10n/app_localizations.dart';
 
 /// Zentrale Konstante für Items pro Seite
-const int kItemsPerPage = 10;
+const int kItemsPerPage = 20;
 
 /// Zentrales Widget für Pagination-Steuerung
 /// Enthält Buttons für Vor/Zurück und Seitenanzeige

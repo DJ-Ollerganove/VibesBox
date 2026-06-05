@@ -1,8 +1,8 @@
 
 /// Service für die Paginierung der History.
-/// Nutzt results_per_page aus den Einstellungen (party_settings/current).
+/// Paginierung für Listen (DJ: Firestore, Gast-App: lokal).
 class HistoryPaginationService {
-  static const int _defaultItemsPerPage = 10;
+  static const int _defaultItemsPerPage = 20;
 
   /// Berechnet die Gesamtanzahl der Seiten basierend auf der Anzahl der Items.
   /// [itemsPerPage] aus Einstellungen (z. B. ResultsPerPageService.current).

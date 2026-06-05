@@ -58,15 +58,30 @@ class _EmailVerificationDialogState extends State<EmailVerificationDialog> {
     }
     setState(() => _busy = true);
     try {
-      await AuthService.applyEmailVerificationCode(oob);
+      final outcome = await AuthService.applyEmailVerificationCodeSafely(oob);
       if (!mounted) return;
-      setState(() {
-        _busy = false;
-        _manualSuccess = true;
-      });
+      if (outcome == EmailVerificationApplyOutcome.applied ||
+          outcome == EmailVerificationApplyOutcome.alreadyVerified ||
+          outcome == EmailVerificationApplyOutcome.duplicateLink) {
+        setState(() {
+          _busy = false;
+          _manualSuccess = true;
+        });
+        return;
+      }
     } on FirebaseAuthException catch (e, st) {
       debugLog('Manuelle Verifizierung: $e\n$st');
+      try {
+        await FirebaseAuth.instance.currentUser?.reload();
+      } catch (_) {}
       if (!mounted) return;
+      if (FirebaseAuth.instance.currentUser?.emailVerified == true) {
+        setState(() {
+          _busy = false;
+          _manualSuccess = true;
+        });
+        return;
+      }
       final l = AppLocalizations.of(context)!;
       await showDialog<void>(
         context: context,

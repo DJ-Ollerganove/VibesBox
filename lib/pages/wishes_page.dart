@@ -11,6 +11,11 @@ import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import '../services/duplicate_check_service.dart';
 import '../services/party_session_service.dart';
+import '../services/guest_floor_session_service.dart';
+import '../models/guest_floor_option.dart';
+import '../utils/guest_floor_display.dart';
+import '../widgets/guest_floor_picker_widget.dart';
+import '../services/wishbox_suggestions_settings_service.dart';
 import '../config/app_config.dart';
 import '../services/user_service.dart';
 import '../l10n/app_localizations.dart';
@@ -20,13 +25,20 @@ import '../utils/string_utils.dart';
 import '../helpers/security_helper.dart';
 import '../utils/ui_constants.dart';
 import '../utils/time_utils.dart';
+import '../utils/formatting_utils.dart';
 import '../services/limit_service.dart';
 import '../services/guest_party_stats_service.dart';
+import '../utils/pre_wish_helper.dart';
+import '../services/pre_wish_limit_service.dart';
+import '../widgets/party_realtime_countdown.dart';
 import '../widgets/party_check_in_feedback_widget.dart';
 import '../widgets/party_check_in_widget.dart';
 import '../widgets/user_blocked_widget.dart';
+import '../widgets/wishbox_paused_widget.dart';
 import '../widgets/wishes_form_widget.dart';
 import '../utils/debug_log.dart';
+import '../utils/ios_stable_device_id.dart';
+import '../utils/wish_paths.dart';
 
 /// Helper-Funktion: Speichert Track-Daten in die Musikdatenbank (wunschbox_titel, wunschbox_artist, wunschbox_genres)
 /// Wird asynchron im Hintergrund aufgerufen (Fire & Forget), damit der User nicht warten muss
@@ -39,6 +51,8 @@ Future<void> _saveToMusicDatabase({
   String? djId,
   String? partyId,
   BuildContext? context,
+  /// Gespeichertes Wunsch-Dokument — gezieltes [browser_language]-Update (kein falscher Treffer bei mehreren Wünschen).
+  String? wishDocumentId,
 }) async {
   // Validierung: Nur spotify_id, title und artist sind Pflicht
   // duration_ms und genres sind optional
@@ -57,7 +71,7 @@ Future<void> _saveToMusicDatabase({
     return;
   }
 
-  // Extrahiere Browser-Sprache (z.B. 'de', 'en')
+  // UI-/Client-Sprache (PWA: Browser; Flutter: App-Locale). Feldname `browser_language` bleibt aus Schema-/Statistik-Gründen.
   final locale = context != null
       ? (Localizations.localeOf(context).languageCode)
       : (Platform.localeName.split('_')[0].toLowerCase());
@@ -70,7 +84,7 @@ Future<void> _saveToMusicDatabase({
     'duration_ms': durationMs, // Optional - kann null sein
     'genres': genres ?? [], // Optional - kann leer sein
     'dj_id': djId, // DJ-ID für Statistik
-    'browser_language': browserLanguage, // Browser-Sprache für Statistik
+    'browser_language': browserLanguage,
   };
 
   debugLog(
@@ -99,7 +113,7 @@ Future<void> _saveToMusicDatabase({
         '✅ _saveToMusicDatabase: Track erfolgreich in Musikdatenbank gespeichert: $result',
       );
 
-      // Speichere browser_language im Wunsch-Dokument, falls vorhanden
+      // Optional: Sprache aus Cloud Function ins Wunsch-Dokument (Doc-ID vermeidet falschen Treffer bei Doppel-Adds).
       final browserLang = result['browser_language'] as String?;
       if (browserLang != null &&
           browserLang != 'unknown' &&
@@ -107,22 +121,28 @@ Future<void> _saveToMusicDatabase({
           partyId.isNotEmpty &&
           partyId != 'manual') {
         try {
-          // Finde das zuletzt erstellte Wunsch-Dokument mit dieser Spotify-ID (nur in dieser Party – Security Rules)
-          final wishesQuery = await FirebaseFirestore.instance
-              .collection('wishes')
-              .where('party_id', isEqualTo: partyId)
-              .where('spotify_id', isEqualTo: spotifyId)
-              .orderBy('createdAt', descending: true)
-              .limit(1)
-              .get();
-
-          if (wishesQuery.docs.isNotEmpty) {
-            await wishesQuery.docs.first.reference.update(
-              SecurityHelper.sanitizeMap({'browser_language': browserLang}),
-            );
+          if (wishDocumentId != null && wishDocumentId.isNotEmpty) {
+            await WishPaths.partyWish(partyId, wishDocumentId).update(
+                  SecurityHelper.sanitizeMap({'browser_language': browserLang}),
+                );
             debugLog(
-              '✅ browser_language im Wunsch-Dokument gespeichert: $browserLang',
+              '✅ browser_language im Wunsch-Dokument $wishDocumentId: $browserLang',
             );
+          } else {
+            final wishesQuery = await WishPaths.partyWishes(partyId)
+                .where('spotify_id', isEqualTo: spotifyId)
+                .orderBy('createdAt', descending: true)
+                .limit(1)
+                .get();
+
+            if (wishesQuery.docs.isNotEmpty) {
+              await wishesQuery.docs.first.reference.update(
+                SecurityHelper.sanitizeMap({'browser_language': browserLang}),
+              );
+              debugLog(
+                '✅ browser_language im Wunsch-Dokument gespeichert: $browserLang',
+              );
+            }
           }
         } catch (e) {
           debugLog(
@@ -174,6 +194,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
   bool _isLoading = true;
   bool _isWishboxActive = false;
   bool _showSuccessMessage = false;
+  bool _successWasPreWish = false;
   String? _partyCode;
   /// Aus [pending_party_code] (noch nicht mit „Prüfen“ bestätigt).
   String? _pendingPartyCode;
@@ -187,6 +208,8 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
   int _wishLimit = 0;
   int _wishCount = 0;
   int _wishRemaining = 0;
+  int _preWishLimit = 0;
+  int _preWishRemaining = 0;
   DateTime? _nextFullHour;
   bool _isBlocked = false;
   StreamSubscription<DocumentSnapshot>? _userBlockSubscription;
@@ -195,10 +218,19 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
   bool _partyListenersStarted = false;
   String? _selectedSpotifyId;
   int? _selectedDurationMs;
+  /// Verhindert parallele/doppelte [_addWish]-Ausführung (Doppelklick, Enter+Button).
+  bool _wishSubmitInFlight = false;
   // Party-Daten (aus Stream)
   String? _djId;
   String? _djName;
   String? _djLogoUrl;
+  PartyCheckInFeedback? _partyCheckInEndedFeedback;
+  bool _partyEndedLogoutInProgress = false;
+  bool _partyEndedHandled = false;
+  List<GuestFloorOption>? _floorPickerOptions;
+  String? _pendingJoinCodeForFloorPick;
+  bool _multiFloorAvailable = false;
+  bool _floorJoinInProgress = false;
 
   /// Letzte Locale, für die Gast-Statistik (Sprache) synchronisiert wurde.
   Locale? _lastStatsLogLocale;
@@ -235,11 +267,8 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      if (!_isAdmin &&
-          mounted &&
-          PartySessionService.instance.hasSession) {
-        _scheduleGuestPartyStatsLog();
-        unawaited(_checkBlockStatus());
+      if (!_isAdmin && mounted) {
+        unawaited(_onAppResumedGuest());
       }
     }
   }
@@ -255,8 +284,9 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
         final androidInfo = await deviceInfo.androidInfo;
         resolvedDeviceId = androidInfo.id.trim();
       } else if (Platform.isIOS) {
-        final iosInfo = await deviceInfo.iosInfo;
-        resolvedDeviceId = (iosInfo.identifierForVendor ?? '').trim();
+        resolvedDeviceId = await getStableIosDeviceId(
+          mirrorPrefsKey: 'guest_device_id',
+        );
       }
 
       if (resolvedDeviceId.isEmpty) {
@@ -276,6 +306,9 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
       setState(() {
         _deviceId = resolvedDeviceId;
       });
+      if (PartySessionService.instance.hasSession && !_isAdmin) {
+        unawaited(_checkBlockStatus());
+      }
       debugLog('✅ _loadDeviceId: deviceId geladen: $_deviceId');
     } catch (e) {
       debugLog('❌ _loadDeviceId: Fehler beim Laden der deviceId: $e');
@@ -326,7 +359,8 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
 
   bool _matchesBlockedEntry(
     String partyId,
-    String currentDeviceId,
+    String rawDeviceId,
+    String currentClientId,
     String currentUid,
     String docId,
     Map<String, dynamic> data,
@@ -336,16 +370,14 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     final entryUid = (data['uid'] ?? data['user_id'] ?? '').toString().trim();
 
     final byDeviceField =
-        currentDeviceId.isNotEmpty && entryDeviceId == currentDeviceId;
-    final byClientFallback =
-        currentDeviceId.isNotEmpty && entryClientId == 'app_$currentDeviceId';
+        rawDeviceId.isNotEmpty && entryDeviceId == rawDeviceId;
+    final byClientId =
+        currentClientId.isNotEmpty && entryClientId == currentClientId;
     final byUid = currentUid.isNotEmpty && entryUid == currentUid;
     final byDocId =
-        currentDeviceId.isNotEmpty &&
-        (docId == '${currentDeviceId}_$partyId' ||
-            docId == 'app_${currentDeviceId}_$partyId');
+        currentClientId.isNotEmpty && docId == '${currentClientId}_$partyId';
 
-    return byDeviceField || byClientFallback || byUid || byDocId;
+    return byDeviceField || byClientId || byUid || byDocId;
   }
 
   bool _isBlockedFromSnapshot(QuerySnapshot<Map<String, dynamic>> snapshot) {
@@ -353,14 +385,16 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     if (partyId.isEmpty) return false;
 
     final currentUid = (FirebaseAuth.instance.currentUser?.uid ?? '').trim();
-    final currentDeviceId = _deviceId.trim();
+    final rawDeviceId = _deviceId.trim();
+    final currentClientId = _buildDeterministicClientIdFromDevice();
 
     for (final doc in snapshot.docs) {
       final data = doc.data();
       if (!_isBlockEntryActive(data)) continue;
       if (_matchesBlockedEntry(
         partyId,
-        currentDeviceId,
+        rawDeviceId,
+        currentClientId,
         currentUid,
         doc.id,
         data,
@@ -441,20 +475,628 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
         .snapshots();
   }
 
-  Stream<DocumentSnapshot<Map<String, dynamic>>>?
-  _guestBlockedGuestsDocStream() {
+  Stream<DocumentSnapshot<Map<String, dynamic>>>? _partyDocStream() {
     final partyId = _currentPartyIdForBlocking();
     if (partyId.isEmpty) return null;
-    final clientId = _buildDeterministicClientIdFromDevice();
-    final documentId = '${clientId}_$partyId';
     return FirebaseFirestore.instance
-        .collection('blocked_guests')
-        .doc(documentId)
+        .collection('parties')
+        .doc(partyId)
         .snapshots();
+  }
+
+  DateTime? _partyDateFromData(
+    Map<String, dynamic> data,
+    String timestampKey,
+    String posixKey,
+  ) {
+    final ts = data[timestampKey];
+    if (ts is Timestamp) return ts.toDate();
+    final posix = data[posixKey];
+    if (posix is int) {
+      return DateTime.fromMillisecondsSinceEpoch(posix * 1000);
+    }
+    return null;
+  }
+
+  /// PWA-parity: Wunschbox nur im Party-Zeitfenster und nicht beendet.
+  bool _isPartyEnded(Map<String, dynamic>? data) {
+    if (data == null) return false;
+    final lifecycleStatus =
+        (data['lifecycle_status'] ?? data['status'] ?? '').toString();
+    if (lifecycleStatus == 'finished' ||
+        lifecycleStatus == 'beendet' ||
+        lifecycleStatus == 'ended' ||
+        data['finished_at'] != null) {
+      return true;
+    }
+    final now = DateTime.now();
+    final end = _partyDateFromData(data, 'end_date', 'end_time_posix');
+    if (end != null && now.isAfter(end)) return true;
+    return false;
+  }
+
+  bool _isGuestWishboxRunning(Map<String, dynamic>? data) {
+    if (data == null) return false;
+    final lifecycleStatus =
+        (data['lifecycle_status'] ?? data['status'] ?? '').toString();
+    if (lifecycleStatus == 'finished' || data['finished_at'] != null) {
+      return false;
+    }
+    final now = DateTime.now();
+    final start = _partyDateFromData(data, 'start_date', 'start_time_posix');
+    final end = _partyDateFromData(data, 'end_date', 'end_time_posix');
+    if (start == null || end == null) return false;
+    return !now.isBefore(start) && now.isBefore(end);
+  }
+
+  bool _isPartyWishboxPaused(Map<String, dynamic>? data) =>
+      data?['is_paused'] == true;
+
+  Widget _buildWishboxInactiveNotice(AppLocalizations l) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A1A),
+        border: Border.all(color: Colors.grey.shade700, width: 2),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.event_busy, size: 48, color: Colors.grey.shade400),
+          const SizedBox(height: 12),
+          Text(
+            l.wishbox_inactive_description,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.grey.shade300,
+              fontSize: 15,
+              height: 1.5,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  PartyCheckInFeedback _partyEndedFeedbackFromData(
+    AppLocalizations l,
+    Map<String, dynamic> partyData,
+  ) {
+    final partyNameRaw = (partyData['party_name'] as String?)?.trim();
+    final partyName = partyNameRaw != null && partyNameRaw.isNotEmpty
+        ? partyNameRaw
+        : (PartySessionService.instance.partyName?.trim().isNotEmpty == true
+            ? PartySessionService.instance.partyName!.trim()
+            : l.unnamed_party);
+    final djNameRaw = _djName?.trim().isNotEmpty == true
+        ? _djName!.trim()
+        : PartySessionService.instance.djName?.trim();
+    final djName =
+        djNameRaw != null && djNameRaw.isNotEmpty ? djNameRaw : 'DJ';
+    return PartyCheckInFeedback(
+      type: PartyCheckInFeedbackType.partyEnded,
+      partyName: partyName,
+      djName: djName,
+    );
+  }
+
+  Widget _buildPartyEndedNotice(
+    AppLocalizations l,
+    Map<String, dynamic> partyData,
+  ) {
+    return PartyCheckInFeedbackWidget(
+      feedback: _partyEndedFeedbackFromData(l, partyData),
+    );
+  }
+
+  void _resetPartyListenersAfterSessionEnded() {
+    _partyListenersStarted = false;
+    _partiesSubscription?.cancel();
+    _partySettingsSubscription?.cancel();
+    _partyDocSubscription?.cancel();
+    _wishStatsTimer?.cancel();
+    _blockStatusResyncTimer?.cancel();
+  }
+
+  Future<void> _refreshMultiFloorAvailable() async {
+    if (_isAdmin) return;
+    final code = PartySessionService.instance.joinCode;
+    if (code == null || code.length != 8) {
+      if (mounted) setState(() => _multiFloorAvailable = false);
+      return;
+    }
+    try {
+      final available =
+          await GuestFloorSessionService.instance.hasMultipleJoinableFloors(
+        code,
+        currentPartyId: PartySessionService.instance.partyId,
+      );
+      if (mounted) setState(() => _multiFloorAvailable = available);
+    } catch (_) {
+      if (mounted) setState(() => _multiFloorAvailable = false);
+    }
+  }
+
+  Future<void> _onFloorOptionSelected(GuestFloorOption option) async {
+    final joinCode = _pendingJoinCodeForFloorPick ??
+        PartySessionService.instance.joinCode ??
+        _partyCode;
+    if (joinCode == null || joinCode.length != 8) return;
+
+    setState(() => _floorJoinInProgress = true);
+    final feedback = await PartySessionService.instance.joinPartyById(
+      option.partyId,
+      joinCode: joinCode,
+    );
+    if (!mounted) return;
+
+    if (feedback != null) {
+      setState(() {
+        _floorJoinInProgress = false;
+        _partyCheckInEndedFeedback = feedback;
+        _floorPickerOptions = null;
+      });
+      return;
+    }
+
+    final svc = PartySessionService.instance;
+    setState(() {
+      _floorJoinInProgress = false;
+      _floorPickerOptions = null;
+      _pendingJoinCodeForFloorPick = null;
+      _partyCheckInEndedFeedback = null;
+      _partyEndedHandled = false;
+      _partyCode = svc.shortCode;
+      _pendingPartyCode = null;
+      _djId = svc.djId;
+      _djName = svc.djName;
+      _djLogoUrl = svc.djLogoUrl;
+    });
+    _ensurePartyListenersStarted();
+    _checkBlockStatus();
+    _scheduleGuestPartyStatsLog();
+    unawaited(_refreshMultiFloorAvailable());
+    widget.onPartyJoined?.call();
+  }
+
+  Future<void> _showFloorSwitchSheet() async {
+    final code = PartySessionService.instance.joinCode;
+    final currentId = PartySessionService.instance.partyId;
+    if (code == null || code.length != 8) return;
+
+    final options =
+        await GuestFloorSessionService.instance.listJoinableFloorOptions(code);
+    final others = currentId == null
+        ? options
+        : options.where((o) => o.partyId != currentId).toList();
+    if (!mounted || others.isEmpty) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: UIConstants.bgGradientEnd,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return Padding(
+          padding: EdgeInsets.only(
+            left: 16,
+            right: 16,
+            top: 16,
+            bottom: MediaQuery.paddingOf(ctx).bottom + 16,
+          ),
+          child: GuestFloorPickerWidget(
+            options: others,
+            onSelected: (option) {
+              Navigator.pop(ctx);
+              unawaited(_onFloorOptionSelected(option));
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildFloorSwitchButton(AppLocalizations l) {
+    if (!_multiFloorAvailable || _isAdmin) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: OutlinedButton.icon(
+        onPressed: _floorJoinInProgress ? null : _showFloorSwitchSheet,
+        icon: const Icon(Icons.swap_horiz, color: UIConstants.appOrange),
+        label: Text(l.guest_floor_switch_button),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: Colors.white,
+          side: const BorderSide(color: UIConstants.appOrange, width: 2),
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+        ),
+      ),
+    );
+  }
+
+  Widget? _buildFloorPickerSection(AppLocalizations l) {
+    if (_floorPickerOptions == null || _floorPickerOptions!.isEmpty) {
+      return null;
+    }
+    String? info;
+    final feedback = _partyCheckInEndedFeedback;
+    if (feedback?.isFloorRedirect == true) {
+      final floor = feedback!.endedFloorLabel?.trim().isNotEmpty == true
+          ? feedback.endedFloorLabel!.trim()
+          : l.guest_floor_main_area;
+      info = l.guest_floor_ended_redirect_message(floor);
+    }
+    return GuestFloorPickerWidget(
+      options: _floorPickerOptions!,
+      infoMessage: info,
+      isLoading: _floorJoinInProgress,
+      onSelected: _onFloorOptionSelected,
+    );
+  }
+
+  Future<void> _handlePartyEndedDuringSession(
+    Map<String, dynamic> partyData,
+  ) async {
+    if (_partyEndedHandled || _partyEndedLogoutInProgress) return;
+    _partyEndedLogoutInProgress = true;
+    try {
+      final svc = PartySessionService.instance;
+      final partyId = svc.partyId;
+      final joinCode = svc.joinCode ??
+          partyData['party_code']?.toString().trim() ??
+          _partyCode ??
+          '';
+      final normalizedJoinCode = joinCode.replaceAll(RegExp(r'[^0-9]'), '');
+
+      if (partyId != null &&
+          partyId.isNotEmpty &&
+          normalizedJoinCode.length == 8) {
+        final redirect =
+            await GuestFloorSessionService.instance.redirectAfterPartyEnded(
+          endedPartyId: partyId,
+          joinCode: normalizedJoinCode,
+          endedPartyData: partyData,
+        );
+        if (redirect != null && redirect.options.isNotEmpty) {
+          final endedLabel = GuestFloorDisplay.labelFromPartyData(
+            AppLocalizations.of(context)!,
+            partyData,
+          );
+          await svc.prepareForFloorReselection(normalizedJoinCode);
+          if (!mounted) return;
+          setState(() {
+            _partyEndedHandled = true;
+            _partyCheckInEndedFeedback = PartyCheckInFeedback(
+              type: PartyCheckInFeedbackType.floorEndedChooseOther,
+              endedFloorLabel: endedLabel,
+              otherFloorOptions: redirect.options,
+            );
+            _floorPickerOptions = redirect.options;
+            _pendingJoinCodeForFloorPick = normalizedJoinCode;
+            _partyCode = normalizedJoinCode;
+            _pendingPartyCode = null;
+            _djId = null;
+            _djName = null;
+            _djLogoUrl = null;
+            _currentOrNextParty = null;
+            _multiFloorAvailable = false;
+          });
+          _resetPartyListenersAfterSessionEnded();
+          return;
+        }
+      }
+
+      final feedback =
+          await PartySessionService.buildPartyEndedFeedback(partyData);
+      await PartySessionService.instance.clearSession();
+      if (!mounted) return;
+      setState(() {
+        _partyEndedHandled = true;
+        _partyCheckInEndedFeedback = feedback;
+        _partyCode = null;
+        _pendingPartyCode = null;
+        _floorPickerOptions = null;
+        _pendingJoinCodeForFloorPick = null;
+        _djId = null;
+        _djName = null;
+        _djLogoUrl = null;
+        _currentOrNextParty = null;
+        _multiFloorAvailable = false;
+      });
+      _resetPartyListenersAfterSessionEnded();
+    } finally {
+      _partyEndedLogoutInProgress = false;
+    }
+  }
+
+  Future<void> _onAppResumedGuest() async {
+    if (_isAdmin) return;
+    final hadSession = PartySessionService.instance.hasSession;
+    if (hadSession) {
+      _scheduleGuestPartyStatsLog();
+      unawaited(_checkBlockStatus());
+    }
+    await PartySessionService.instance.hydrateIfNeeded();
+    final pending =
+        PartySessionService.instance.consumePendingPartyEndedFeedback();
+    if (!mounted) return;
+    final svc = PartySessionService.instance;
+    if (pending != null || (hadSession && !svc.hasSession)) {
+      setState(() {
+        if (pending != null) {
+          _partyCheckInEndedFeedback = pending;
+          _partyEndedHandled = true;
+          if (pending.isFloorRedirect &&
+              pending.otherFloorOptions != null &&
+              pending.otherFloorOptions!.isNotEmpty) {
+            _floorPickerOptions = pending.otherFloorOptions;
+            _pendingJoinCodeForFloorPick = svc.shortCode ?? _partyCode;
+          }
+        }
+        _partyCode = svc.shortCode;
+        _pendingPartyCode = null;
+        _djId = svc.djId;
+        _djName = svc.djName;
+        _djLogoUrl = svc.djLogoUrl;
+        if (!svc.hasSession) {
+          _resetPartyListenersAfterSessionEnded();
+        }
+      });
+    }
+    final floorRedirect = PartySessionService.instance.consumePendingFloorRedirect();
+    if (floorRedirect != null && mounted) {
+      final l = AppLocalizations.of(context)!;
+      setState(() {
+        _partyEndedHandled = true;
+        _floorPickerOptions = floorRedirect.options;
+        _pendingJoinCodeForFloorPick = floorRedirect.joinCode;
+        _partyCode = floorRedirect.joinCode;
+        _partyCheckInEndedFeedback = PartyCheckInFeedback(
+          type: PartyCheckInFeedbackType.floorEndedChooseOther,
+          endedFloorLabel: GuestFloorDisplay.floorLabel(
+            l,
+            floorRedirect.endedFloorLabel,
+            null,
+          ),
+          otherFloorOptions: floorRedirect.options,
+        );
+      });
+    }
+  }
+
+  Widget _buildPreWishBanner(AppLocalizations l) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: UIConstants.colorPreWish.withValues(alpha: 0.15),
+        border: Border.all(
+          color: UIConstants.colorPreWish.withValues(alpha: 0.45),
+        ),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        l.pre_wish_banner_body,
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          color: UIConstants.colorPreWishBannerText,
+          fontSize: 14,
+          height: 1.45,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPrePartyWaitNotice(
+    AppLocalizations l,
+    Map<String, dynamic> partyData,
+  ) {
+    final start = PreWishHelper.partyStartFromData(partyData);
+    final end = PreWishHelper.partyEndFromData(partyData);
+    if (start == null || end == null) {
+      return _buildWishboxInactiveNotice(l);
+    }
+    final partyName = (partyData['party_name'] as String?)?.trim().isNotEmpty ==
+            true
+        ? (partyData['party_name'] as String).trim()
+        : (PartySessionService.instance.partyName?.trim().isNotEmpty == true
+            ? PartySessionService.instance.partyName!.trim()
+            : 'Party');
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [
+            UIConstants.colorPreWish,
+            UIConstants.colorPreWishGradientEnd,
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: UIConstants.colorPreWish.withValues(alpha: 0.3),
+            blurRadius: 24,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text('⏰', style: TextStyle(fontSize: 48)),
+          const SizedBox(height: 12),
+          Text(
+            partyName,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            l.party_code_not_started,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.9),
+              fontSize: 15,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 20),
+          PartyRealtimeCountdown(
+            startDate: start,
+            endDate: end,
+            startTimePosix: partyData['start_time_posix'] as int?,
+            status: 'Bevorstehend',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGuestBlockStreams(
+    AppLocalizations localizations,
+    bool preWishUi,
+    Widget Function(bool preWishUi) buildWishForm,
+  ) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _blockedGuestsStream(),
+      builder: (context, guestsSnapshot) {
+        final blockedByGuests = guestsSnapshot.hasData &&
+            _isBlockedFromSnapshot(guestsSnapshot.data!);
+        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          stream: _guestBlockedDevicesStream(),
+          builder: (context, devicesSnapshot) {
+            final blockedByDevice = _isGuestBlockedSnapshot(devicesSnapshot.data);
+            if (blockedByGuests || blockedByDevice) {
+              return _buildBlockedNotice();
+            }
+            if (!preWishUi && _wishLimit > 0 && _wishRemaining == 0) {
+              return _buildWishHourlyLimitReachedNotice(localizations);
+            }
+            return buildWishForm(preWishUi);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildGuestWishboxContent(
+    AppLocalizations localizations,
+    Widget Function(bool preWishUi) buildWishForm,
+  ) {
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: _partyDocStream(),
+      builder: (context, partySnapshot) {
+        final partyData = partySnapshot.data?.data();
+        if (partySnapshot.connectionState == ConnectionState.waiting &&
+            !partySnapshot.hasData) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 32),
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final running = _isGuestWishboxRunning(partyData);
+        final preWishOpen = PreWishHelper.isPreWishWindowOpen(partyData);
+        final preWishUi = preWishOpen && !running;
+        final prePartyWait = PreWishHelper.isPrePartyWaitOnly(partyData);
+
+        if (prePartyWait && partyData != null) {
+          return _buildPrePartyWaitNotice(localizations, partyData);
+        }
+        if (_isPartyEnded(partyData) && partyData != null) {
+          if (PartySessionService.instance.hasSession) {
+            unawaited(_handlePartyEndedDuringSession(partyData));
+          }
+          return _buildPartyEndedNotice(localizations, partyData);
+        }
+        if (!running && !preWishOpen) {
+          return _buildWishboxInactiveNotice(localizations);
+        }
+        if (_isPartyWishboxPaused(partyData)) {
+          return const WishboxPausedWidget();
+        }
+
+        Widget wrapWithPreWishBanner(Widget child) {
+          if (!preWishOpen || running) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildFloorSwitchButton(localizations),
+                child,
+              ],
+            );
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildPreWishBanner(localizations),
+              _buildFloorSwitchButton(localizations),
+              child,
+            ],
+          );
+        }
+
+        final user = FirebaseAuth.instance.currentUser;
+        if (user != null) {
+          return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+            stream: _registeredUserBlockStream(),
+            builder: (context, userSnapshot) {
+              if (_isUserBlockedSnapshot(userSnapshot.data)) {
+                return _buildBlockedNotice();
+              }
+              return wrapWithPreWishBanner(
+                _buildGuestBlockStreams(localizations, preWishUi, buildWishForm),
+              );
+            },
+          );
+        }
+        return wrapWithPreWishBanner(
+          _buildGuestBlockStreams(localizations, preWishUi, buildWishForm),
+        );
+      },
+    );
   }
 
   Widget _buildBlockedNotice() {
     return const UserBlockedWidget();
+  }
+
+  /// Wie PWA: Stunden-/Zeitraum-Kontingent ausgeschöpft — keine Wunschbox, nur Hinweis.
+  Widget _buildWishHourlyLimitReachedNotice(AppLocalizations l) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
+      decoration: UIConstants.guestBoxDecoration,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.schedule,
+            color: UIConstants.appOrange.withValues(alpha: 0.95),
+            size: 42,
+          ),
+          const SizedBox(height: 16),
+          Text(
+            l.wish_hourly_limit_reached_body,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              height: 1.35,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   // ... (Alle internen Funktionen wie _checkWishboxStatus, _addWish etc. bleiben identisch zu deinem Original-Code)
@@ -501,10 +1143,27 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
               children: [
                 const SizedBox(height: 24),
 
+                if (_partyCheckInEndedFeedback != null &&
+                    (_partyCode == null ||
+                        _partyCode!.isEmpty ||
+                        _partyCode == 'manual') &&
+                    _floorPickerOptions == null) ...[
+                  PartyCheckInFeedbackWidget(
+                    feedback: _partyCheckInEndedFeedback!,
+                  ),
+                  const SizedBox(height: 12),
+                ],
+
+                if (_buildFloorPickerSection(localizations) != null) ...[
+                  _buildFloorPickerSection(localizations)!,
+                  const SizedBox(height: 12),
+                ],
+
                 // Check-In-Widget (wenn kein party_code vorhanden)
-                if (_partyCode == null ||
-                    _partyCode!.isEmpty ||
-                    _partyCode == 'manual')
+                if ((_partyCode == null ||
+                        _partyCode!.isEmpty ||
+                        _partyCode == 'manual') &&
+                    _floorPickerOptions == null)
                   PartyCheckInWidget(
                     initialCode: _partyCode ?? _pendingPartyCode,
                     onCodeSubmitted: _validateAndSetPartyCode,
@@ -514,114 +1173,52 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
 
                 // Wunschbox Status / Inhaltslogik
                 if (_showSuccessMessage)
-                  _buildSuccessView(localizations)
+                  _buildSuccessView(localizations, preWish: _successWasPreWish)
                 else if (!_isAdmin &&
                     _partyCode != null &&
                     _partyCode!.isNotEmpty &&
-                    _partyCode != 'manual')
-                  Builder(
-                    builder: (context) {
-                      final user = FirebaseAuth.instance.currentUser;
-
-                      Widget buildWishForm() {
-                        return WishesFormWidget(
-                          formKey: _formKey,
-                          nameController: _nameController,
-                          titleController: _titleController,
-                          artistController: _artistController,
-                          greetingController: _greetingController,
-                          onSubmit: _addWish,
-                          onSpotifyTrackSelected: (id, durationMs) {
-                            setState(() {
-                              _selectedSpotifyId = id;
-                              _selectedDurationMs = durationMs;
-                            });
-                          },
-                          guestName: _guestName,
-                          hasProfileName: _hasProfileName,
-                          wishLimit: _wishLimit,
-                          wishCount: _wishCount,
-                          wishRemaining: _wishRemaining,
-                          nextFullHour: _nextFullHour,
-                          djName: _djName,
-                          djLogoUrl: _djLogoUrl,
-                        );
-                      }
-
-                      if (user != null) {
-                        // Eingeloggte Gäste: wie anonyme Gäste auch party-/gerätebezogene
-                        // Sperre (blocked_guests, blocked_devices) — nicht nur users.is_blocked.
-                        return StreamBuilder<
-                          DocumentSnapshot<Map<String, dynamic>>
-                        >(
-                          stream: _registeredUserBlockStream(),
-                          builder: (context, userSnapshot) {
-                            final blockedByUser = _isUserBlockedSnapshot(
-                              userSnapshot.data,
-                            );
-                            if (blockedByUser || _isBlocked) {
-                              return _buildBlockedNotice();
-                            }
-                            return StreamBuilder<
-                              DocumentSnapshot<Map<String, dynamic>>
-                            >(
-                              stream: _guestBlockedDevicesStream(),
-                              builder: (context, blockedDevicesSnapshot) {
-                                final blockedByDevice = _isGuestBlockedSnapshot(
-                                  blockedDevicesSnapshot.data,
-                                );
-                                return StreamBuilder<
-                                  DocumentSnapshot<Map<String, dynamic>>
-                                >(
-                                  stream: _guestBlockedGuestsDocStream(),
-                                  builder: (context, blockedGuestsDocSnapshot) {
-                                    final blockedByGuestDoc =
-                                        _isGuestBlockedSnapshot(
-                                      blockedGuestsDocSnapshot.data,
-                                    );
-                                    final blockedNow =
-                                        blockedByDevice ||
-                                        blockedByGuestDoc ||
-                                        _isBlocked;
-                                    if (blockedNow) {
-                                      return _buildBlockedNotice();
-                                    }
-                                    return buildWishForm();
-                                  },
-                                );
-                              },
-                            );
-                          },
-                        );
-                      }
-
-                      return StreamBuilder<
-                        DocumentSnapshot<Map<String, dynamic>>
-                      >(
-                        stream: _guestBlockedDevicesStream(),
-                        builder: (context, blockedDevicesSnapshot) {
-                          final blockedByDevice = _isGuestBlockedSnapshot(
-                            blockedDevicesSnapshot.data,
-                          );
-
-                          return StreamBuilder<
-                            DocumentSnapshot<Map<String, dynamic>>
-                          >(
-                            stream: _guestBlockedGuestsDocStream(),
-                            builder: (context, blockedGuestsDocSnapshot) {
-                              final blockedByGuestDoc = _isGuestBlockedSnapshot(
-                                blockedGuestsDocSnapshot.data,
-                              );
-                              final blockedNow =
-                                  blockedByDevice ||
-                                  blockedByGuestDoc ||
-                                  _isBlocked;
-
-                              if (blockedNow) {
-                                return _buildBlockedNotice();
-                              }
-                              return buildWishForm();
+                    _partyCode != 'manual' &&
+                    PartySessionService.instance.hasSession)
+                  _buildGuestWishboxContent(
+                    localizations,
+                    (preWishUi) {
+                      final djPlan =
+                          PartySessionService.instance.djPlan?.toLowerCase().trim() ??
+                              '';
+                      final showWishboxDjLogo = djPlan != 'free';
+                      return ValueListenableBuilder<bool>(
+                        valueListenable:
+                            WishboxSuggestionsGuestBridge.instance.enabled,
+                        builder: (context, suggestionsOn, _) {
+                          return WishesFormWidget(
+                            formKey: _formKey,
+                            nameController: _nameController,
+                            titleController: _titleController,
+                            artistController: _artistController,
+                            greetingController: _greetingController,
+                            onSubmit: _addWish,
+                            onSpotifyTrackSelected: (id, durationMs) {
+                              setState(() {
+                                _selectedSpotifyId = id;
+                                _selectedDurationMs = durationMs;
+                              });
                             },
+                            guestName: _guestName,
+                            hasProfileName: _hasProfileName,
+                            wishLimit: _wishLimit,
+                            wishCount: _wishCount,
+                            wishRemaining: _wishRemaining,
+                            nextFullHour: _nextFullHour,
+                            djName: _djName,
+                            djLogoUrl: _djLogoUrl,
+                            showDjLogo: showWishboxDjLogo,
+                            hidePlayDisclaimer: preWishUi,
+                            hideWishLimit: preWishUi,
+                            showPreWishLimit: preWishUi &&
+                                !PreWishLimitService.isUnlimited(_preWishLimit),
+                            preWishLimit: _preWishLimit,
+                            preWishRemaining: _preWishRemaining,
+                            enableSuggestions: suggestionsOn,
                           );
                         },
                       );
@@ -762,6 +1359,13 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
       final current = UserService().currentUser.value;
       final isAdmin = current != null && AppConfig.isAdminRole(current);
 
+      PartyCheckInFeedback? pendingEnded;
+      if (!isAdmin) {
+        await PartySessionService.instance.hydrateIfNeeded();
+        pendingEnded =
+            PartySessionService.instance.consumePendingPartyEndedFeedback();
+      }
+
       final user = FirebaseAuth.instance.currentUser;
       if (user != null) {
         // Name aus users-Collection (displayName), Fallback: Auth displayName/email
@@ -799,6 +1403,18 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
         _djLogoUrl = svc.djLogoUrl;
         _isAdmin = isAdmin;
         _isLoading = false;
+        if (pendingEnded != null) {
+          _partyCheckInEndedFeedback = pendingEnded;
+          _partyEndedHandled = true;
+          if (pendingEnded.isFloorRedirect &&
+              pendingEnded.otherFloorOptions != null &&
+              pendingEnded.otherFloorOptions!.isNotEmpty) {
+            _floorPickerOptions = pendingEnded.otherFloorOptions;
+            _pendingJoinCodeForFloorPick = svc.shortCode ?? _partyCode;
+          }
+        } else if (svc.hasSession) {
+          _partyEndedHandled = false;
+        }
       });
 
       if (svc.hasSession) {
@@ -808,6 +1424,26 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
           _checkBlockStatus();
         }
         _scheduleGuestPartyStatsLog();
+        unawaited(_refreshMultiFloorAvailable());
+      } else {
+        final floorRedirect =
+            PartySessionService.instance.consumePendingFloorRedirect();
+        if (floorRedirect != null && mounted) {
+          setState(() {
+            _floorPickerOptions = floorRedirect.options;
+            _pendingJoinCodeForFloorPick = floorRedirect.joinCode;
+            _partyCode = floorRedirect.joinCode;
+            _partyCheckInEndedFeedback = PartyCheckInFeedback(
+              type: PartyCheckInFeedbackType.floorEndedChooseOther,
+              endedFloorLabel: GuestFloorDisplay.floorLabel(
+                AppLocalizations.of(context)!,
+                floorRedirect.endedFloorLabel,
+                null,
+              ),
+              otherFloorOptions: floorRedirect.options,
+            );
+          });
+        }
       }
     } catch (_) {
       if (!mounted) return;
@@ -820,8 +1456,28 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
   /// Validiert Party-Code über PartySessionService (einmalige Firestore-Abfrage).
   /// Bei Erfolg: Session gefüllt, State aus Service übernommen.
   Future<PartyCheckInFeedback?> _validateAndSetPartyCode(String code) async {
+    setState(() {
+      _partyCheckInEndedFeedback = null;
+      _partyEndedHandled = false;
+      _floorPickerOptions = null;
+      _pendingJoinCodeForFloorPick = null;
+    });
     final feedback = await PartySessionService.instance.validateAndJoin(code);
-    if (feedback != null) return feedback;
+    if (feedback != null) {
+      if (feedback.type == PartyCheckInFeedbackType.selectFloor &&
+          feedback.otherFloorOptions != null &&
+          feedback.otherFloorOptions!.isNotEmpty) {
+        if (!mounted) return feedback;
+        setState(() {
+          _partyCheckInEndedFeedback = feedback;
+          _floorPickerOptions = feedback.otherFloorOptions;
+          _pendingJoinCodeForFloorPick =
+              code.replaceAll(RegExp(r'[^0-9]'), '');
+          _partyCode = _pendingJoinCodeForFloorPick;
+        });
+      }
+      return feedback;
+    }
     if (!mounted) return null;
     final svc = PartySessionService.instance;
     setState(() {
@@ -830,10 +1486,12 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
       _djId = svc.djId;
       _djName = svc.djName;
       _djLogoUrl = svc.djLogoUrl;
+      _floorPickerOptions = null;
     });
     _ensurePartyListenersStarted();
     _checkBlockStatus();
     _scheduleGuestPartyStatsLog();
+    unawaited(_refreshMultiFloorAvailable());
     widget.onPartyJoined?.call();
     return null;
   }
@@ -921,8 +1579,8 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     try {
       _guestBlockSubscription?.cancel();
 
-      // Hole clientId und partyId
-      final clientId = await _getOrCreateClientId();
+      final clientId = _buildDeterministicClientIdFromDevice();
+      final partyId = _currentPartyIdForBlocking();
       if (clientId.isEmpty) {
         debugLog(
           '⚠️ _checkBlockStatus: Keine clientId gefunden, setze _isBlocked = false',
@@ -934,10 +1592,6 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
         }
         return;
       }
-
-      // Hole aktive Party-Info
-      final partyInfo = await _getActivePartyInfo();
-      final partyId = partyInfo['partyId'] ?? '';
 
       if (partyId.isEmpty || partyId == 'manual') {
         debugLog(
@@ -1009,14 +1663,6 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     }
   }
 
-  /// Aktuelles volles Stunden-Fenster (Start inkl., Ende exkl.)
-  static ({DateTime start, DateTime end}) _getCurrentFullHourRange() {
-    final now = DateTime.now();
-    final start = DateTime(now.year, now.month, now.day, now.hour, 0, 0, 0);
-    final end = start.add(const Duration(hours: 1));
-    return (start: start, end: end);
-  }
-
   Future<Map<String, dynamic>> _loadWishStats(String partyId) async {
     if (partyId.isEmpty || partyId == 'manual') return {};
     try {
@@ -1033,20 +1679,17 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
           ? ((data?['user_limit_per_hour'] as int?) ?? 5)
           : ((data?['guest_limit_per_hour'] as int?) ?? 2);
 
-      final range = _getCurrentFullHourRange();
+      final range = TimeUtils.getCurrentFullHourRange(DateTime.now());
+
       QuerySnapshot<Map<String, dynamic>> wishesSnap;
 
       if (isLoggedIn) {
-        wishesSnap = await FirebaseFirestore.instance
-            .collection('wishes')
-            .where('party_id', isEqualTo: partyId)
+        wishesSnap = await WishPaths.partyWishes(partyId)
             .where('user_id', isEqualTo: user!.uid)
             .get();
       } else {
         final clientId = await _getOrCreateClientId();
-        wishesSnap = await FirebaseFirestore.instance
-            .collection('wishes')
-            .where('party_id', isEqualTo: partyId)
+        wishesSnap = await WishPaths.partyWishes(partyId)
             .where('client_id', isEqualTo: clientId)
             .get();
       }
@@ -1055,10 +1698,11 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
       for (final doc in wishesSnap.docs) {
         final d = doc.data();
         if (d['is_duplicate'] == true) continue;
+        if (d['is_pre_wish'] == true) continue;
         final ts = d['createdAt'];
         if (ts is! Timestamp) continue;
         final t = ts.toDate();
-        if (!t.isBefore(range.start) && t.isBefore(range.end)) count++;
+        if (!t.isBefore(range.start) && t.isBefore(range.endExclusive)) count++;
       }
       final remaining = (limit - count).clamp(0, limit);
       return {
@@ -1078,12 +1722,28 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     final partyId = partyInfo['partyId'] ?? '';
     if (partyId.isEmpty || partyId == 'manual') return;
     final stats = await _loadWishStats(partyId);
+    await _loadPreWishStatsAndUpdate(partyId);
     if (!mounted) return;
     setState(() {
       _wishLimit = stats['limit'] as int? ?? 0;
       _wishCount = stats['count'] as int? ?? 0;
       _wishRemaining = stats['remaining'] as int? ?? 0;
-      _nextFullHour = _getCurrentFullHourRange().end;
+      _nextFullHour = TimeUtils.nextFullHourAfterNow(DateTime.now());
+    });
+  }
+
+  Future<void> _loadPreWishStatsAndUpdate(String partyId) async {
+    if (partyId.isEmpty || partyId == 'manual') return;
+    final clientId = await _getOrCreateClientId();
+    final stats = await PreWishLimitService.loadGuestStats(
+      partyId: partyId,
+      clientId: clientId,
+      userId: FirebaseAuth.instance.currentUser?.uid,
+    );
+    if (!mounted) return;
+    setState(() {
+      _preWishLimit = stats.limit;
+      _preWishRemaining = stats.remaining;
     });
   }
 
@@ -1094,8 +1754,17 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
         .collection('parties')
         .doc(partyId)
         .snapshots()
-        .listen((_) {
-          if (mounted) _loadWishStatsAndUpdate();
+        .listen((snapshot) {
+          if (!mounted) return;
+          final data = snapshot.data();
+          if (data != null &&
+              _isPartyEnded(data) &&
+              PartySessionService.instance.hasSession) {
+            unawaited(_handlePartyEndedDuringSession(data));
+            return;
+          }
+          setState(() {});
+          _loadWishStatsAndUpdate();
         });
   }
 
@@ -1130,7 +1799,16 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
   }
 
   Future<bool> _checkWishboxActiveStatus() async {
-    return true; /* ... */
+    final partyId = _currentPartyIdForBlocking();
+    if (partyId.isEmpty || partyId == 'manual') return false;
+    final partyDoc = await FirebaseFirestore.instance
+        .collection('parties')
+        .doc(partyId)
+        .get();
+    final data = partyDoc.data();
+    if (_isPartyWishboxPaused(data)) return false;
+    if (PreWishHelper.isPreWishWindowOpen(data)) return true;
+    return _isGuestWishboxRunning(data);
   }
 
   String _normalizeText(String t) {
@@ -1141,9 +1819,13 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     return null;
   }
 
-  Widget _buildSuccessView(AppLocalizations localizations) {
+  Widget _buildSuccessView(AppLocalizations localizations, {bool preWish = false}) {
     // PWA: .success-message — schwarzer Hintergrund, grüner Rahmen (--green-success), Headline grün
-    return Container(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (preWish) _buildPreWishBanner(localizations),
+        Container(
       padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
       decoration: BoxDecoration(
         color: const Color(0xFF050505),
@@ -1156,7 +1838,9 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
           Icon(Icons.check_circle, size: 72, color: Colors.green.shade400),
           const SizedBox(height: 24),
           Text(
-            localizations.wishSentReceived,
+            preWish
+                ? localizations.preWishSentReceived
+                : localizations.wishSentReceived,
             style: const TextStyle(
               fontSize: 20,
               fontWeight: FontWeight.bold,
@@ -1164,16 +1848,18 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
             ),
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 16),
-          Text(
-            localizations.wishSentDisclaimer,
-            style: const TextStyle(
-              color: Color(0xFFE57373),
-              fontSize: 13,
-              height: 1.4,
+          if (!preWish) ...[
+            const SizedBox(height: 16),
+            Text(
+              localizations.wishSentDisclaimer,
+              style: const TextStyle(
+                color: Color(0xFFE57373),
+                fontSize: 13,
+                height: 1.4,
+              ),
+              textAlign: TextAlign.center,
             ),
-            textAlign: TextAlign.center,
-          ),
+          ],
           const SizedBox(height: 20),
           SizedBox(
             width: double.infinity,
@@ -1181,6 +1867,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
               onPressed: () {
                 setState(() {
                   _showSuccessMessage = false;
+                  _successWasPreWish = false;
                   _titleController.clear();
                   _artistController.clear();
                   _greetingController.clear();
@@ -1205,6 +1892,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
             onPressed: () {
               setState(() {
                 _showSuccessMessage = false;
+                _successWasPreWish = false;
               });
               NavigationService().setTabIndex(0);
             },
@@ -1213,6 +1901,8 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
           ),
         ],
       ),
+        ),
+      ],
     );
   }
 
@@ -1284,7 +1974,41 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     if (!_formKey.currentState!.validate()) {
       return;
     }
+    if (_wishSubmitInFlight) {
+      debugLog(
+        '🔁 _addWish: Vorgang läuft bereits — zweiten Absendevorgang ignoriert',
+      );
+      return;
+    }
+    _wishSubmitInFlight = true;
+    try {
+      await _executeAddWishAttempt();
+    } finally {
+      _wishSubmitInFlight = false;
+    }
+  }
 
+  /// UI-Sprache der App; wird wie in der PWA unter `browser_language` persistiert (Statistik/Anzeige).
+  String _wishClientUiLanguage() {
+    if (!mounted) return 'unknown';
+    final c = Localizations.localeOf(context).languageCode.trim();
+    if (c.isEmpty) return 'unknown';
+    return c.length > 20 ? c.substring(0, 20) : c;
+  }
+
+  /// Laufzeitplattform: PWA = `web`; native App = `ios` / `android` (Feld `client_platform`).
+  String _wishClientPlatform() {
+    if (kIsWeb) return 'web';
+    try {
+      if (Platform.isIOS) return 'ios';
+      if (Platform.isAndroid) return 'android';
+    } catch (_) {
+      // z. B. Web-Build ohne dart:io
+    }
+    return 'unknown';
+  }
+
+  Future<void> _executeAddWishAttempt() async {
     final title = SecurityHelper.sanitize(_titleController.text.trim());
     final artist = SecurityHelper.sanitize(_artistController.text.trim());
     final greeting = SecurityHelper.sanitize(_greetingController.text.trim());
@@ -1373,41 +2097,116 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     }
     debugLog('🔑 _addWish: clientId gesetzt');
 
-    // Free-DJ: 1 Wunsch pro 2-Stunden-Block (DJ-Wünsche ausgenommen)
-    final canRequest = await LimitService.canRequestSong(clientId, partyId);
-    if (!canRequest) {
+    final partySnap = await FirebaseFirestore.instance
+        .collection('parties')
+        .doc(partyId)
+        .get();
+    final partyLive = partySnap.data();
+    final preWishMode = PreWishHelper.isPreWishWindowOpen(partyLive);
+
+    if (preWishMode &&
+        !PreWishLimitService.isUnlimited(
+          PreWishLimitService.parseLimitFromParty(partyLive),
+        )) {
+      final clientIdForPre = await _getOrCreateClientId();
+      final preStats = await PreWishLimitService.loadGuestStats(
+        partyId: partyId,
+        clientId: clientIdForPre,
+        userId: FirebaseAuth.instance.currentUser?.uid,
+      );
+      if (!preStats.allowed) {
+        if (!mounted) return;
+        final l10n = AppLocalizations.of(context)!;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              l10n.pre_wish_limit_reached(preStats.limit),
+            ),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+    }
+
+    // Free-DJ: max. 1 Gast-Wunsch pro voller Kalenderstunde (nicht bei Vorab-Wünschen)
+    if (!preWishMode) {
+      final djPlan =
+          (partyLive?['dj_plan_type'] as String?)?.trim().toLowerCase();
+      if (djPlan == 'free') {
+        final canRequest = await LimitService.canRequestSong(clientId, partyId);
+        if (!canRequest) {
+        if (!mounted) return;
+        final nextAt = TimeUtils.nextFullHourAfterNow(DateTime.now());
+        final nextStr =
+            FormattingUtils.formatNextWishFullHourClock(nextAt, context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              AppLocalizations.of(context)!
+                  .free_dj_wish_limit_2h
+                  .replaceAll('{time}', nextStr),
+            ),
+            backgroundColor: Colors.orange,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+        return;
+        }
+      }
+    }
+    if (!preWishMode && !_isGuestWishboxRunning(partyLive)) {
       if (!mounted) return;
-      final range = TimeUtils.getTwoHourBlockRange(DateTime.now());
-      final nextAt = range.blockEndExclusive;
-      final nextStr =
-          '${nextAt.hour.toString().padLeft(2, '0')}:${nextAt.minute.toString().padLeft(2, '0')}';
+      final l10n = AppLocalizations.of(context)!;
+      final endedFeedback = _isPartyEnded(partyLive) && partyLive != null
+          ? _partyEndedFeedbackFromData(l10n, partyLive)
+          : null;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            AppLocalizations.of(context)!
-                .free_dj_wish_limit_2h
-                .replaceAll('{time}', nextStr),
+            endedFeedback != null
+                ? l10n.partyEndedWithDj(
+                    endedFeedback.partyName ?? l10n.unnamed_party,
+                    endedFeedback.djName ?? 'DJ',
+                  )
+                : PreWishHelper.isPrePartyWaitOnly(partyLive)
+                    ? l10n.pre_wish_submit_blocked_deadline
+                    : l10n.wishbox_inactive_description,
           ),
           backgroundColor: Colors.orange,
-          duration: const Duration(seconds: 4),
         ),
       );
       return;
     }
 
-    // Prüfe Wunsch-Limit (Party-Stunden-Limit)
-    final canAddWish = await _checkWishLimit(partyId);
-    if (!canAddWish) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            AppLocalizations.of(context)!.wish_limit_reset_next_hour,
+    if (!preWishMode) {
+      if (_wishLimit > 0 && _wishRemaining <= 0) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              AppLocalizations.of(context)!.wish_limit_reset_next_hour,
+            ),
+            backgroundColor: Colors.orange,
           ),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
+        );
+        return;
+      }
+      if (_wishLimit == 0) {
+        final canAddWish = await _checkWishLimit(partyId);
+        if (!canAddWish) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                AppLocalizations.of(context)!.wish_limit_reset_next_hour,
+              ),
+              backgroundColor: Colors.orange,
+            ),
+          );
+          return;
+        }
+      }
     }
 
     try {
@@ -1449,6 +2248,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
           partyId: partyId,
           partyCode: partyCode,
           clientId: clientId,
+          isPreWish: preWishMode,
         );
       } else {
         await _submitNewWish(
@@ -1459,6 +2259,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
           partyId: partyId,
           partyCode: partyCode,
           clientId: clientId,
+          isPreWish: preWishMode,
         );
       }
     } catch (e) {
@@ -1508,31 +2309,34 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     required String partyId,
     required String partyCode,
     required String clientId,
+    bool isPreWish = false,
   }) async {
     final djId = await _resolvePartyDjId(partyId);
+    final effectiveName = name.isNotEmpty ? name : (_guestName?.trim().isNotEmpty == true ? _guestName!.trim() : '');
     final wishData = <String, dynamic>{
-      'name': name.isNotEmpty ? name : (_guestName ?? 'Gast'),
+      if (effectiveName.isNotEmpty) 'name': effectiveName,
       'title': title,
       'artist': artist,
       'status': 'pending',
       'createdAt': FieldValue.serverTimestamp(),
       'timestamp': FieldValue.serverTimestamp(),
       'duplicate_count': 0,
-      'requested_by': [name.isNotEmpty ? name : (_guestName ?? 'Gast')],
-      'greetings': greeting.isNotEmpty
+      if (effectiveName.isNotEmpty) 'requested_by': [effectiveName],
+      'greetings': greeting.isNotEmpty && effectiveName.isNotEmpty
           ? [
               {
-                'name': name.isNotEmpty ? name : (_guestName ?? 'Gast'),
+                'name': effectiveName,
                 'greeting': greeting,
               },
             ]
           : [],
       'is_duplicate': false,
+      'is_pre_wish': isPreWish,
       'is_registered_user': FirebaseAuth.instance.currentUser != null,
-      'is_registered_users': {
-        (name.isNotEmpty ? name : (_guestName ?? 'Gast')):
-            FirebaseAuth.instance.currentUser != null,
-      },
+      if (effectiveName.isNotEmpty)
+        'is_registered_users': {
+          effectiveName: FirebaseAuth.instance.currentUser != null,
+        },
       'client_id': clientId,
       'device_id': _deviceId,
       if (FirebaseAuth.instance.currentUser != null)
@@ -1542,6 +2346,8 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
       'dj_id': djId,
       'djId': djId,
       'isSeen': false,
+      'browser_language': _wishClientUiLanguage(),
+      'client_platform': _wishClientPlatform(),
     };
 
     if (_selectedSpotifyId != null && _selectedSpotifyId!.trim().isNotEmpty) {
@@ -1551,17 +2357,23 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
       }
     }
 
-    await FirebaseFirestore.instance
-        .collection('wishes')
+    final docRef = await WishPaths.partyWishes(partyId)
         .add(SecurityHelper.sanitizeMap(wishData));
 
     if (!mounted) return;
-    _onWishSaved(wishData, context, savedTitle: title, savedArtist: artist);
+    _onWishSaved(
+      wishData,
+      context,
+      savedTitle: title,
+      savedArtist: artist,
+      wishDocumentId: docRef.id,
+    );
     await _updateGuestStats(partyId);
 
     if (!mounted) return;
     setState(() {
       _showSuccessMessage = true;
+      _successWasPreWish = isPreWish;
       _titleController.clear();
       _artistController.clear();
       _greetingController.clear();
@@ -1569,7 +2381,11 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
       _selectedDurationMs = null;
     });
 
-    await _loadWishStatsAndUpdate();
+    if (isPreWish) {
+      unawaited(_loadPreWishStatsAndUpdate(partyId));
+    } else {
+      unawaited(_loadWishStatsAndUpdate());
+    }
   }
 
   /// Dubletten-Treffer: Original-Wunsch aktualisieren + neuen Eintrag wie PWA.
@@ -1582,6 +2398,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     required String partyId,
     required String partyCode,
     required String clientId,
+    bool isPreWish = false,
   }) async {
     final djId = await _resolvePartyDjId(partyId);
     var actualOriginalId = match.documentId;
@@ -1590,9 +2407,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
       actualOriginalId = md['original_wish_id'] as String;
     }
 
-    final origRef = FirebaseFirestore.instance
-        .collection('wishes')
-        .doc(actualOriginalId);
+    final origRef = WishPaths.partyWish(partyId, actualOriginalId);
     final origSnap = await origRef.get();
     if (!origSnap.exists) {
       await _submitNewWish(
@@ -1603,17 +2418,45 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
         partyId: partyId,
         partyCode: partyCode,
         clientId: clientId,
+        isPreWish: isPreWish,
       );
       return;
     }
 
     final originalData = origSnap.data()!;
     final currentCount = (originalData['duplicate_count'] as int?) ?? 0;
-    final requestedBy = List<String>.from(
+    final prevRequestedBy = List<String>.from(
       (originalData['requested_by'] as List?)?.map((e) => e.toString()) ?? [],
     );
-    final sanitizedName = name.isNotEmpty ? name : (_guestName ?? 'Gast');
-    if (!requestedBy.contains(sanitizedName)) requestedBy.add(sanitizedName);
+    final prevCreatedAtList = List<Timestamp>.from(
+      (originalData['createdAt_list'] as List?)?.whereType<Timestamp>() ?? [],
+    );
+    final requestedBy = List<String>.from(prevRequestedBy);
+    final sanitizedName = name.isNotEmpty ? name : (_guestName?.trim().isNotEmpty == true ? _guestName!.trim() : '');
+    final originalOwnerName = (originalData['name'] as String?)?.trim() ?? '';
+    if (originalOwnerName.isNotEmpty && !requestedBy.contains(originalOwnerName)) {
+      requestedBy.insert(0, originalOwnerName);
+    }
+    if (sanitizedName.isNotEmpty && !requestedBy.contains(sanitizedName)) {
+      requestedBy.add(sanitizedName);
+    }
+
+    final baseCreated = originalData['createdAt'];
+    final createdAtList = <dynamic>[];
+    for (final person in requestedBy) {
+      final idx = prevRequestedBy.indexOf(person);
+      if (idx >= 0 && idx < prevCreatedAtList.length) {
+        createdAtList.add(prevCreatedAtList[idx]);
+      } else if (person == originalOwnerName && baseCreated is Timestamp) {
+        createdAtList.add(baseCreated);
+      } else if (person == sanitizedName) {
+        createdAtList.add(FieldValue.serverTimestamp());
+      } else if (baseCreated is Timestamp) {
+        createdAtList.add(baseCreated);
+      } else {
+        createdAtList.add(FieldValue.serverTimestamp());
+      }
+    }
 
     final greetings = <Map<String, dynamic>>[];
     final existingG = originalData['greetings'];
@@ -1622,23 +2465,32 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
         if (e is Map) greetings.add(Map<String, dynamic>.from(e));
       }
     }
-    if (greeting.isNotEmpty) {
+    if (greeting.isNotEmpty && sanitizedName.isNotEmpty) {
       greetings.add({'name': sanitizedName, 'greeting': greeting});
     }
 
     final existingIsRegisteredUsers = Map<String, dynamic>.from(
       originalData['is_registered_users'] as Map? ?? {},
     );
-    existingIsRegisteredUsers[sanitizedName] =
-        FirebaseAuth.instance.currentUser != null;
+    if (sanitizedName.isNotEmpty) {
+      existingIsRegisteredUsers[sanitizedName] =
+          FirebaseAuth.instance.currentUser != null;
+    }
+
+    final originalUpdate = <String, dynamic>{
+      'duplicate_count': currentCount + 1,
+      'requested_by': requestedBy,
+      'createdAt_list': createdAtList,
+      'greetings': greetings,
+      'is_registered_users': existingIsRegisteredUsers,
+    };
+    // Vorab-Queue → bei Dublette während laufender Party in Offen übernehmen
+    if (PreWishHelper.isQueuedPreWish(originalData)) {
+      originalUpdate['pre_wish_published'] = true;
+    }
 
     await origRef.update(
-      SecurityHelper.sanitizeMap({
-        'duplicate_count': currentCount + 1,
-        'requested_by': requestedBy,
-        'greetings': greetings,
-        'is_registered_users': existingIsRegisteredUsers,
-      }),
+      SecurityHelper.sanitizeMap(originalUpdate),
     );
 
     final wishData = <String, dynamic>{
@@ -1650,6 +2502,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
       'timestamp': FieldValue.serverTimestamp(),
       'is_duplicate': true,
       'original_wish_id': actualOriginalId,
+      'is_pre_wish': isPreWish,
       'is_registered_user': FirebaseAuth.instance.currentUser != null,
       'client_id': clientId,
       'device_id': _deviceId,
@@ -1660,6 +2513,8 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
       'dj_id': djId,
       'djId': djId,
       'isSeen': false,
+      'browser_language': _wishClientUiLanguage(),
+      'client_platform': _wishClientPlatform(),
     };
     if (_selectedSpotifyId != null && _selectedSpotifyId!.trim().isNotEmpty) {
       wishData['spotify_id'] = _selectedSpotifyId;
@@ -1670,17 +2525,23 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
       wishData['greeting'] = greeting;
     }
 
-    await FirebaseFirestore.instance
-        .collection('wishes')
+    final docRef = await WishPaths.partyWishes(partyId)
         .add(SecurityHelper.sanitizeMap(wishData));
 
     if (!mounted) return;
-    _onWishSaved(wishData, context, savedTitle: title, savedArtist: artist);
+    _onWishSaved(
+      wishData,
+      context,
+      savedTitle: title,
+      savedArtist: artist,
+      wishDocumentId: docRef.id,
+    );
     await _updateGuestStats(partyId);
 
     if (!mounted) return;
     setState(() {
       _showSuccessMessage = true;
+      _successWasPreWish = isPreWish;
       _titleController.clear();
       _artistController.clear();
       _greetingController.clear();
@@ -1688,7 +2549,11 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
       _selectedDurationMs = null;
     });
 
-    await _loadWishStatsAndUpdate();
+    if (isPreWish) {
+      unawaited(_loadPreWishStatsAndUpdate(partyId));
+    } else {
+      unawaited(_loadWishStatsAndUpdate());
+    }
   }
 
   /// Helper-Methode: Wird nach erfolgreichem Speichern eines Wunsches aufgerufen
@@ -1698,6 +2563,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     BuildContext context, {
     String? savedTitle,
     String? savedArtist,
+    String? wishDocumentId,
   }) async {
     final title = (savedTitle ?? _titleController.text).trim();
     final artist = (savedArtist ?? _artistController.text).trim();
@@ -1724,7 +2590,8 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
         genres: genres, // Kann leer sein
         djId: djId, // DJ-ID für Statistik
         partyId: partyId, // Für Security: wishes-Query nur mit party_id
-        context: context, // Für Browser-Sprache
+        context: context, // UI-Locale → browser_language im Request
+        wishDocumentId: wishDocumentId,
       );
     }
   }
@@ -1790,11 +2657,7 @@ class _WishForm extends StatelessWidget {
                 prefixIcon: const Icon(Icons.person_outline),
               ),
               textCapitalization: TextCapitalization.words,
-              validator: (value) {
-                return (value == null || value.trim().isEmpty)
-                    ? l.login_name_required
-                    : null;
-              },
+              validator: (_) => null,
             ),
             const SizedBox(height: 8),
           ],

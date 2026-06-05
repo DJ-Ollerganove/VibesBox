@@ -53,8 +53,12 @@ class UserModel {
   final bool notifyNewWishes;
   /// DJ: VibesBox-Ton für Wunsch-Benachrichtigungen (Firestore: enableNotificationSound).
   final bool enableNotificationSound;
+  /// DJ: Statusleiste / Musikerkennung (Firestore: show_status_notification; kann per Gerät überschrieben werden).
+  final bool showStatusNotification;
   /// DJ: Quickstart-Onboarding-Popup wurde bestätigt (Firestore: hasSeenQuickstart).
   final bool hasSeenQuickstart;
+  /// DJ: automatische Wortvorschläge in der Wunschbox (Firestore: wishbox_suggestions_enabled).
+  final bool wishboxSuggestionsEnabled;
 
   UserModel({
     required this.id,
@@ -91,7 +95,9 @@ class UserModel {
     this.preferredLanguage,
     this.notifyNewWishes = false,
     this.enableNotificationSound = true,
+    this.showStatusNotification = false,
     this.hasSeenQuickstart = false,
+    this.wishboxSuggestionsEnabled = true,
   }) : referralCode = (referralCode != null && referralCode.trim().isNotEmpty)
             ? referralCode.trim()
             : '',
@@ -127,10 +133,16 @@ class UserModel {
     return const [];
   }
 
-  /// Rohwert aus `language`, `selected_language` oder `locale` im User-Dokument.
+  /// Rohwert aus bekannten Sprach-Feldern im User-Dokument (inkl. ältere / alternative Keys).
   static String? parsePreferredLanguageFields(Map<String, dynamic>? data) {
     if (data == null) return null;
-    final v = data['language'] ?? data['selected_language'] ?? data['locale'];
+    final v = data['language'] ??
+        data['selected_language'] ??
+        data['locale'] ??
+        data['language_code'] ??
+        data['languageCode'] ??
+        data['app_language'] ??
+        data['preferred_language'];
     if (v == null) return null;
     final s = v.toString().trim();
     return s.isEmpty ? null : s;
@@ -194,7 +206,10 @@ class UserModel {
       preferredLanguage: parsePreferredLanguageFields(data),
       notifyNewWishes: data['notifyNewWishes'] == true,
       enableNotificationSound: data['enableNotificationSound'] != false,
+      showStatusNotification: data['show_status_notification'] == true,
       hasSeenQuickstart: data['hasSeenQuickstart'] == true,
+      wishboxSuggestionsEnabled:
+          data['wishbox_suggestions_enabled'] != false,
     );
   }
 
@@ -233,6 +248,7 @@ class UserModel {
       'auto_start_recognition': autoStartRecognition,
       'notifyNewWishes': notifyNewWishes,
       'enableNotificationSound': enableNotificationSound,
+      'show_status_notification': showStatusNotification,
       'hasSeenQuickstart': hasSeenQuickstart,
     };
   }
@@ -276,7 +292,9 @@ class UserModel {
         preferredLanguage == other.preferredLanguage &&
         notifyNewWishes == other.notifyNewWishes &&
         enableNotificationSound == other.enableNotificationSound &&
-        hasSeenQuickstart == other.hasSeenQuickstart;
+        showStatusNotification == other.showStatusNotification &&
+        hasSeenQuickstart == other.hasSeenQuickstart &&
+        wishboxSuggestionsEnabled == other.wishboxSuggestionsEnabled;
   }
 
   @override
@@ -315,7 +333,9 @@ class UserModel {
         preferredLanguage,
         notifyNewWishes,
         enableNotificationSound,
+        showStatusNotification,
         hasSeenQuickstart,
+        wishboxSuggestionsEnabled,
       ]);
 
   /// Erstellt eine Kopie mit geänderten Feldern
@@ -354,7 +374,9 @@ class UserModel {
     String? preferredLanguage,
     bool? notifyNewWishes,
     bool? enableNotificationSound,
+    bool? showStatusNotification,
     bool? hasSeenQuickstart,
+    bool? wishboxSuggestionsEnabled,
   }) {
     return UserModel(
       id: id ?? this.id,
@@ -392,7 +414,11 @@ class UserModel {
       notifyNewWishes: notifyNewWishes ?? this.notifyNewWishes,
       enableNotificationSound:
           enableNotificationSound ?? this.enableNotificationSound,
+      showStatusNotification:
+          showStatusNotification ?? this.showStatusNotification,
       hasSeenQuickstart: hasSeenQuickstart ?? this.hasSeenQuickstart,
+      wishboxSuggestionsEnabled:
+          wishboxSuggestionsEnabled ?? this.wishboxSuggestionsEnabled,
     );
   }
 }

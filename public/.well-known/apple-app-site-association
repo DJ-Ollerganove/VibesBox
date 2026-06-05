@@ -5,6 +5,7 @@
       {
         "appID": "ZMJK572375.com.vibesbox.dj",
         "paths": [
+          "/",
           "/verify",
           "/verify/*",
           "/vb/*",

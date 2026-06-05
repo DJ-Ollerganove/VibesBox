@@ -7,6 +7,7 @@ import '../utils/formatting_utils.dart';
 import '../utils/ui_constants.dart';
 import '../widgets/party_qr_code_dialog.dart' show Party, PartyQrCodeDialog;
 import '../utils/debug_log.dart';
+import '../utils/wish_paths.dart';
 
 // Seite für Party-Statistik
 class PartyStatistikPage extends StatefulWidget {
@@ -145,9 +146,7 @@ class _PartyStatistikPageState extends State<PartyStatistikPage> {
     try {
       // OPTIMIERT: Prüfe nur Wünsche im Zeitraum der Party (createdAt zwischen startDate und endDate)
       // Query nach party_id und status, dann clientseitig nach Zeitraum filtern
-      var pendingWishesQuery = FirebaseFirestore.instance
-          .collection('wishes')
-          .where('party_id', isEqualTo: widget.partyId)
+      var pendingWishesQuery = WishPaths.partyWishes(widget.partyId)
           .where('status', isEqualTo: 'pending');
       
       // Optional: Filter nach createdAt >= startDate (wenn Composite Index vorhanden)
@@ -195,9 +194,7 @@ class _PartyStatistikPageState extends State<PartyStatistikPage> {
       debugLog('📊 Lade Statistik für Party-ID: ${widget.partyId}');
       
       // Query nach party_id
-      var wishesQuery = FirebaseFirestore.instance
-          .collection('wishes')
-          .where('party_id', isEqualTo: widget.partyId);
+      var wishesQuery = WishPaths.partyWishes(widget.partyId);
       
       var wishesSnapshot = await wishesQuery.get();
       

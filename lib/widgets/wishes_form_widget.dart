@@ -16,8 +16,9 @@ class _SelectedArtist {
 }
 
 /// Widget für das Formular zum Absenden von Musikwünschen.
-/// Layout wie PWA: Header (Schicke Deinen Musikwunsch an), DJ-Name als Überschrift,
-/// optional DJ-Logo darunter, Disclaimer, Felder Interpret/Titel/Name/Gruß mit Icons links.
+/// Kopf: (1) Einleitung „Schicke … Musikwunsch an“, (2) DJ-Name, (3) optional DJ-Logo
+/// — jeweils eigene Zeile. Logo nur wenn [showDjLogo] true (z. B. nicht bei Free-DJ,
+/// selbst wenn noch eine alte Logo-URL in der Party liegt).
 class WishesFormWidget extends StatefulWidget {
   final GlobalKey<FormState> formKey;
   final TextEditingController nameController;
@@ -42,6 +43,23 @@ class WishesFormWidget extends StatefulWidget {
   /// DJ-Logo-URL aus Party dj_logo (optional unter dem Namen)
   final String? djLogoUrl;
 
+  /// false z. B. bei Free-DJ: kein Logo, unabhängig von [djLogoUrl] (alte Pro-Party).
+  final bool showDjLogo;
+
+  /// Vorab-Wünsche: kein roter „DJ spielt nur aus Sammlung“-Hinweis (nur Vorab-Banner oben).
+  final bool hidePlayDisclaimer;
+
+  /// Vorab-Wünsche: keine Stunden-Limit-Zeile unter dem Formular.
+  final bool hideWishLimit;
+
+  /// Vorab-Wünsche: Gesamt-Limit pro Gast (nicht stündlich).
+  final bool showPreWishLimit;
+  final int preWishLimit;
+  final int preWishRemaining;
+
+  /// false: keine Spotify-Vorschläge und kein Hinweistext.
+  final bool enableSuggestions;
+
   const WishesFormWidget({
     super.key,
     required this.formKey,
@@ -59,6 +77,13 @@ class WishesFormWidget extends StatefulWidget {
     this.nextFullHour,
     this.djName,
     this.djLogoUrl,
+    this.showDjLogo = true,
+    this.hidePlayDisclaimer = false,
+    this.hideWishLimit = false,
+    this.showPreWishLimit = false,
+    this.preWishLimit = 0,
+    this.preWishRemaining = 0,
+    this.enableSuggestions = true,
   });
 
   @override
@@ -84,6 +109,21 @@ class _WishesFormWidgetState extends State<WishesFormWidget> {
   void initState() {
     super.initState();
     widget.artistController.addListener(_onArtistTextChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant WishesFormWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.enableSuggestions && !widget.enableSuggestions) {
+      _artistDebounce?.cancel();
+      _titleDebounce?.cancel();
+      setState(() {
+        _artistSuggestions = [];
+        _titleSuggestions = [];
+        _artistLoading = false;
+        _titleLoading = false;
+      });
+    }
   }
 
   @override
@@ -114,6 +154,7 @@ class _WishesFormWidgetState extends State<WishesFormWidget> {
   }
 
   Future<void> _searchArtists(String query) async {
+    if (!widget.enableSuggestions) return;
     if (query.trim().isEmpty) {
       setState(() => _artistSuggestions = []);
       return;
@@ -140,6 +181,7 @@ class _WishesFormWidgetState extends State<WishesFormWidget> {
   }
 
   Future<void> _searchTracks(String query, {bool catalogMode = false}) async {
+    if (!widget.enableSuggestions) return;
     setState(() => _titleLoading = true);
     final id = ++_titleSearchId;
     String searchQ;
@@ -222,13 +264,23 @@ class _WishesFormWidgetState extends State<WishesFormWidget> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // PWA-Header: DJ-Name oben, dann Einleitung, optional Logo nur bei gültiger URL
+            // Zeile 1: Einleitung, Zeile 2: DJ-Name, Zeile 3: Logo (nur wenn [showDjLogo])
             Padding(
               padding: const EdgeInsets.only(bottom: 20),
               child: Column(
                 children: [
+                  Text(
+                    localizations.pwaRequestHeaderText,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
                   if (widget.djName != null &&
                       widget.djName!.trim().isNotEmpty) ...[
+                    const SizedBox(height: 12),
                     Text(
                       widget.djName!.trim(),
                       style: const TextStyle(
@@ -239,19 +291,10 @@ class _WishesFormWidgetState extends State<WishesFormWidget> {
                       ),
                       textAlign: TextAlign.center,
                     ),
-                    const SizedBox(height: 12),
                   ],
-                  Text(
-                    localizations.pwaRequestHeaderText,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  if (isHttpImageUrl(widget.djLogoUrl)) ...[
-                    const SizedBox(height: 10),
+                  if (widget.showDjLogo &&
+                      isHttpImageUrl(widget.djLogoUrl)) ...[
+                    const SizedBox(height: 12),
                     TweenAnimationBuilder<double>(
                       tween: Tween(begin: 0, end: 1),
                       duration: const Duration(milliseconds: 400),
@@ -273,17 +316,18 @@ class _WishesFormWidgetState extends State<WishesFormWidget> {
                 ],
               ),
             ),
-            // Disclaimer (PWA: rötlich-orange #e57373)
-            Text(
-              localizations.wishSentDisclaimer,
-              style: const TextStyle(
-                color: Color(0xFFE57373),
-                fontSize: 13,
-                height: 1.4,
+            if (!widget.hidePlayDisclaimer) ...[
+              Text(
+                localizations.wishSentDisclaimer,
+                style: const TextStyle(
+                  color: Color(0xFFE57373),
+                  fontSize: 13,
+                  height: 1.4,
+                ),
+                textAlign: TextAlign.center,
               ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 20),
+              const SizedBox(height: 20),
+            ],
             // 1. Interpret * (Mikrofon-Icon links)
             _buildInputContainer(
               child: Column(
@@ -356,13 +400,15 @@ class _WishesFormWidgetState extends State<WishesFormWidget> {
                 ],
               ),
             ),
-            const SizedBox(height: 20),
-            Text(
-              localizations.suggestionsAutoAppear,
-              style: const TextStyle(color: Colors.white, fontSize: 11),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 12),
+            if (widget.enableSuggestions) ...[
+              const SizedBox(height: 20),
+              Text(
+                localizations.suggestionsAutoAppear,
+                style: const TextStyle(color: Colors.white, fontSize: 11),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+            ],
             // 2. Titel * (Noten-Icon links)
             _buildInputContainer(
               child: Column(
@@ -455,7 +501,7 @@ class _WishesFormWidgetState extends State<WishesFormWidget> {
                     readOnly: isReadOnly,
                     maxLines: 1,
                     decoration: _inputDecoration(
-                      label: '${localizations.contact_name_label} *',
+                      label: localizations.contact_name_label,
                       icon: Icons.person_outline,
                     ),
                     style: TextStyle(
@@ -488,11 +534,7 @@ class _WishesFormWidgetState extends State<WishesFormWidget> {
                                   );
                             }
                           },
-                    validator: (value) {
-                      return (value == null || value.trim().isEmpty)
-                          ? localizations.contact_validation_enter_name
-                          : null;
-                    },
+                    validator: (_) => null,
                   ),
                 );
               },
@@ -553,17 +595,32 @@ class _WishesFormWidgetState extends State<WishesFormWidget> {
                 },
               ),
             ),
-            const SizedBox(height: 8),
-            Text(
-              widget.wishRemaining > 0
-                  ? localizations.wish_limit_remaining(
-                      widget.wishRemaining,
-                      widget.wishLimit,
-                    )
-                  : localizations.wish_limit_reset_next_hour,
-              style: const TextStyle(color: Colors.white, fontSize: 11),
-              textAlign: TextAlign.center,
-            ),
+            if (!widget.hideWishLimit) ...[
+              const SizedBox(height: 8),
+              Text(
+                widget.wishRemaining > 0
+                    ? localizations.wish_limit_remaining(
+                        widget.wishRemaining,
+                        widget.wishLimit,
+                      )
+                    : localizations.wish_limit_reset_next_hour,
+                style: const TextStyle(color: Colors.white, fontSize: 11),
+                textAlign: TextAlign.center,
+              ),
+            ],
+            if (widget.showPreWishLimit) ...[
+              const SizedBox(height: 8),
+              Text(
+                widget.preWishRemaining > 0
+                    ? localizations.pre_wish_limit_remaining(
+                        widget.preWishRemaining,
+                        widget.preWishLimit,
+                      )
+                    : localizations.pre_wish_limit_reached(widget.preWishLimit),
+                style: const TextStyle(color: Colors.white, fontSize: 11),
+                textAlign: TextAlign.center,
+              ),
+            ],
             const SizedBox(height: 6),
             SizedBox(
               width: double.infinity,

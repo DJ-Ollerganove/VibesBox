@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:device_info_plus/device_info_plus.dart';
@@ -13,6 +14,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../l10n/app_localizations.dart';
 import '../utils/ui_constants.dart';
 import '../utils/debug_log.dart';
+import '../utils/ios_stable_device_id.dart';
 
 enum UpdateCheckResult { forceUpdate, optionalUpdate, upToDate, skip }
 
@@ -238,7 +240,7 @@ class AppUpdateService {
         platform = 'android';
       } else if (Platform.isIOS) {
         final iosInfo = await deviceInfo.iosInfo;
-        deviceId = iosInfo.identifierForVendor ?? '';
+        deviceId = await getStableIosDeviceId();
         if (deviceId.isEmpty) deviceId = 'ios_${iosInfo.model}_unknown';
         deviceModel = iosInfo.utsname.machine.isNotEmpty
             ? iosInfo.utsname.machine
@@ -253,32 +255,57 @@ class AppUpdateService {
       final safeDeviceKey = deviceId.replaceAll('.', '_');
       final userRef = FirebaseFirestore.instance.collection('users').doc(user.uid);
       final doc = await userRef.get();
-      final devices = doc.data()?['devices'] as Map<String, dynamic>?;
-      final existing = devices != null
-          ? devices[safeDeviceKey] as Map<String, dynamic>?
+      final devicesRaw = doc.data()?['devices'];
+      final Map<String, dynamic>? devices = devicesRaw is Map
+          ? Map<String, dynamic>.from(
+              devicesRaw.map(
+                (k, v) => MapEntry(k.toString(), v),
+              ),
+            )
           : null;
+      Map<String, dynamic>? existing;
+      final rawEntry = devices?[safeDeviceKey];
+      if (rawEntry is Map) {
+        existing = Map<String, dynamic>.from(rawEntry);
+      }
       final storedVersion = existing?['app_version'] as String?;
       final lastSeen = existing?['last_seen'] as Timestamp?;
       final now = DateTime.now();
       final lastSeenOlderThan24h =
           lastSeen == null || now.difference(lastSeen.toDate()).inHours >= 24;
       final versionChanged = storedVersion?.trim() != versionString;
+      final systemTag = existing?['system_locale_tag']?.toString().trim();
+      final missingSystemLocale =
+          systemTag == null || systemTag.isEmpty;
 
-      if (!versionChanged && !lastSeenOlderThan24h) return;
+      // Wichtig: sonst wird bei gleicher Version + frischem last_seen nie
+      // `system_locale_tag` nachgetragen (Admin sieht dann nur „–“).
+      if (!versionChanged && !lastSeenOlderThan24h && !missingSystemLocale) {
+        return;
+      }
 
+      final systemLocaleTag =
+          ui.PlatformDispatcher.instance.locale.toLanguageTag();
       final payload = {
         'app_version': versionString,
         'device_model': deviceModel,
         'os_version': osVersion,
         'platform': platform,
+        // Für Admin/Support: OS-/Flutter-Geräte-Locale (wenn Nutzer nie `language` im Profil setzt)
+        'system_locale_tag': systemLocaleTag,
         'last_seen': FieldValue.serverTimestamp(),
       };
 
       if (doc.exists) {
-        await userRef.update({'devices.$safeDeviceKey': payload});
+        // Zusätzlich Top-Level: Admin-Liste / Queries müssen nicht in `devices` graben.
+        await userRef.update({
+          'devices.$safeDeviceKey': payload,
+          'last_app_system_locale_tag': systemLocaleTag,
+        });
       } else {
         await userRef.set({
           'devices': {safeDeviceKey: payload},
+          'last_app_system_locale_tag': systemLocaleTag,
         }, SetOptions(merge: true));
       }
     } catch (e) {
@@ -303,33 +330,115 @@ class AppUpdateService {
     }
   }
 
-  AppUpdateConfig _appUpdateConfigFromData(Map<String, dynamic>? data) {
-    final isIos = !kIsWeb && Platform.isIOS;
-    final oldMinDjAndroid =
-        normalizeSemver(_clean(data?['min_version_dj_android'] as String?, fallback: defaultMinVersion));
-    final oldMinDjIos =
-        normalizeSemver(_clean(data?['min_version_dj_ios'] as String?, fallback: defaultMinVersion));
-    final oldMinGuestAndroid = normalizeSemver(_clean(
-      data?['min_version_guest_android'] as String?,
-      fallback: defaultMinVersion,
-    ));
-    final oldMinGuestIos = normalizeSemver(_clean(
-      data?['min_version_guest_ios'] as String?,
-      fallback: defaultMinVersion,
-    ));
+  /// Einzelzelle aus Firestore; [aggregateKey] nur wenn die andere Plattform-Zelle noch Default ist (Legacy).
+  static String _resolvedCell(
+    Map<String, dynamic>? data, {
+    required String cellKey,
+    required String otherPlatformCellKey,
+    required String aggregateKey,
+  }) {
+    final base = defaultMinVersion;
+    final cell = normalizeSemver(
+      _clean(data?[cellKey] as String?, fallback: base),
+    );
+    if (cell != base) return cell;
+    final other = normalizeSemver(
+      _clean(data?[otherPlatformCellKey] as String?, fallback: base),
+    );
+    final agg = normalizeSemver(
+      _clean(data?[aggregateKey] as String?, fallback: base),
+    );
+    if (other == base && agg != base) return agg;
+    return base;
+  }
 
-    final minVersionDj = normalizeSemver(
-      _clean(
-        data?['min_version_dj'] as String?,
-        fallback: isIos ? oldMinDjIos : oldMinDjAndroid,
+  /// Für Update-Vergleich: Default-Zelle = keine Pflicht (immer erfüllt).
+  static String _policyMinOrZero(String v) {
+    final n = normalizeSemver(v);
+    return n == defaultMinVersion ? '0.0.0' : n;
+  }
+
+  /// Mindest-Semver für aktuelle Plattform + App-Rolle (Gast vs. DJ/Admin/…).
+  static String effectivePolicyMinVersion({
+    required Map<String, dynamic>? data,
+    required bool isAndroid,
+    required String? roleLabel,
+  }) {
+    final guestAndroid = _policyMinOrZero(
+      _resolvedCell(
+        data,
+        cellKey: 'min_version_guest_android',
+        otherPlatformCellKey: 'min_version_guest_ios',
+        aggregateKey: 'min_version_guest',
       ),
     );
-    final minVersionGuest = normalizeSemver(
-      _clean(
-        data?['min_version_guest'] as String?,
-        fallback: isIos ? oldMinGuestIos : oldMinGuestAndroid,
+    final guestIos = _policyMinOrZero(
+      _resolvedCell(
+        data,
+        cellKey: 'min_version_guest_ios',
+        otherPlatformCellKey: 'min_version_guest_android',
+        aggregateKey: 'min_version_guest',
       ),
     );
+    final djAndroid = _policyMinOrZero(
+      _resolvedCell(
+        data,
+        cellKey: 'min_version_dj_android',
+        otherPlatformCellKey: 'min_version_dj_ios',
+        aggregateKey: 'min_version_dj',
+      ),
+    );
+    final djIos = _policyMinOrZero(
+      _resolvedCell(
+        data,
+        cellKey: 'min_version_dj_ios',
+        otherPlatformCellKey: 'min_version_dj_android',
+        aggregateKey: 'min_version_dj',
+      ),
+    );
+
+    String guestSlot() => isAndroid ? guestAndroid : guestIos;
+    String djSlot() => isAndroid ? djAndroid : djIos;
+
+    if (roleLabel == 'Gast') return guestSlot();
+    if (roleLabel == null || roleLabel == 'loading') {
+      final g = guestSlot();
+      final d = djSlot();
+      return compareVersions(g, d) >= 0 ? g : d;
+    }
+    return djSlot();
+  }
+
+  AppUpdateConfig _appUpdateConfigFromData(Map<String, dynamic>? data) {
+    final isAndroid = !kIsWeb && Platform.isAndroid;
+    final minDjAndroid = _resolvedCell(
+      data,
+      cellKey: 'min_version_dj_android',
+      otherPlatformCellKey: 'min_version_dj_ios',
+      aggregateKey: 'min_version_dj',
+    );
+    final minDjIos = _resolvedCell(
+      data,
+      cellKey: 'min_version_dj_ios',
+      otherPlatformCellKey: 'min_version_dj_android',
+      aggregateKey: 'min_version_dj',
+    );
+    final minGuestAndroid = _resolvedCell(
+      data,
+      cellKey: 'min_version_guest_android',
+      otherPlatformCellKey: 'min_version_guest_ios',
+      aggregateKey: 'min_version_guest',
+    );
+    final minGuestIos = _resolvedCell(
+      data,
+      cellKey: 'min_version_guest_ios',
+      otherPlatformCellKey: 'min_version_guest_android',
+      aggregateKey: 'min_version_guest',
+    );
+
+    final minVersionDj = compareVersions(minDjAndroid, minDjIos) >= 0
+        ? minDjAndroid
+        : minDjIos;
     final currentVersion = normalizeSemver(
       _clean(
         data?['current_version'] as String?,
@@ -345,10 +454,18 @@ class AppUpdateService {
       fallback: _appStoreFallbackUrl,
     );
 
+    final isIos = !kIsWeb && Platform.isIOS;
+    final minGuestResolved = isAndroid
+        ? minGuestAndroid
+        : (isIos ? minGuestIos : minGuestAndroid);
+    final minDjResolved = isAndroid
+        ? minDjAndroid
+        : (isIos ? minDjIos : minDjAndroid);
+
     return AppUpdateConfig(
       currentVersion: currentVersion,
-      minVersionGuest: minVersionGuest,
-      minVersionDj: minVersionDj,
+      minVersionGuest: minGuestResolved,
+      minVersionDj: minDjResolved,
       storeUrlAndroid: storeUrlAndroid,
       storeUrlIos: storeUrlIos,
     );
@@ -360,15 +477,26 @@ class AppUpdateService {
   }
 
   Future<Map<String, String>> getMinVersions() async {
-    final cfg = await getUpdateConfig();
+    final data = await _loadRawConfig();
+    final base = defaultMinVersion;
+    final cfg = _appUpdateConfigFromData(data);
+    String cell(String k) =>
+        normalizeSemver(_clean(data?[k] as String?, fallback: base));
     return {
       'current_version': cfg.currentVersion,
-      'min_version_dj': cfg.minVersionDj,
-      'min_version_guest': cfg.minVersionGuest,
-      'min_version_dj_android': cfg.minVersionDj,
-      'min_version_dj_ios': cfg.minVersionDj,
-      'min_version_guest_android': cfg.minVersionGuest,
-      'min_version_guest_ios': cfg.minVersionGuest,
+      'min_version_dj': normalizeSemver(
+        _clean(data?['min_version_dj'] as String?, fallback: cfg.minVersionDj),
+      ),
+      'min_version_guest': normalizeSemver(
+        _clean(
+          data?['min_version_guest'] as String?,
+          fallback: cfg.minVersionGuest,
+        ),
+      ),
+      'min_version_dj_android': cell('min_version_dj_android'),
+      'min_version_dj_ios': cell('min_version_dj_ios'),
+      'min_version_guest_android': cell('min_version_guest_android'),
+      'min_version_guest_ios': cell('min_version_guest_ios'),
       'store_url_android': cfg.storeUrlAndroid,
       'store_url_ios': cfg.storeUrlIos,
     };
@@ -376,9 +504,9 @@ class AppUpdateService {
 
   /// Store-First: nur wenn Store-Semver > installiert → Firestore; sonst Abbruch.
   ///
-  /// Pflicht: strengere der Policies [cfg.minVersionDj] / [cfg.minVersionGuest]
-  /// (inkl. `min_version_dj` / `min_version_guest` und *_android/ios) liegt über
-  /// der installierten [PackageInfo.version]-Semver.
+  /// Pflicht: Mindest-Semver aus `admin_config/app_update` für **Plattform** (Android/iOS)
+  /// und **Rolle** ([appRoleLabel]: `Gast` vs. sonst DJ/Admin/…) – siehe
+  /// [effectivePolicyMinVersion]. Liegt über [PackageInfo.version] → Zwang/Dialog.
   /// Optional: neuer Store-Build, aber installiert erfüllt die Mindestpolicy.
   Future<({
     UpdateCheckResult result,
@@ -386,7 +514,7 @@ class AppUpdateService {
     String? currentVersion,
     String? localVersion,
     String? storeUrl,
-  })> checkForUpdate() async {
+  })> checkForUpdate({String? appRoleLabel}) async {
     if (kIsWeb) {
       return (
         result: UpdateCheckResult.skip,
@@ -432,12 +560,11 @@ class AppUpdateService {
 
     final raw = await _loadRawConfig();
     final cfg = _appUpdateConfigFromData(raw);
-    // Pflicht-Mindestversion: strengeres aus DJ- und Gast-Policy (Firestore:
-    // `min_version_dj` / `min_version_guest` inkl. Fallback auf *_android/ios).
-    // So gilt „für alle“ auch auf der Startseite ohne Login (sonst nur Gast-Keys).
-    final firestoreMin = compareVersions(cfg.minVersionDj, cfg.minVersionGuest) >= 0
-        ? cfg.minVersionDj
-        : cfg.minVersionGuest;
+    final firestoreMin = effectivePolicyMinVersion(
+      data: raw,
+      isAndroid: Platform.isAndroid,
+      roleLabel: appRoleLabel,
+    );
     final storeUrlPreferred = Platform.isAndroid ? cfg.storeUrlAndroid : cfg.storeUrlIos;
     final storeUrlLaunch =
         (gate.storePageUrl != null && gate.storePageUrl!.isNotEmpty)

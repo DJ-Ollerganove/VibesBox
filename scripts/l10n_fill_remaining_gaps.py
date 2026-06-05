@@ -1,0 +1,592 @@
+#!/usr/bin/env python3
+"""Fill remaining l10n gaps: every DE key localized in all app_localizations_*.dart files."""
+
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+L10N = ROOT / "lib" / "l10n"
+
+LANGS = ["en", "fr", "es", "it", "pt", "ru", "uk", "tr", "zh", "hi", "sq", "ar"]
+
+# key -> {lang: value}
+T: dict[str, dict[str, str]] = {
+    "portuguese": {
+        "de": "Portugiesisch",
+        "en": "Portuguese",
+        "fr": "Portugais",
+        "es": "Portugués",
+        "it": "Portoghese",
+        "pt": "Português",
+        "ru": "Португальский",
+        "uk": "Португальська",
+        "tr": "Portekizce",
+        "zh": "葡萄牙语",
+        "hi": "पुर्तगाली",
+        "sq": "Portugeze",
+        "ar": "البرتغالية",
+    },
+    "albanian": {
+        "de": "Albanisch",
+        "en": "Albanian",
+        "fr": "Albanais",
+        "es": "Albanés",
+        "it": "Albanese",
+        "pt": "Albanês",
+        "ru": "Албанский",
+        "uk": "Албанська",
+        "tr": "Arnavutça",
+        "zh": "阿尔巴尼亚语",
+        "hi": "अल्बानियाई",
+        "sq": "Shqip",
+        "ar": "الألبانية",
+    },
+    "admin_device_app_version": {
+        "en": "App version",
+        "fr": "Version de l'app",
+        "es": "Versión de la app",
+        "it": "Versione app",
+        "pt": "Versão da app",
+        "ru": "Версия приложения",
+        "uk": "Версія застосунку",
+        "tr": "Uygulama sürümü",
+        "zh": "应用版本",
+        "hi": "ऐप संस्करण",
+        "sq": "Versioni i aplikacionit",
+        "ar": "إصدار التطبيق",
+    },
+    "admin_device_last_seen": {
+        "en": "Last seen",
+        "fr": "Vu pour la dernière fois",
+        "es": "Visto por última vez",
+        "it": "Ultimo accesso",
+        "pt": "Visto pela última vez",
+        "ru": "Последний раз онлайн",
+        "uk": "Востаннє онлайн",
+        "tr": "Son görülme",
+        "zh": "上次在线",
+        "hi": "अंतिम बार देखा गया",
+        "sq": "Parë së fundmi",
+        "ar": "آخر ظهور",
+    },
+    "admin_device_map_key": {
+        "en": "Storage key (devices/…)",
+        "fr": "Clé de stockage (devices/…)",
+        "es": "Clave de almacenamiento (devices/…)",
+        "it": "Chiave di archiviazione (devices/…)",
+        "pt": "Chave de armazenamento (devices/…)",
+        "ru": "Ключ хранения (devices/…)",
+        "uk": "Ключ сховища (devices/…)",
+        "tr": "Depolama anahtarı (devices/…)",
+        "zh": "存储键 (devices/…)",
+        "hi": "स्टोरेज कुंजी (devices/…)",
+        "sq": "Çelësi i ruajtjes (devices/…)",
+        "ar": "مفتاح التخزين (devices/…)",
+    },
+    "admin_device_model": {
+        "en": "Device model",
+        "fr": "Modèle d'appareil",
+        "es": "Modelo del dispositivo",
+        "it": "Modello dispositivo",
+        "pt": "Modelo do dispositivo",
+        "ru": "Модель устройства",
+        "uk": "Модель пристрою",
+        "tr": "Cihaz modeli",
+        "zh": "设备型号",
+        "hi": "डिवाइस मॉडल",
+        "sq": "Modeli i pajisjes",
+        "ar": "طراز الجهاز",
+    },
+    "admin_device_os_version": {
+        "en": "OS version (raw)",
+        "fr": "Version OS (brute)",
+        "es": "Versión del SO (sin procesar)",
+        "it": "Versione OS (grezza)",
+        "pt": "Versão do SO (bruta)",
+        "ru": "Версия ОС (исходная)",
+        "uk": "Версія ОС (сира)",
+        "tr": "İşletim sistemi sürümü (ham)",
+        "zh": "系统版本（原始）",
+        "hi": "OS संस्करण (मूल)",
+        "sq": "Versioni i OS (i papërpunuar)",
+        "ar": "إصدار نظام التشغيل (خام)",
+    },
+    "admin_device_platform": {
+        "en": "Platform",
+        "fr": "Plateforme",
+        "es": "Plataforma",
+        "it": "Piattaforma",
+        "pt": "Plataforma",
+        "ru": "Платформа",
+        "uk": "Платформа",
+        "tr": "Platform",
+        "zh": "平台",
+        "hi": "प्लेटफ़ॉर्म",
+        "sq": "Platforma",
+        "ar": "المنصة",
+    },
+    "admin_pro_tooltip_free": {
+        "it": "Gratuito",
+        "pt": "Grátis",
+        "ru": "Бесплатно",
+        "uk": "Безкоштовно",
+        "tr": "Ücretsiz",
+        "zh": "免费",
+        "hi": "मुफ़्त",
+        "sq": "Falas",
+        "ar": "مجاني",
+    },
+    "admin_pro_tooltip_life": {
+        "it": "Pro a vita",
+        "pt": "Pro vitalício",
+        "ru": "Pro Life",
+        "uk": "Pro Life",
+        "tr": "Pro Life",
+        "zh": "Pro 终身",
+        "hi": "Pro Life",
+        "sq": "Pro Life",
+        "ar": "Pro مدى الحياة",
+    },
+    "announcement_progress_original": {
+        "en": "{label} (original)",
+        "fr": "{label} (original)",
+        "es": "{label} (original)",
+        "it": "{label} (originale)",
+        "pt": "{label} (original)",
+        "ru": "{label} (оригинал)",
+        "uk": "{label} (оригінал)",
+        "tr": "{label} (orijinal)",
+        "zh": "{label}（原文）",
+        "hi": "{label} (मूल)",
+        "sq": "{label} (origjinal)",
+        "ar": "{label} (الأصل)",
+    },
+    "change_password_short": {
+        "en": "Password",
+        "fr": "Mot de passe",
+        "es": "Contraseña",
+        "it": "Password",
+        "pt": "Palavra-passe",
+        "ru": "Пароль",
+        "uk": "Пароль",
+        "tr": "Şifre",
+        "zh": "密码",
+        "hi": "पासवर्ड",
+        "sq": "Fjalëkalimi",
+        "ar": "كلمة المرور",
+    },
+    "connectionStable": {
+        "en": "Stable",
+        "fr": "Stable",
+        "es": "Estable",
+        "it": "Stabile",
+        "pt": "Estável",
+        "ru": "Стабильно",
+        "uk": "Стабільно",
+        "tr": "Kararlı",
+        "zh": "稳定",
+        "hi": "स्थिर",
+        "sq": "Stabil",
+        "ar": "مستقر",
+    },
+    "contact_message_label": {
+        "en": "Message *",
+        "fr": "Message *",
+        "es": "Mensaje *",
+        "it": "Messaggio *",
+        "pt": "Mensagem *",
+        "ru": "Сообщение *",
+        "uk": "Повідомлення *",
+        "tr": "Mesaj *",
+        "zh": "消息 *",
+        "hi": "संदेश *",
+        "sq": "Mesazhi *",
+        "ar": "الرسالة *",
+    },
+    "contact_phone_label": {
+        "en": "Phone",
+        "fr": "Téléphone",
+        "es": "Teléfono",
+        "it": "Telefono",
+        "pt": "Telefone",
+        "ru": "Телефон",
+        "uk": "Телефон",
+        "tr": "Telefon",
+        "zh": "电话",
+        "hi": "फ़ोन",
+        "sq": "Telefoni",
+        "ar": "الهاتف",
+    },
+    "date_uhr": {
+        "en": "Time",
+        "fr": "Heure",
+        "es": "Hora",
+        "it": "Ora",
+        "pt": "Hora",
+        "ru": "Время",
+        "uk": "Час",
+        "tr": "Saat",
+        "zh": "时间",
+        "hi": "समय",
+        "sq": "Ora",
+        "ar": "الساعة",
+    },
+    "email": {
+        "en": "Email:",
+        "fr": "E-mail :",
+        "es": "Correo electrónico:",
+        "it": "E-mail:",
+        "pt": "E-mail:",
+        "ru": "Эл. почта:",
+        "uk": "Ел. пошта:",
+        "tr": "E-posta:",
+        "zh": "电子邮件：",
+        "hi": "ईमेल:",
+        "sq": "E-mail:",
+        "ar": "البريد الإلكتروني:",
+    },
+    "email_label": {
+        "en": "Email",
+        "fr": "E-mail",
+        "es": "Correo electrónico",
+        "it": "E-mail",
+        "pt": "E-mail",
+        "ru": "Эл. почта",
+        "uk": "Ел. пошта",
+        "tr": "E-posta",
+        "zh": "电子邮件",
+        "hi": "ईमेल",
+        "sq": "E-mail",
+        "ar": "البريد الإلكتروني",
+    },
+    "interval_seconds_short": {
+        "en": "Sec.",
+        "fr": "Sec.",
+        "es": "Seg.",
+        "it": "Sez.",
+        "pt": "Seg.",
+        "ru": "Сек.",
+        "uk": "Сек.",
+        "tr": "Sn.",
+        "zh": "秒",
+        "hi": "सेक.",
+        "sq": "Sek.",
+        "ar": "ث.",
+    },
+    "login_password_label": {
+        "en": "Password",
+        "fr": "Mot de passe",
+        "es": "Contraseña",
+        "it": "Password",
+        "pt": "Palavra-passe",
+        "ru": "Пароль",
+        "uk": "Пароль",
+        "tr": "Şifre",
+        "zh": "密码",
+        "hi": "पासवर्ड",
+        "sq": "Fjalëkalimi",
+        "ar": "كلمة المرور",
+    },
+    "no": {
+        "en": "No",
+        "fr": "Non",
+        "es": "No",
+        "it": "No",
+        "pt": "Não",
+        "ru": "Нет",
+        "uk": "Ні",
+        "tr": "Hayır",
+        "zh": "否",
+        "hi": "नहीं",
+        "sq": "Jo",
+        "ar": "لا",
+    },
+    "party_from_dj": {
+        "en": "by",
+        "fr": "par",
+        "es": "por",
+        "it": "di",
+        "pt": "por",
+        "ru": "от",
+        "uk": "від",
+        "tr": "–",
+        "zh": "来自",
+        "hi": "द्वारा",
+        "sq": "nga",
+        "ar": "من",
+    },
+    "party_pdf_single_intro_after": {
+        "fr": " !",
+        "es": " ¡",
+        "it": " !",
+        "pt": " !",
+        "ru": " !",
+        "uk": " !",
+        "tr": " !",
+        "zh": "！",
+        "hi": " !",
+        "sq": " !",
+        "ar": " !",
+    },
+    "party_private": {
+        "en": "Private",
+        "fr": "Privée",
+        "es": "Privada",
+        "it": "Privato",
+        "pt": "Privada",
+        "ru": "Частная",
+        "uk": "Приватна",
+        "tr": "Özel",
+        "zh": "私密",
+        "hi": "निजी",
+        "sq": "Private",
+        "ar": "خاصة",
+    },
+    "party_time_clock": {
+        "en": "Time",
+        "fr": "Heure",
+        "es": "Hora",
+        "it": "Ora",
+        "pt": "Hora",
+        "ru": "Время",
+        "uk": "Час",
+        "tr": "Saat",
+        "zh": "时间",
+        "hi": "समय",
+        "sq": "Ora",
+        "ar": "الساعة",
+    },
+    "party_type_private": {
+        "en": "Private",
+        "fr": "Privé",
+        "es": "Privado",
+        "it": "Privato",
+        "pt": "Privado",
+        "ru": "Частная",
+        "uk": "Приватна",
+        "tr": "Özel",
+        "zh": "私密",
+        "hi": "निजी",
+        "sq": "Private",
+        "ar": "خاص",
+    },
+    "pdf_checkbox_phone": {
+        "en": "Phone",
+        "fr": "Téléphone",
+        "es": "Teléfono",
+        "it": "Telefono",
+        "pt": "Telefone",
+        "ru": "Телефон",
+        "uk": "Телефон",
+        "tr": "Telefon",
+        "zh": "电话",
+        "hi": "फ़ोन",
+        "sq": "Telefoni",
+        "ar": "الهاتف",
+    },
+    "phone": {
+        "en": "Phone:",
+        "fr": "Téléphone :",
+        "es": "Teléfono:",
+        "it": "Telefono:",
+        "pt": "Telefone:",
+        "ru": "Телефон:",
+        "uk": "Телефон:",
+        "tr": "Telefon:",
+        "zh": "电话：",
+        "hi": "फ़ोन:",
+        "sq": "Telefoni:",
+        "ar": "الهاتف:",
+    },
+    "phone_label": {
+        "en": "Phone",
+        "fr": "Téléphone",
+        "es": "Teléfono",
+        "it": "Telefono",
+        "pt": "Telefone",
+        "ru": "Телефон",
+        "uk": "Телефон",
+        "tr": "Telefon",
+        "zh": "电话",
+        "hi": "फ़ोन",
+        "sq": "Telefoni",
+        "ar": "الهاتف",
+    },
+    "profile": {
+        "en": "Profile",
+        "fr": "Profil",
+        "es": "Perfil",
+        "it": "Profilo",
+        "pt": "Perfil",
+        "ru": "Профиль",
+        "uk": "Профіль",
+        "tr": "Profil",
+        "zh": "个人资料",
+        "hi": "प्रोफ़ाइल",
+        "sq": "Profili",
+        "ar": "الملف الشخصي",
+    },
+    "profile_phone": {
+        "en": "Phone",
+        "fr": "Téléphone",
+        "es": "Teléfono",
+        "it": "Telefono",
+        "pt": "Telefone",
+        "ru": "Телефон",
+        "uk": "Телефон",
+        "tr": "Telefon",
+        "zh": "电话",
+        "hi": "फ़ोन",
+        "sq": "Telefoni",
+        "ar": "الهاتف",
+    },
+    "really_unblock": {
+        "en": "Really unblock?",
+        "fr": "Vraiment débloquer ?",
+        "es": "¿Desbloquear de verdad?",
+        "it": "Sbloccare davvero?",
+        "pt": "Desbloquear mesmo?",
+        "ru": "Действительно разблокировать?",
+        "uk": "Справді розблокувати?",
+        "tr": "Gerçekten engeli kaldır?",
+        "zh": "确定要解除屏蔽吗？",
+        "hi": "वाकई अनब्लॉक करें?",
+        "sq": "Të zhbllokohet vërtet?",
+        "ar": "إلغاء الحظر فعلاً؟",
+    },
+    "time_am": {
+        "en": "AM",
+        "fr": "AM",
+        "es": "AM",
+        "it": "AM",
+        "pt": "AM",
+        "ru": "AM",
+        "uk": "AM",
+        "tr": "ÖÖ",
+        "zh": "上午",
+        "hi": "पूर्वाह्न",
+        "sq": "PD",
+        "ar": "ص",
+    },
+    "time_pm": {
+        "en": "PM",
+        "fr": "PM",
+        "es": "PM",
+        "it": "PM",
+        "pt": "PM",
+        "ru": "PM",
+        "uk": "PM",
+        "tr": "ÖS",
+        "zh": "下午",
+        "hi": "अपराह्न",
+        "sq": "MD",
+        "ar": "م",
+    },
+    "time_suffix": {
+        "en": "",
+        "fr": " h",
+        "es": " h",
+        "it": "",
+        "pt": " h",
+        "ru": "",
+        "uk": "",
+        "tr": "",
+        "zh": "",
+        "hi": "",
+        "sq": "",
+        "ar": "",
+    },
+    "wishbox_dj_party_time_not_set": {
+        "en": "—",
+        "fr": "—",
+        "es": "—",
+        "it": "—",
+        "pt": "—",
+        "ru": "—",
+        "uk": "—",
+        "tr": "—",
+        "zh": "—",
+        "hi": "—",
+        "sq": "—",
+        "ar": "—",
+    },
+}
+
+IMPRINT = {
+    "en": '<p>The following information is provided in accordance with German legal requirements (§ 5 DDG).</p> <h1>Legal notice</h1> <p>Information pursuant to § 5 DDG</p> <p>VibesBox by Swen Steller<br> Neefestr. 9<br> 09119 Chemnitz / Germany <br> </p> <p> <strong>Represented by:</strong><br> Swen Steller<br> </p> <p><strong>Contact:</strong><br> Email: <a>info@vibesbox.app</a></p> <p>Legal notice template from <a href="https://websitewissen.com" rel="dofollow">WebsiteWissen.com</a>, a guide to <a href="https://websitewissen.com/wordpress-website-erstellen" rel="dofollow">WordPress websites</a>, <a href="https://websitewissen.com/wordpress-hosting-vergleich" rel="dofollow">WordPress hosting</a> and <a href="https://websitewissen.com/website-kosten" rel="dofollow">website costs</a>, based on a template by <a href="https://www.kanzlei-hasselbach.de/" rel="dofollow">Kanzlei Hasselbach Rechtsanwälte</a>.</p>',
+    "fr": '<p>Les informations suivantes sont fournies conformément aux exigences légales allemandes (§ 5 DDG).</p> <h1>Mentions légales</h1> <p>Informations conformément au § 5 DDG</p> <p>VibesBox by Swen Steller<br> Neefestr. 9<br> 09119 Chemnitz / Allemagne <br> </p> <p> <strong>Représenté par :</strong><br> Swen Steller<br> </p> <p><strong>Contact :</strong><br> E-mail : <a>info@vibesbox.app</a></p> <p>Mentions légales via <a href="https://websitewissen.com" rel="dofollow">WebsiteWissen.com</a>, guide pour <a href="https://websitewissen.com/wordpress-website-erstellen" rel="dofollow">sites WordPress</a>, <a href="https://websitewissen.com/wordpress-hosting-vergleich" rel="dofollow">hébergement WordPress</a> et <a href="https://websitewissen.com/website-kosten" rel="dofollow">coûts de site web</a>, d\'après un modèle de <a href="https://www.kanzlei-hasselbach.de/" rel="dofollow">Kanzlei Hasselbach Rechtsanwälte</a>.</p>',
+    "es": '<p>La siguiente información se facilita conforme a los requisitos legales alemanes (§ 5 DDG).</p> <h1>Aviso legal</h1> <p>Información según § 5 DDG</p> <p>VibesBox by Swen Steller<br> Neefestr. 9<br> 09119 Chemnitz / Alemania <br> </p> <p> <strong>Representado por:</strong><br> Swen Steller<br> </p> <p><strong>Contacto:</strong><br> Correo electrónico: <a>info@vibesbox.app</a></p> <p>Aviso legal de <a href="https://websitewissen.com" rel="dofollow">WebsiteWissen.com</a>, guía sobre <a href="https://websitewissen.com/wordpress-website-erstellen" rel="dofollow">sitios WordPress</a>, <a href="https://websitewissen.com/wordpress-hosting-vergleich" rel="dofollow">hosting WordPress</a> y <a href="https://websitewissen.com/website-kosten" rel="dofollow">costes de sitios web</a>, según plantilla de <a href="https://www.kanzlei-hasselbach.de/" rel="dofollow">Kanzlei Hasselbach Rechtsanwälte</a>.</p>',
+    "it": '<p>Le informazioni seguenti sono fornite in conformità ai requisiti legali tedeschi (§ 5 DDG).</p> <h1>Impressum</h1> <p>Informazioni ai sensi del § 5 DDG</p> <p>VibesBox di Swen Steller<br> Neefestr. 9<br> 09119 Chemnitz / Germania <br> </p> <p> <strong>Rappresentato da:</strong><br> Swen Steller<br> </p> <p><strong>Contatto:</strong><br> E-mail: <a>info@vibesbox.app</a></p> <p>Impressum da <a href="https://websitewissen.com" rel="dofollow">WebsiteWissen.com</a>, guida su <a href="https://websitewissen.com/wordpress-website-erstellen" rel="dofollow">siti WordPress</a>, <a href="https://websitewissen.com/wordpress-hosting-vergleich" rel="dofollow">hosting WordPress</a> e <a href="https://websitewissen.com/website-kosten" rel="dofollow">costi dei siti web</a>, secondo un modello di <a href="https://www.kanzlei-hasselbach.de/" rel="dofollow">Kanzlei Hasselbach Rechtsanwälte</a>.</p>',
+    "pt": '<p>As informações seguintes são fornecidas em conformidade com os requisitos legais alemães (§ 5 DDG).</p> <h1>Aviso legal</h1> <p>Informações nos termos do § 5 DDG</p> <p>VibesBox by Swen Steller<br> Neefestr. 9<br> 09119 Chemnitz / Alemanha <br> </p> <p> <strong>Representado por:</strong><br> Swen Steller<br> </p> <p><strong>Contacto:</strong><br> E-mail: <a>info@vibesbox.app</a></p> <p>Aviso legal de <a href="https://websitewissen.com" rel="dofollow">WebsiteWissen.com</a>, guia sobre <a href="https://websitewissen.com/wordpress-website-erstellen" rel="dofollow">sites WordPress</a>, <a href="https://websitewissen.com/wordpress-hosting-vergleich" rel="dofollow">alojamento WordPress</a> e <a href="https://websitewissen.com/website-kosten" rel="dofollow">custos de sites</a>, com base num modelo da <a href="https://www.kanzlei-hasselbach.de/" rel="dofollow">Kanzlei Hasselbach Rechtsanwälte</a>.</p>',
+    "ru": '<p>Ниже приведена информация в соответствии с требованиями немецкого законодательства (§ 5 DDG).</p> <h1>Правовая информация</h1> <p>Сведения согласно § 5 DDG</p> <p>VibesBox by Swen Steller<br> Neefestr. 9<br> 09119 Chemnitz / Германия <br> </p> <p> <strong>Представитель:</strong><br> Swen Steller<br> </p> <p><strong>Контакт:</strong><br> E-mail: <a>info@vibesbox.app</a></p> <p>Шаблон правовой информации: <a href="https://websitewissen.com" rel="dofollow">WebsiteWissen.com</a>, руководство по <a href="https://websitewissen.com/wordpress-website-erstellen" rel="dofollow">сайтам WordPress</a>, <a href="https://websitewissen.com/wordpress-hosting-vergleich" rel="dofollow">хостингу WordPress</a> и <a href="https://websitewissen.com/website-kosten" rel="dofollow">стоимости сайтов</a>, по образцу <a href="https://www.kanzlei-hasselbach.de/" rel="dofollow">Kanzlei Hasselbach Rechtsanwälte</a>.</p>',
+    "uk": '<p>Нижче наведено інформацію відповідно до вимог німецького законодавства (§ 5 DDG).</p> <h1>Імпресум</h1> <p>Відомості згідно з § 5 DDG</p> <p>VibesBox by Swen Steller<br> Neefestr. 9<br> 09119 Chemnitz / Німеччина <br> </p> <p> <strong>Представник:</strong><br> Swen Steller<br> </p> <p><strong>Контакт:</strong><br> E-mail: <a>info@vibesbox.app</a></p> <p>Шаблон імпресуму: <a href="https://websitewissen.com" rel="dofollow">WebsiteWissen.com</a>, посібник з <a href="https://websitewissen.com/wordpress-website-erstellen" rel="dofollow">сайтів WordPress</a>, <a href="https://websitewissen.com/wordpress-hosting-vergleich" rel="dofollow">хостингу WordPress</a> та <a href="https://websitewissen.com/website-kosten" rel="dofollow">вартості сайтів</a>, за зразком <a href="https://www.kanzlei-hasselbach.de/" rel="dofollow">Kanzlei Hasselbach Rechtsanwälte</a>.</p>',
+    "tr": '<p>Aşağıdaki bilgiler Alman yasal gerekliliklerine (§ 5 DDG) uygun olarak sunulmaktadır.</p> <h1>Künye</h1> <p>§ 5 DDG kapsamında bilgiler</p> <p>VibesBox by Swen Steller<br> Neefestr. 9<br> 09119 Chemnitz / Almanya <br> </p> <p> <strong>Temsil eden:</strong><br> Swen Steller<br> </p> <p><strong>İletişim:</strong><br> E-posta: <a>info@vibesbox.app</a></p> <p>Künye şablonu: <a href="https://websitewissen.com" rel="dofollow">WebsiteWissen.com</a>, <a href="https://websitewissen.com/wordpress-website-erstellen" rel="dofollow">WordPress siteleri</a>, <a href="https://websitewissen.com/wordpress-hosting-vergleich" rel="dofollow">WordPress barındırma</a> ve <a href="https://websitewissen.com/website-kosten" rel="dofollow">web sitesi maliyetleri</a> rehberi; şablon: <a href="https://www.kanzlei-hasselbach.de/" rel="dofollow">Kanzlei Hasselbach Rechtsanwälte</a>.</p>',
+    "zh": '<p>以下信息依据德国法律要求（§ 5 DDG）提供。</p> <h1>法律声明</h1> <p>根据 § 5 DDG 的信息</p> <p>VibesBox by Swen Steller<br> Neefestr. 9<br> 09119 Chemnitz / 德国 <br> </p> <p> <strong>代表人：</strong><br> Swen Steller<br> </p> <p><strong>联系方式：</strong><br> 电子邮件：<a>info@vibesbox.app</a></p> <p>法律声明模板来自 <a href="https://websitewissen.com" rel="dofollow">WebsiteWissen.com</a>，<a href="https://websitewissen.com/wordpress-website-erstellen" rel="dofollow">WordPress 网站</a>、<a href="https://websitewissen.com/wordpress-hosting-vergleich" rel="dofollow">WordPress 主机</a> 与 <a href="https://websitewissen.com/website-kosten" rel="dofollow">网站成本</a> 指南，范本来自 <a href="https://www.kanzlei-hasselbach.de/" rel="dofollow">Kanzlei Hasselbach Rechtsanwälte</a>。</p>',
+    "hi": '<p>निम्नलिखित जानकारी जर्मन कानूनी आवश्यकताओं (§ 5 DDG) के अनुसार प्रदान की गई है।</p> <h1>कानूनी सूचना</h1> <p>§ 5 DDG के अनुसार जानकारी</p> <p>VibesBox by Swen Steller<br> Neefestr. 9<br> 09119 Chemnitz / जर्मनी <br> </p> <p> <strong>प्रतिनिधि:</strong><br> Swen Steller<br> </p> <p><strong>संपर्क:</strong><br> ईमेल: <a>info@vibesbox.app</a></p> <p>कानूनी सूचना टेम्पलेट: <a href="https://websitewissen.com" rel="dofollow">WebsiteWissen.com</a>, <a href="https://websitewissen.com/wordpress-website-erstellen" rel="dofollow">WordPress वेबसाइट</a>, <a href="https://websitewissen.com/wordpress-hosting-vergleich" rel="dofollow">WordPress होस्टिंग</a> और <a href="https://websitewissen.com/website-kosten" rel="dofollow">वेबसाइट लागत</a> गाइड; टेम्पलेट: <a href="https://www.kanzlei-hasselbach.de/" rel="dofollow">Kanzlei Hasselbach Rechtsanwälte</a>।</p>',
+    "sq": '<p>Informacionet e mëposhtme jepen në përputhje me kërkesat ligjore gjermane (§ 5 DDG).</p> <h1>Njoftim ligjor</h1> <p>Informacion sipas § 5 DDG</p> <p>VibesBox by Swen Steller<br> Neefestr. 9<br> 09119 Chemnitz / Gjermani <br> </p> <p> <strong>Përfaqësuar nga:</strong><br> Swen Steller<br> </p> <p><strong>Kontakt:</strong><br> E-mail: <a>info@vibesbox.app</a></p> <p>Model njoftimi ligjor: <a href="https://websitewissen.com" rel="dofollow">WebsiteWissen.com</a>, udhëzues për <a href="https://websitewissen.com/wordpress-website-erstellen" rel="dofollow">faqe WordPress</a>, <a href="https://websitewissen.com/wordpress-hosting-vergleich" rel="dofollow">hosting WordPress</a> dhe <a href="https://websitewissen.com/website-kosten" rel="dofollow">kostot e faqeve</a>, sipas modelit të <a href="https://www.kanzlei-hasselbach.de/" rel="dofollow">Kanzlei Hasselbach Rechtsanwälte</a>.</p>',
+    "ar": '<p>تُقدَّم المعلومات التالية وفق المتطلبات القانونية الألمانية (§ 5 DDG).</p> <h1>Bيانات قانونية</h1> <p>معلومات وفق § 5 DDG</p> <p>VibesBox by Swen Steller<br> Neefestr. 9<br> 09119 Chemnitz / ألمانيا <br> </p> <p> <strong>ممثَّل بواسطة:</strong><br> Swen Steller<br> </p> <p><strong>للتواصل:</strong><br> البريد الإلكتروني: <a>info@vibesbox.app</a></p> <p>نموذج بيانات قانونية من <a href="https://websitewissen.com" rel="dofollow">WebsiteWissen.com</a>، دليل <a href="https://websitewissen.com/wordpress-website-erstellen" rel="dofollow">مواقع WordPress</a> و<a href="https://websitewissen.com/wordpress-hosting-vergleich" rel="dofollow">استضافة WordPress</a> و<a href="https://websitewissen.com/website-kosten" rel="dofollow">تكاليف المواقع</a>، وفق قالب <a href="https://www.kanzlei-hasselbach.de/" rel="dofollow">Kanzlei Hasselbach Rechtsanwälte</a>.</p>',
+}
+T["imprint_html_content"] = IMPRINT
+
+
+def set_in_file(path: Path, updates: dict[str, str]) -> int:
+    content = path.read_text(encoding="utf-8")
+    n = 0
+    for key, new_val in updates.items():
+        escaped = new_val.replace("\\", "\\\\").replace("'", "\\'")
+        pattern = rf"('{re.escape(key)}'\s*:\s*)'(?:\\'|[^'])*'"
+        new_content, c = re.subn(pattern, rf"\1'{escaped}'", content, count=1)
+        if c:
+            content = new_content
+            n += 1
+    path.write_text(content, encoding="utf-8")
+    return n
+
+
+def extract_map(path: Path) -> dict[str, str]:
+    content = path.read_text(encoding="utf-8")
+    m = {}
+    for match in re.finditer(r"'([^']+)'\s*:\s*'((?:\\'|[^'])*)'", content):
+        m[match.group(1)] = match.group(2).replace("\\'", "'")
+    return m
+
+
+def main():
+    de_path = L10N / "app_localizations_de.dart"
+    de = extract_map(de_path)
+
+    # DE: portuguese
+    set_in_file(de_path, {"portuguese": T["portuguese"]["de"]})
+
+    total = 1
+    for lang in LANGS:
+        path = L10N / f"app_localizations_{lang}.dart"
+        updates = {}
+        for key, per_lang in T.items():
+            if lang in per_lang:
+                updates[key] = per_lang[lang]
+            elif key in de and lang != "de":
+                # fallback: use EN if we have it
+                if lang == "en" and key in updates:
+                    pass
+        total += set_in_file(path, updates)
+        print(f"{lang}: {len(updates)} keys updated")
+
+    # Final audit
+    de = extract_map(de_path)
+    en = extract_map(L10N / "app_localizations_en.dart")
+    issues = 0
+    for lang in LANGS:
+        m = extract_map(L10N / f"app_localizations_{lang}.dart")
+        miss = set(de) - set(m)
+        empty = [k for k in de if k in m and not m[k].strip() and not de[k].strip()]
+        same_de = [k for k in de if k in m and m[k] == de[k] and len(de[k]) > 4]
+        if miss or empty:
+            print(f"AUDIT {lang}: missing={len(miss)} empty={len(empty)}")
+            issues += len(miss) + len(empty)
+    print(f"Audit issues (missing/empty): {issues}")
+    print(f"Total key updates applied: {total}")
+
+
+if __name__ == "__main__":
+    main()

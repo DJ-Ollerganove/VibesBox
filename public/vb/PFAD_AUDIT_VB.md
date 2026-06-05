@@ -13,7 +13,8 @@ Stand: Nach Umzug der PWA von Root nach `/vb/`. Lückenlose Prüfung ohne Spekul
 | Quelle | Pfad | Auflösung | Bewertung |
 |--------|------|-----------|-----------|
 | Firebase (Modul) | CDN `gstatic.com/firebasejs/11.0.1/...` | Absolut | ✅ |
-| translations.js | `translations.js` | Relativ → `/vb/translations.js` | ✅ |
+| vb-url-lang.js | `scripts/vb-url-lang.js` | Relativ → `/vb/scripts/vb-url-lang.js` | ✅ |
+| Sprachpakete | `/vb/lang/<code>.js` | Dynamisch nachgeladen | ✅ |
 | styles/theme.js | `styles/theme.js` | Relativ → `/vb/styles/theme.js` | ✅ |
 | party_shared.js | `/party_shared.js` | Absolut (Root) | ✅ Korrekt, Datei liegt unter public/ |
 
@@ -67,7 +68,7 @@ Stand: Nach Umzug der PWA von Root nach `/vb/`. Lückenlose Prüfung ohne Spekul
 
 ## 4. Dateistruktur /vb/
 
-- index.html, translations.js, manifest.json, service-worker.js, robots.txt
+- index.html, app.js, scripts/vb-url-lang.js, lang/*.js, manifest.json, service-worker.js, robots.txt
 - Ordner: styles/ (theme.js), images/flags/
 - Root-Ressource: party_shared.js unter public/ (wird mit `/party_shared.js` geladen)
 - Hinweis: `icon/` wird im HTML referenziert (`icon/vibesbox-logo.png`); ob der Ordner existiert, projektabhängig prüfen.

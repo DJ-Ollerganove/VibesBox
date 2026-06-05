@@ -1,16 +1,17 @@
-import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:async';
 import '../../l10n/app_localizations.dart';
 import '../../utils/ui_constants.dart';
+import '../../utils/wish_paths.dart';
 import 'styled_home_card.dart';
+import 'stats_pie_chart_shared.dart';
 
 /// Widget für die Gesamtbilanz-Statistik (nur beendete Partys)
 ///
-/// Aggregiert `statistics` aus Party-Dokumenten (`lifecycle_status == finished`).
-/// Daten werden bei Änderungen an diesen Partys per Firestore-Snapshot neu geladen
-/// (debounced), damit z. B. nach Party-Ende oder Statistik-Updates die Zahlen steigen.
+/// Aggregiert Wünsche aus `parties/{partyId}/wishes` (nach Migration weg von Root-`wishes`).
+/// Fallback: veraltete `statistics`-Map auf dem Party-Dokument, falls die Subcollection leer ist.
+/// Live-Updates: Snapshot auf `collectionGroup('wishes')` mit `djId` + beendete Partys.
 class TotalStatisticsCard extends StatefulWidget {
   final Widget Function(BuildContext context, Widget child) cardBuilder;
   final String effectiveDjId;
@@ -32,12 +33,14 @@ class _TotalStatisticsCardState extends State<TotalStatisticsCard> {
   int? _cachedPartyCount;
 
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _finishedPartiesSub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _djWishesSub;
   Timer? _reloadDebounce;
 
   @override
   void initState() {
     super.initState();
     _subscribeFinishedParties();
+    _subscribeDjWishes();
     unawaited(_reloadAggregates(showLoadingSpinner: true));
   }
 
@@ -47,6 +50,8 @@ class _TotalStatisticsCardState extends State<TotalStatisticsCard> {
     if (oldWidget.effectiveDjId != widget.effectiveDjId) {
       _finishedPartiesSub?.cancel();
       _finishedPartiesSub = null;
+      _djWishesSub?.cancel();
+      _djWishesSub = null;
       _reloadDebounce?.cancel();
       _reloadDebounce = null;
       _cachedHistoricalStats = null;
@@ -54,6 +59,7 @@ class _TotalStatisticsCardState extends State<TotalStatisticsCard> {
       _cachedActivePartyId = null;
       _isLoadingHistorical = true;
       _subscribeFinishedParties();
+      _subscribeDjWishes();
       unawaited(_reloadAggregates(showLoadingSpinner: true));
     }
   }
@@ -61,6 +67,7 @@ class _TotalStatisticsCardState extends State<TotalStatisticsCard> {
   @override
   void dispose() {
     _finishedPartiesSub?.cancel();
+    _djWishesSub?.cancel();
     _reloadDebounce?.cancel();
     super.dispose();
   }
@@ -77,6 +84,44 @@ class _TotalStatisticsCardState extends State<TotalStatisticsCard> {
           (_) => _scheduleReloadAggregates(),
           onError: (_) {},
         );
+  }
+
+  /// Wünsche des DJs (alle Partys): Kreisdiagramm aktualisieren, wenn sich Status ändert.
+  void _subscribeDjWishes() {
+    _djWishesSub?.cancel();
+    if (widget.effectiveDjId.isEmpty) return;
+    _djWishesSub = WishPaths.allWishesCollectionGroup()
+        .where('djId', isEqualTo: widget.effectiveDjId)
+        .snapshots()
+        .listen(
+          (_) => _scheduleReloadAggregates(),
+          onError: (_) {},
+        );
+  }
+
+  static int _nowUnixUtc() =>
+      DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
+
+  /// Party zählt als beendet (Gesamtstatistik), analog zur Startseiten-Logik.
+  static bool _partyCountsAsFinished(Map<String, dynamic> data, int nowUnix) {
+    if (data['lifecycle_status'] == 'finished') return true;
+    if (data['finished_at'] != null) return true;
+    final endPosix = data['end_time_posix'] as int?;
+    return endPosix != null && endPosix < nowUnix;
+  }
+
+  static bool _partyIsCurrentlyActive(Map<String, dynamic> data, int nowUnix) {
+    if (data['lifecycle_status'] == 'finished' ||
+        data['lifecycle_status'] == 'standby' ||
+        data['finished_at'] != null) {
+      return false;
+    }
+    final startPosix = data['start_time_posix'] as int?;
+    final endPosix = data['end_time_posix'] as int?;
+    if (startPosix != null && endPosix != null) {
+      return nowUnix >= startPosix && nowUnix < endPosix;
+    }
+    return data['isActive'] == true || data['lifecycle_status'] == 'active';
   }
 
   void _scheduleReloadAggregates() {
@@ -158,99 +203,94 @@ class _TotalStatisticsCardState extends State<TotalStatisticsCard> {
     return null;
   }
 
-  /// Lädt historische Daten (beendete Partys) - SICHERHEIT: Nur für diesen DJ
-  /// NEU: Nutzt statistics-Map aus Party-Dokumenten (nach Migration Stufe 2)
+  /// Lädt historische Daten aus `parties/{id}/wishes` (beendete Partys dieses DJs).
   Future<_HistoricalStats> _loadHistoricalStats(String? excludePartyId) async {
     try {
-      // SICHERHEIT: Lade nur Partys dieses DJs (created_by) mit lifecycle_status == 'finished'
+      final nowUnix = _nowUnixUtc();
       final partiesSnapshot = await FirebaseFirestore.instance
           .collection('parties')
           .where('created_by', isEqualTo: widget.effectiveDjId)
-          .where('lifecycle_status', isEqualTo: 'finished')
           .get();
 
-      // SICHERHEIT: Zusätzliche Filterung auf Client-Seite
-      final validParties = <QueryDocumentSnapshot>[];
+      final allWishDocs = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+      int legacyTotal = 0;
+      int legacyPlayed = 0;
+      int legacyRejected = 0;
+      int legacyNotPlayed = 0;
+      double legacyWaitSum = 0;
+      int legacyPlayedForWait = 0;
+
       for (final partyDoc in partiesSnapshot.docs) {
         final partyId = partyDoc.id;
-        
-        // DUBLETTEN-CHECK: Aktive Party ausschließen
-        if (excludePartyId != null && partyId == excludePartyId) {
+        if (excludePartyId != null && partyId == excludePartyId) continue;
+
+        final partyData = partyDoc.data();
+        if (partyData['created_by'] != widget.effectiveDjId) continue;
+        if (_partyIsCurrentlyActive(partyData, nowUnix)) continue;
+        if (!_partyCountsAsFinished(partyData, nowUnix)) continue;
+
+        final wishesSnap = await WishPaths.partyWishes(partyId).get();
+        if (wishesSnap.docs.isNotEmpty) {
+          allWishDocs.addAll(wishesSnap.docs);
           continue;
         }
-        
-        final partyData = partyDoc.data() as Map<String, dynamic>;
-        final partyCreatedBy = partyData['created_by'] as String?;
-        
-        // SICHERHEIT: Verifiziere, dass die Party wirklich diesem DJ gehört
-        if (partyCreatedBy != widget.effectiveDjId) {
-          continue; // Überspringe Partys, die nicht diesem DJ gehören
-        }
-        
-        validParties.add(partyDoc);
-      }
-      
-      // ✅ Logging entfernt zur Kontrolle
 
-      // Summiere Statistiken aus statistics-Map
-      int totalRequests = 0;
-      int played = 0;
-      int rejected = 0;
-      int notPlayed = 0;
-      int deleted = 0;
-      double totalWaitMinutes = 0.0;
-      int totalPlayedCount = 0;
-      List<int> globalHourlyDistribution = List.filled(24, 0); // 0-23 Uhr
-
-      for (final partyDoc in validParties) {
-        final partyData = partyDoc.data() as Map<String, dynamic>;
         final statistics = partyData['statistics'] as Map<String, dynamic>?;
-        
-        if (statistics != null) {
-          // Summiere Werte aus statistics-Map
-          totalRequests += (statistics['total_requests'] as int? ?? 0);
-          played += (statistics['played'] as int? ?? 0);
-          rejected += (statistics['rejected'] as int? ?? 0);
-          notPlayed += (statistics['not_played'] as int? ?? 0);
-          
-          // Wartezeit: Berechne gewichteten Durchschnitt
-          final avgWaitMinutes = statistics['avg_wait_minutes'] as double?;
-          final partyPlayed = statistics['played'] as int? ?? 0;
-          if (avgWaitMinutes != null && partyPlayed > 0) {
-            // Für gewichteten Durchschnitt: Summe der Minuten
-            totalWaitMinutes += avgWaitMinutes * partyPlayed;
-            totalPlayedCount += partyPlayed;
-          }
-          
-          // Stunden-Verteilung: Addiere Arrays
-          final hourlyDist = statistics['hourly_distribution'] as List<dynamic>?;
-          if (hourlyDist != null && hourlyDist.length == 24) {
-            for (int hour = 0; hour < 24; hour++) {
-              globalHourlyDistribution[hour] += (hourlyDist[hour] as int? ?? 0);
-            }
-          }
+        if (statistics == null) continue;
+        legacyTotal += statistics['total_requests'] as int? ?? 0;
+        legacyPlayed += statistics['played'] as int? ?? 0;
+        legacyRejected += statistics['rejected'] as int? ?? 0;
+        legacyNotPlayed += statistics['not_played'] as int? ?? 0;
+        final avgWait = statistics['avg_wait_minutes'];
+        final partyPlayed = statistics['played'] as int? ?? 0;
+        if (avgWait is num && partyPlayed > 0) {
+          legacyWaitSum += avgWait.toDouble() * partyPlayed;
+          legacyPlayedForWait += partyPlayed;
         }
       }
 
-      // Berechne Durchschnittswartezeit
-      double? averageWaitTime;
-      if (totalPlayedCount > 0) {
-        averageWaitTime = totalWaitMinutes / totalPlayedCount;
+      if (allWishDocs.isEmpty && legacyTotal == 0) {
+        return _HistoricalStats(
+          total: 0,
+          played: 0,
+          rejected: 0,
+          open: 0,
+          notPlayed: 0,
+          deleted: 0,
+          averageWaitTime: null,
+        );
       }
 
-      // ✅ Logging entfernt zur Kontrolle
+      final fromWishes = allWishDocs.isEmpty
+          ? _HistoricalStats(
+              total: 0,
+              played: 0,
+              rejected: 0,
+              open: 0,
+              notPlayed: 0,
+              deleted: 0,
+              averageWaitTime: null,
+            )
+          : _historicalFromWishDocs(allWishDocs);
+
+      final playedForWait = fromWishes.played + legacyPlayedForWait;
+      double? mergedWait;
+      if (playedForWait > 0) {
+        final wishWait =
+            (fromWishes.averageWaitTime ?? 0) * fromWishes.played;
+        mergedWait = (wishWait + legacyWaitSum) / playedForWait;
+      }
 
       return _HistoricalStats(
-        total: totalRequests,
-        played: played,
-        rejected: rejected,
-        open: 0, // Finished Partys haben keine offenen Wünsche
-        notPlayed: notPlayed,
-        deleted: deleted,
-        averageWaitTime: averageWaitTime,
+        total: fromWishes.total + legacyTotal,
+        played: fromWishes.played + legacyPlayed,
+        rejected: fromWishes.rejected + legacyRejected,
+        open: fromWishes.open,
+        notPlayed: fromWishes.notPlayed + legacyNotPlayed,
+        deleted: fromWishes.deleted,
+        averageWaitTime: mergedWait,
       );
-    } catch (e) {
-      // ✅ Logging entfernt zur Kontrolle
+    } catch (_) {
       return _HistoricalStats(
         total: 0,
         played: 0,
@@ -261,6 +301,21 @@ class _TotalStatisticsCardState extends State<TotalStatisticsCard> {
         averageWaitTime: null,
       );
     }
+  }
+
+  _HistoricalStats _historicalFromWishDocs(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) {
+    final calculated = _calculateStatsFromDocs(docs, isLive: false);
+    return _HistoricalStats(
+      total: calculated.total,
+      played: calculated.played,
+      rejected: calculated.rejected,
+      open: calculated.open,
+      notPlayed: calculated.notPlayed,
+      deleted: calculated.deleted,
+      averageWaitTime: calculated.averageWaitTime,
+    );
   }
 
   /// Berechnet Statistik aus Firestore-Dokumenten
@@ -328,32 +383,25 @@ class _TotalStatisticsCardState extends State<TotalStatisticsCard> {
     );
   }
 
-  /// Zählt die Anzahl der beendeten Partys dieses DJs
-  /// NEU: Nutzt lifecycle_status == 'finished'
+  /// Zählt beendete Partys dieses DJs.
   Future<int> _countDjParties() async {
     try {
-      // SICHERHEIT: Lade nur Partys dieses DJs (created_by) mit lifecycle_status == 'finished'
+      final nowUnix = _nowUnixUtc();
       final partiesSnapshot = await FirebaseFirestore.instance
           .collection('parties')
           .where('created_by', isEqualTo: widget.effectiveDjId)
-          .where('lifecycle_status', isEqualTo: 'finished')
           .get();
 
-      // SICHERHEIT: Zusätzliche Filterung auf Client-Seite
       int validCount = 0;
       for (final partyDoc in partiesSnapshot.docs) {
-        final partyData = partyDoc.data() as Map<String, dynamic>;
-        final partyCreatedBy = partyData['created_by'] as String?;
-        
-        // SICHERHEIT: Verifiziere, dass die Party wirklich diesem DJ gehört
-        if (partyCreatedBy == widget.effectiveDjId) {
+        final partyData = partyDoc.data();
+        if (partyData['created_by'] != widget.effectiveDjId) continue;
+        if (_partyCountsAsFinished(partyData, nowUnix)) {
           validCount++;
         }
       }
-      
       return validCount;
-    } catch (e) {
-      // ✅ Logging entfernt zur Kontrolle
+    } catch (_) {
       return 0;
     }
   }
@@ -662,6 +710,7 @@ class _TotalStatsPieChartContent extends StatelessWidget {
   });
 
   Widget _buildPie({
+    required StatsPieChartMetrics metrics,
     required int played,
     required int rejected,
     required int open,
@@ -671,69 +720,43 @@ class _TotalStatsPieChartContent extends StatelessWidget {
   }) {
     final total = played + rejected + open + notPlayed + deleted;
     if (total == 0) {
-      return Center(
-        child: Container(
-          width: double.infinity,
-          height: double.infinity,
-          decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-        ),
-      );
+      return StatsPieChartEmptyCircle(metrics: metrics);
     }
 
-    final playedPercent = (played / total * 100);
-    final rejectedPercent = (rejected / total * 100);
-    final openPercent = showBlue && open > 0 ? (open / total * 100) : 0.0;
-    final notPlayedPercent = (notPlayed / total * 100);
-    final deletedPercent = (deleted / total * 100);
-
-    return PieChart(
-      PieChartData(
-        sectionsSpace: 2,
-        centerSpaceRadius: 40,
-        startDegreeOffset: 270,
-        sections: [
-          if (deleted > 0)
-            PieChartSectionData(
-              value: deleted.toDouble(),
-              title: '${deletedPercent.toStringAsFixed(1)}%',
-              color: Colors.black,
-              radius: 60,
-              titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-          if (played > 0)
-            PieChartSectionData(
-              value: played.toDouble(),
-              title: '${playedPercent.toStringAsFixed(1)}%',
-              color: Colors.green,
-              radius: 60,
-              titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-          if (rejected > 0)
-            PieChartSectionData(
-              value: rejected.toDouble(),
-              title: '${rejectedPercent.toStringAsFixed(1)}%',
-              color: Colors.red,
-              radius: 60,
-              titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-          if (showBlue && open > 0)
-            PieChartSectionData(
-              value: open.toDouble(),
-              title: '${openPercent.toStringAsFixed(1)}%',
-              color: Colors.blue,
-              radius: 60,
-              titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-          if (notPlayed > 0)
-            PieChartSectionData(
-              value: notPlayed.toDouble(),
-              title: '${notPlayedPercent.toStringAsFixed(1)}%',
-              color: Colors.orange,
-              radius: 60,
-              titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-        ],
-      ),
+    return buildStatsPieChart(
+      metrics: metrics,
+      sections: [
+        if (deleted > 0)
+          StatsPieChartSlice(
+            value: deleted.toDouble(),
+            title: statsPiePercentLabel(deleted, total),
+            color: Colors.black,
+          ),
+        if (played > 0)
+          StatsPieChartSlice(
+            value: played.toDouble(),
+            title: statsPiePercentLabel(played, total),
+            color: Colors.green,
+          ),
+        if (rejected > 0)
+          StatsPieChartSlice(
+            value: rejected.toDouble(),
+            title: statsPiePercentLabel(rejected, total),
+            color: Colors.red,
+          ),
+        if (showBlue && open > 0)
+          StatsPieChartSlice(
+            value: open.toDouble(),
+            title: statsPiePercentLabel(open, total),
+            color: Colors.blue,
+          ),
+        if (notPlayed > 0)
+          StatsPieChartSlice(
+            value: notPlayed.toDouble(),
+            title: statsPiePercentLabel(notPlayed, total),
+            color: Colors.orange,
+          ),
+      ],
     );
   }
 
@@ -741,29 +764,28 @@ class _TotalStatsPieChartContent extends StatelessWidget {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final metrics = StatsPieChartMetrics.resolve(
+          context,
+          maxLayoutWidth: constraints.maxWidth,
+        );
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
-              flex: 2,
-              child: AspectRatio(
-                aspectRatio: 1,
-                child: _buildPie(
-                  played: stats.played,
-                  rejected: stats.rejected,
-                  open: stats.open,
-                  notPlayed: stats.notPlayed,
-                  deleted: stats.deleted,
-                  showBlue: hasActiveParty,
-                ),
+            StatsPieChartLegendRow(
+              metrics: metrics,
+              pie: _buildPie(
+                metrics: metrics,
+                played: stats.played,
+                rejected: stats.rejected,
+                open: stats.open,
+                notPlayed: stats.notPlayed,
+                deleted: stats.deleted,
+                showBlue: hasActiveParty,
               ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
+              legend: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -790,8 +812,8 @@ class _TotalStatsPieChartContent extends StatelessWidget {
               ),
             ),
           ],
-        ),
-      ],
+        );
+      },
     );
   }
 }

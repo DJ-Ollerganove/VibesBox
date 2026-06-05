@@ -8,7 +8,12 @@ import '../config/app_config.dart';
 import '../helpers/security_helper.dart';
 import 'user_service.dart';
 import '../utils/debug_log.dart';
+import '../utils/party_grace_period_helper.dart';
+import 'app_diagnostic_log_service.dart';
+import 'grace_period_settings_service.dart';
 import '../utils/party_helper.dart';
+import '../utils/pre_wish_helper.dart';
+import '../utils/wish_paths.dart';
 
 /// Ergebnis-Objekt für aktive Party-Informationen
 class ActivePartyInfo {
@@ -19,6 +24,8 @@ class ActivePartyInfo {
   final DateTime? startDate;
   final DateTime? endDate;
   final String? status;
+  /// True, wenn die laufende Party noch nicht freigegebene Vorab-Wünsche hat.
+  final bool hasQueuedPreWishes;
 
   const ActivePartyInfo({
     required this.partyId,
@@ -28,7 +35,20 @@ class ActivePartyInfo {
     this.startDate,
     this.endDate,
     this.status,
+    this.hasQueuedPreWishes = false,
   });
+
+  /// Gleiche Session-Felder wie [ActivePartyService] distinct() im Party-Stream.
+  bool isSameUiSessionAs(ActivePartyInfo other) {
+    return partyId == other.partyId &&
+        partyCode == other.partyCode &&
+        sessionId == other.sessionId &&
+        partyName == other.partyName &&
+        startDate == other.startDate &&
+        endDate == other.endDate &&
+        status == other.status &&
+        hasQueuedPreWishes == other.hasQueuedPreWishes;
+  }
 }
 
 /// Service zum Finden der aktiven Party für einen DJ
@@ -44,6 +64,7 @@ class ActivePartyService {
   static const String _prefsKeyStartDate = 'session_start_date_millis';
   static const String _prefsKeyEndDate = 'session_end_date_millis';
   static const String _prefsKeyPartyStatus = 'session_party_status';
+  static const String _prefsKeyHasQueuedPreWishes = 'session_has_queued_pre_wishes';
   static Timer? _heartbeatTimer;
   static StreamController<ActivePartyInfo?>? _activePartyController;
   static StreamSubscription<ActivePartyInfo?>? _partyInfoSubscription;
@@ -70,8 +91,17 @@ class ActivePartyService {
   /// Optional: nach erfolgreichem Session-Heartbeat (`music_history.last_heartbeat`).
   /// Wird von [ShazamService] gesetzt, um `parties.active_recognition_last_seen` zu pingen (ohne Zirkelimport).
   static void Function()? onAfterSessionHeartbeat;
+  static const int _kMaxSeenWishIds = 2500;
   static Set<String> seenWishIds =
       {}; // Set der bereits gesehenen Wunsch-IDs (für NEU-Badge)
+
+  /// Begrenzt Speicher/Prefs-Wachstum bei langen Partys.
+  static void trimSeenWishIdsIfNeeded() {
+    if (seenWishIds.length <= _kMaxSeenWishIds) return;
+    final overflow = seenWishIds.length - _kMaxSeenWishIds;
+    final drop = seenWishIds.take(overflow).toList();
+    seenWishIds.removeAll(drop);
+  }
   static String?
   _lastSavedPartyId; // Letzte Party-ID, für die die IDs gespeichert wurden
   static Set<String> _lastSavedIds =
@@ -82,8 +112,21 @@ class ActivePartyService {
   static String? _streamCacheKey;
   /// Re-Auswertung „läuft die Party jetzt?“ ohne neues Firestore-Dokument (nur [DateTime.now]).
   static const Duration _kActivePartyWallClockPoll = Duration(seconds: 10);
+  /// UI-Session nicht nach einem einzelnen „keine Party“-Tick löschen (verhindert Offen-Flackern).
+  static const Duration _kSessionClearGraceAfterActive = Duration(seconds: 20);
+  static const int _kConsecutiveNoPartyTicksBeforeClear = 2;
+  /// Verhindert parallele [scheduleResolve]-Läufe (Wall-Clock + Firestore).
+  static bool _partyStreamResolveInFlight = false;
+  static int _partyStreamResolutionGen = 0;
+  static int _consecutiveNoActivePartyStreamTicks = 0;
+  static DateTime? _lastSessionEstablishedAt;
   /// Letzte UID, für die [initialize] Party-Listener gestartet hat (nach Logout zurücksetzen).
   static String? _initializeBootstrapKey;
+  static StreamSubscription<bool>? _queuedPreWishesSub;
+
+  /// Laufender oder gerade abgeschlossener [initialize]-Lauf — parallele Aufrufer warten darauf
+  /// (wichtig: PartyAutostart darf erst starten, wenn der erste Snapshot / Prefs hier fertig sind).
+  static Future<void>? _initializeInFlight;
 
   /// Nächster Party-Start (zeitlich früheste start_date > jetzt unter nicht beendeten Partys).
   /// Wird vom zentralen Parties-Listener sofort aktualisiert (auch bei neuer Party vor bereits geplanter).
@@ -109,8 +152,15 @@ class ActivePartyService {
   /// Schreibt alle Session-Felder (Name, Start, Ende, Status) sofort in SharedPreferences und in den Speicher.
   /// Wird im Stream aufgerufen, sobald eine Party als "laufend" erkannt wird oder sich Daten in Firestore ändern.
   static Future<void> _updatePersistentSession(ActivePartyInfo info) async {
+    final prev = _storedSessionInfo;
+    if (prev != null && prev.isSameUiSessionAs(info)) {
+      return;
+    }
+    _consecutiveNoActivePartyStreamTicks = 0;
+    _lastSessionEstablishedAt = DateTime.now();
     _storedSessionInfo = info;
     storedSessionNotifier.value = info;
+    _startQueuedPreWishesWatch(info.partyId);
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_prefsKeyLastActivePartyId, info.partyId);
@@ -132,6 +182,7 @@ class ActivePartyService {
       if (info.status != null && info.status!.isNotEmpty) {
         await prefs.setString(_prefsKeyPartyStatus, info.status!);
       }
+      await prefs.setBool(_prefsKeyHasQueuedPreWishes, info.hasQueuedPreWishes);
       if (info.sessionId != null) {
         await prefs.setString(_prefsKeyPartyId, info.sessionId!);
       }
@@ -195,6 +246,7 @@ class ActivePartyService {
     if (partyId.isEmpty) {
       return;
     }
+    trimSeenWishIdsIfNeeded();
 
     // Prüfe ob sich etwas geändert hat
     if (_lastSavedPartyId == partyId &&
@@ -283,6 +335,13 @@ class ActivePartyService {
   ///
   /// Außerhalb des Zeitfensters: immer **false**, unabhängig von Lifecycle/Legacy (kein Frühstart).
   /// `finished`, `standby` oder `finished_at` gesetzt: immer **false**.
+  /// Öffentliche Prüfung „Party läuft jetzt“ (z. B. Vorab-Freigabe beim Start).
+  static bool isPartyDocumentRunningNow(
+    Map<String, dynamic> data, {
+    DateTime? now,
+  }) =>
+      _isPartyDocumentRunningNow(data, now: now);
+
   static bool _isPartyDocumentRunningNow(
     Map<String, dynamic> data, {
     DateTime? now,
@@ -341,20 +400,52 @@ class ActivePartyService {
         return false;
       }
 
-      if (!_isPartyDocumentRunningNow(data)) {
+      if (_isPartyDocumentRunningNow(data)) {
         debugLog(
-          '[ACTIVE-PARTY-SERVICE] ❌ validateStoredParty: nicht im Zeitfenster oder keine aktiven Flags ($partyId)',
+          '[ACTIVE-PARTY-SERVICE] ✅ validateStoredParty: Party gültig aktiv ($partyId)',
         );
-        return false;
+        return true;
       }
+
+      final graceMinutes = await GracePeriodSettingsService.load();
+      final endDate = PartyGracePeriodHelper.partyEndDate(data);
+      if (endDate != null &&
+          PartyGracePeriodHelper.shouldShowOpenWishes(
+            now: DateTime.now(),
+            endDate: endDate,
+            graceMinutes: graceMinutes,
+            wishesManuallyHidden:
+                PartyGracePeriodHelper.wishesManuallyHidden(data),
+          )) {
+        debugLog(
+          '[ACTIVE-PARTY-SERVICE] ✅ validateStoredParty: Nachlaufzeit aktiv ($partyId)',
+        );
+        return true;
+      }
+
       debugLog(
-        '[ACTIVE-PARTY-SERVICE] ✅ validateStoredParty: Party gültig aktiv ($partyId)',
+        '[ACTIVE-PARTY-SERVICE] ❌ validateStoredParty: nicht im Zeitfenster/Nachlauf ($partyId)',
       );
-      return true;
+      return false;
     } catch (e) {
       debugLog('[ACTIVE-PARTY-SERVICE] ⚠️ validateStoredPartyAgainstFirebase: $e');
       return false;
     }
+  }
+
+  /// Ob [partyId] für den eingeloggten Nutzer (bzw. Admin-[adminDjId]) laut Firestore **jetzt**
+  /// wirklich im Lauf-Zeitfenster ist — gleiche Regeln wie [validateStoredPartyAgainstFirebase].
+  ///
+  /// Dient z. B. der Musikerkennung: kein Wunsch-Abgleich, wenn die Party erst **während** eines
+  /// laufenden Native-Scans „dazukam“ oder der Kontext veraltet ist.
+  static Future<bool> isPartyIdRunningNowForCurrentDj(String partyId) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || partyId.isEmpty || partyId == 'manual') {
+      return false;
+    }
+    final effectiveDjId = _getEffectiveDjId(user.uid);
+    if (effectiveDjId.isEmpty) return false;
+    return validateStoredPartyAgainstFirebase(partyId, effectiveDjId);
   }
 
   /// Nur [true], wenn eine lokale Session mit gültiger Party-ID existiert und Firebase dieselbe Party noch als aktiv bestätigt.
@@ -368,7 +459,70 @@ class ActivePartyService {
     return validateStoredPartyAgainstFirebase(local.partyId, effectiveDjId);
   }
 
-  /// Kurzer Check nach [AppLifecycleState.resumed]: hängende UI durch veraltete lokale Session bereinigen.
+  /// Party eindeutig beendet — Nachlaufzeit zählt noch als „Session gültig“.
+  static bool _isPartyDocumentExplicitlyEnded(Map<String, dynamic> data) {
+    final lifecycleStatus = data['lifecycle_status'] as String?;
+    final finishedAt = data['finished_at'];
+    final status = data['status'] as String?;
+    if (lifecycleStatus == 'finished' ||
+        finishedAt != null ||
+        status == 'beendet' ||
+        status == 'ended') {
+      return true;
+    }
+    final endDate = PartyGracePeriodHelper.partyEndDate(data);
+    if (endDate == null || !DateTime.now().isAfter(endDate)) {
+      return false;
+    }
+    final graceMinutes = GracePeriodSettingsService.current;
+    return !PartyGracePeriodHelper.shouldShowOpenWishes(
+      now: DateTime.now(),
+      endDate: endDate,
+      graceMinutes: graceMinutes,
+      wishesManuallyHidden: PartyGracePeriodHelper.wishesManuallyHidden(data),
+    );
+  }
+
+  /// Party mit der längsten kürzlich beendeten Nachlaufzeit (gleiche Logik wie Offen-Liste).
+  static String? _findGracePartyIdFromSnapshot(
+    QuerySnapshot<Object?> snapshot,
+    int graceMinutes,
+    DateTime now,
+  ) {
+    String? bestId;
+    DateTime? bestEnd;
+
+    for (final doc in snapshot.docs) {
+      final data = doc.data() as Map<String, dynamic>;
+      final endDate = PartyGracePeriodHelper.partyEndDate(data);
+      if (endDate == null) continue;
+
+      if (_isPartyDocumentRunningNow(data, now: now)) continue;
+
+      if (!PartyGracePeriodHelper.shouldShowOpenWishes(
+        now: now,
+        endDate: endDate,
+        graceMinutes: graceMinutes,
+        wishesManuallyHidden: PartyGracePeriodHelper.wishesManuallyHidden(data),
+      )) {
+        continue;
+      }
+
+      final isFinished = data['lifecycle_status'] == 'finished' ||
+          data['finished_at'] != null;
+      if (now.isBefore(endDate) && !isFinished) continue;
+
+      if (bestEnd == null || endDate.isAfter(bestEnd)) {
+        bestEnd = endDate;
+        bestId = doc.id;
+      }
+    }
+
+    return bestId;
+  }
+
+  /// Nach [AppLifecycleState.resumed]: nur bei **eindeutig beendeter** Party Session löschen.
+  /// Netzwerkfehler, standby oder kurzes Timing → Session behalten (Stream + Hysterese).
   static Future<void> refreshPartyTruthOnResume() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -376,15 +530,40 @@ class ActivePartyService {
     if (effectiveDjId.isEmpty) return;
     final local = _storedSessionInfo ?? storedSessionNotifier.value;
     if (local == null || local.partyId.isEmpty) return;
-    final ok = await validateStoredPartyAgainstFirebase(
-      local.partyId,
-      effectiveDjId,
-    );
-    if (!ok) {
+    try {
+      final partyDoc = await FirebaseFirestore.instance
+          .collection('parties')
+          .doc(local.partyId)
+          .get();
+      if (!partyDoc.exists || partyDoc.data() == null) {
+        debugLog(
+          '[ACTIVE-PARTY-SERVICE] 📱 Resume: Party-Dokument nicht verfügbar – Session bleibt',
+        );
+        return;
+      }
+      final data = partyDoc.data() as Map<String, dynamic>;
+      final createdBy = data['created_by'] as String?;
+      if (createdBy != effectiveDjId) {
+        debugLog(
+          '[ACTIVE-PARTY-SERVICE] 📱 Resume: created_by passt nicht – clearLocalSession()',
+        );
+        await clearLocalSession();
+        return;
+      }
+      if (_isPartyDocumentExplicitlyEnded(data)) {
+        debugLog(
+          '[ACTIVE-PARTY-SERVICE] 📱 Resume: Party eindeutig beendet – clearLocalSession()',
+        );
+        await clearLocalSession();
+        return;
+      }
       debugLog(
-        '[ACTIVE-PARTY-SERVICE] 📱 Resume: gespeicherte Party ungültig – clearLocalSession()',
+        '[ACTIVE-PARTY-SERVICE] 📱 Resume: Session behalten (${local.partyId})',
       );
-      await clearLocalSession();
+    } catch (e) {
+      debugLog(
+        '[ACTIVE-PARTY-SERVICE] 📱 Resume: Prüfung fehlgeschlagen – Session bleibt: $e',
+      );
     }
   }
 
@@ -394,7 +573,23 @@ class ActivePartyService {
   /// (parties: start_date, end_date, lifecycle_status, finished_at).
   /// Startet sofort den Parties-Listener; beim ersten Snapshot wird geprüft, ob eine Party
   /// laut aktueller Uhrzeit aktiv ist – falls ja, wird die Session sofort gesetzt (Wiederaufnahme).
+  ///
+  /// Parallele Aufrufe (z. B. Build + [PartyAutostartService]) teilen sich **einen** Lauf — wichtig,
+  /// damit Autostart erst nach dem ersten Firestore-Schritt zuverlässig feuern kann.
   static Future<void> initialize() async {
+    if (_initializeInFlight != null) {
+      await _initializeInFlight;
+      return;
+    }
+    _initializeInFlight = _initializeOnce();
+    try {
+      await _initializeInFlight;
+    } finally {
+      _initializeInFlight = null;
+    }
+  }
+
+  static Future<void> _initializeOnce() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       _initializeBootstrapKey = null;
@@ -444,6 +639,8 @@ class ActivePartyService {
             final endMillis = prefs.getInt(_prefsKeyEndDate);
             final status = prefs.getString(_prefsKeyPartyStatus);
             final sessionId = prefs.getString(_prefsKeyPartyId);
+            final hasQueuedPreWishes =
+                prefs.getBool(_prefsKeyHasQueuedPreWishes) ?? false;
             _storedSessionInfo = ActivePartyInfo(
               partyId: lastPartyId,
               partyCode: partyCode,
@@ -456,8 +653,12 @@ class ActivePartyService {
                   ? DateTime.fromMillisecondsSinceEpoch(endMillis)
                   : null,
               status: status ?? 'laufend',
+              hasQueuedPreWishes: hasQueuedPreWishes,
             );
+            _consecutiveNoActivePartyStreamTicks = 0;
+            _lastSessionEstablishedAt = DateTime.now();
             storedSessionNotifier.value = _storedSessionInfo;
+            _startQueuedPreWishesWatch(lastPartyId);
           }
         }
       }
@@ -754,6 +955,50 @@ class ActivePartyService {
     debugLog('[ACTIVE-PARTY-SERVICE] ⏹️ Heartbeat gestoppt');
   }
 
+  static void _startQueuedPreWishesWatch(String partyId) {
+    _queuedPreWishesSub?.cancel();
+    if (partyId.isEmpty) return;
+    _queuedPreWishesSub = _queuedPreWishesStream(partyId).listen(
+      (has) => _applyQueuedPreWishesFlag(has),
+      onError: (_) {},
+    );
+  }
+
+  static void _stopQueuedPreWishesWatch() {
+    _queuedPreWishesSub?.cancel();
+    _queuedPreWishesSub = null;
+  }
+
+  static Stream<bool> _queuedPreWishesStream(String partyId) {
+    return WishPaths.partyWishes(partyId)
+        .where('status', isEqualTo: 'pending')
+        .where('is_pre_wish', isEqualTo: true)
+        .limit(200)
+        .snapshots()
+        .map((snap) {
+      for (final doc in snap.docs) {
+        if (PreWishHelper.isQueuedPreWish(doc.data())) return true;
+      }
+      return false;
+    });
+  }
+
+  static void _applyQueuedPreWishesFlag(bool has) {
+    final cur = _storedSessionInfo;
+    if (cur == null || cur.hasQueuedPreWishes == has) return;
+    final updated = ActivePartyInfo(
+      partyId: cur.partyId,
+      partyCode: cur.partyCode,
+      sessionId: cur.sessionId,
+      partyName: cur.partyName,
+      startDate: cur.startDate,
+      endDate: cur.endDate,
+      status: cur.status,
+      hasQueuedPreWishes: has,
+    );
+    unawaited(_updatePersistentSession(updated));
+  }
+
   /// Bereinigt lokale Cache-Daten (Session + Heartbeat-Timestamp + last_active_party_id + gespeicherte Session-Felder).
   /// Manueller Kill-Switch: Bei manueller Party-Beendigung werden alle Session-Variablen restlos aus Prefs und Speicher gelöscht.
   /// Nur aufrufen bei explizitem Party-Ende oder DJ-Ausloggen – nicht beim Zeitfenster-Check (parties end_date).
@@ -767,6 +1012,8 @@ class ActivePartyService {
     await prefs.remove(_prefsKeyStartDate);
     await prefs.remove(_prefsKeyEndDate);
     await prefs.remove(_prefsKeyPartyStatus);
+    await prefs.remove(_prefsKeyHasQueuedPreWishes);
+    _stopQueuedPreWishesWatch();
     _lastEmittedPartyInfo = null;
     _storedSessionInfo = null;
     storedSessionNotifier.value = null;
@@ -778,7 +1025,75 @@ class ActivePartyService {
 
   /// Wie clearCache(); Name für Klarheit: veraltete lokale Session zwangsweise löschen.
   static Future<void> clearLocalSession() async {
+    _consecutiveNoActivePartyStreamTicks = 0;
+    _lastSessionEstablishedAt = null;
+    diagLog(
+      'PARTY',
+      'clearLocalSession (Party-ID war: ${_storedSessionInfo?.partyId ?? _currentHeartbeatPartyId ?? "—"})',
+    );
     await clearCache();
+  }
+
+  /// Session aus dem Parties-Stream löschen — mit Hysterese, damit Offen nicht alle ~10 s flackert.
+  static Future<void> _maybeClearLocalSessionFromStreamResolve(
+    int resolutionGen, {
+    required bool force,
+  }) async {
+    if (resolutionGen != _partyStreamResolutionGen) {
+      return;
+    }
+    if (!force) {
+      _consecutiveNoActivePartyStreamTicks++;
+      if (_consecutiveNoActivePartyStreamTicks <
+          _kConsecutiveNoPartyTicksBeforeClear) {
+        debugLog(
+          '[ACTIVE-PARTY-SERVICE] Keine aktive Party (Tick $_consecutiveNoActivePartyStreamTicks/$_kConsecutiveNoPartyTicksBeforeClear) – Session bleibt',
+        );
+        return;
+      }
+      final established = _lastSessionEstablishedAt;
+      if (established != null &&
+          DateTime.now().difference(established) <
+              _kSessionClearGraceAfterActive) {
+        debugLog(
+          '[ACTIVE-PARTY-SERVICE] Grace ${_kSessionClearGraceAfterActive.inSeconds}s – Session nicht gelöscht',
+        );
+        return;
+      }
+    }
+    if (resolutionGen != _partyStreamResolutionGen) {
+      return;
+    }
+    final session = _storedSessionInfo ?? storedSessionNotifier.value;
+    if (session?.endDate != null &&
+        DateTime.now().isAfter(session!.endDate!) &&
+        PartyGracePeriodHelper.isWithinGracePeriod(
+          DateTime.now(),
+          session.endDate!,
+          GracePeriodSettingsService.current,
+        )) {
+      debugLog(
+        '[ACTIVE-PARTY-SERVICE] Nachlaufzeit (${GracePeriodSettingsService.current} min) – Session nicht gelöscht',
+      );
+      return;
+    }
+    debugLog(
+      '[ACTIVE-PARTY-SERVICE] ${force ? "Party beendet" : "Keine aktive Party (bestätigt)"} – clearLocalSession()',
+    );
+    await clearLocalSession();
+  }
+
+  /// Nach [FirebaseAuth.signOut]: Listener stoppen, Stream-Cache leeren, lokale DJ-Session entfernen.
+  /// Verhindert, dass die UI noch „DJ mit aktiver Party“ zeigt, obwohl kein Nutzer mehr angemeldet ist.
+  static Future<void> resetForLogout() async {
+    _partyInfoSubscription?.cancel();
+    _partyInfoSubscription = null;
+    _initializeBootstrapKey = null;
+    _initializeInFlight = null;
+    _streamCache.clear();
+    _streamCacheKey = null;
+    await clearCache();
+    debugLog('[ACTIVE-PARTY-SERVICE] resetForLogout() abgeschlossen');
   }
 
   /// Prüft in Firestore, ob die Party noch aktiv ist (kein lifecycle_status "finished", kein finished_at).
@@ -910,13 +1225,39 @@ class ActivePartyService {
     Map<String, dynamic> partyData,
   ) async {
     final partyCode = partyData['party_code'] as String?;
-    final String? partyName =
-        (partyData['party_name'] ?? partyData['name'] ?? partyData['title'])
-            as String?;
     final startTimestamp = partyData['start_date'] as Timestamp?;
     final endTimestamp = partyData['end_date'] as Timestamp?;
     final DateTime? startDate = startTimestamp?.toDate();
     final DateTime? endDate = endTimestamp?.toDate();
+    final String? partyNameEarly =
+        (partyData['party_name'] ?? partyData['name'] ?? partyData['title'])
+            as String?;
+
+    // Session + Heartbeat laufen bereits für dieselbe Party → kein erneutes music_history-.get().
+    final cachedSession = _currentHeartbeatSessionId;
+    final stored = _storedSessionInfo;
+    if (cachedSession != null &&
+        cachedSession.isNotEmpty &&
+        _currentHeartbeatPartyId == activePartyId &&
+        stored != null &&
+        stored.partyId == activePartyId &&
+        stored.sessionId == cachedSession) {
+      return ActivePartyInfo(
+        partyId: activePartyId,
+        partyCode: partyCode,
+        sessionId: cachedSession,
+        partyName:
+            partyNameEarly != null && partyNameEarly.isNotEmpty
+                ? partyNameEarly
+                : stored.partyName,
+        startDate: startDate ?? stored.startDate,
+        endDate: endDate ?? stored.endDate,
+        status: 'laufend',
+        hasQueuedPreWishes: stored.hasQueuedPreWishes,
+      );
+    }
+
+    final String? partyName = partyNameEarly;
 
     debugLog(
       'ANALYSE [History-Fetch]: Suche mit party_id = $activePartyId und djId = $effectiveDjId',
@@ -1093,8 +1434,9 @@ class ActivePartyService {
   /// [_kActivePartyWallClockPoll] im zentralen Stream.
   static Future<ActivePartyInfo?> _resolveActivePartyFromPartiesSnapshot(
     QuerySnapshot<Object?> snapshot,
-    String effectiveDjId,
-  ) async {
+    String effectiveDjId, {
+    required int resolutionGen,
+  }) async {
     final now2 = DateTime.now();
     String? activePartyId;
     DateTime? nextStart;
@@ -1127,6 +1469,21 @@ class ActivePartyService {
       }
     }
 
+    if (activePartyId == null) {
+      final graceMinutes = GracePeriodSettingsService.current;
+      activePartyId = _findGracePartyIdFromSnapshot(
+        snapshot,
+        graceMinutes,
+        now2,
+      );
+      if (activePartyId != null) {
+        _consecutiveNoActivePartyStreamTicks = 0;
+        debugLog(
+          '[ACTIVE-PARTY-SERVICE] ⏳ Nachlaufzeit – Session für Party $activePartyId',
+        );
+      }
+    }
+
     _nextStartDate = nextStart;
     nextStartDateNotifier.value = nextStart;
 
@@ -1143,7 +1500,13 @@ class ActivePartyService {
           '[ACTIVE-PARTY-SERVICE] ⏹️ Party $wasActivePartyId beendet (lifecycle/finished_at) – Session sofort löschen',
         );
         final sessionIdToDeactivate = _currentHeartbeatSessionId;
-        await clearLocalSession();
+        await _maybeClearLocalSessionFromStreamResolve(
+          resolutionGen,
+          force: true,
+        );
+        if (resolutionGen != _partyStreamResolutionGen) {
+          return null;
+        }
         if (sessionIdToDeactivate != null) {
           try {
             await FirebaseFirestore.instance
@@ -1165,25 +1528,43 @@ class ActivePartyService {
       if (wasActivePartyId != null ||
           _storedSessionInfo != null ||
           storedSessionNotifier.value != null) {
-        debugLog(
-          '[ACTIVE-PARTY-SERVICE] Keine aktive Party (Zeitfenster/Flags) – clearLocalSession()',
+        await _maybeClearLocalSessionFromStreamResolve(
+          resolutionGen,
+          force: false,
         );
-        await clearLocalSession();
       }
-      _lastEmittedPartyInfo = null;
-      return null;
+      if (resolutionGen != _partyStreamResolutionGen) {
+        return _storedSessionInfo;
+      }
+      _lastEmittedPartyInfo = _storedSessionInfo;
+      return _storedSessionInfo;
     }
 
-    final partyDoc = snapshot.docs.firstWhere((d) => d.id == activePartyId);
+    QueryDocumentSnapshot<Object?>? partyDoc;
+    for (final d in snapshot.docs) {
+      if (d.id == activePartyId) {
+        partyDoc = d;
+        break;
+      }
+    }
+    if (partyDoc == null) {
+      debugLog(
+        '[ACTIVE-PARTY-SERVICE] ⚠️ Party $activePartyId nicht im Snapshot – Session bleibt',
+      );
+      return _storedSessionInfo;
+    }
     final partyData = partyDoc.data() as Map<String, dynamic>;
     final info = await _materializeActivePartyForDj(
       effectiveDjId,
       activePartyId,
       partyData,
     );
+    if (resolutionGen != _partyStreamResolutionGen) {
+      return _storedSessionInfo;
+    }
     if (info == null) {
-      _lastEmittedPartyInfo = null;
-      return null;
+      _lastEmittedPartyInfo = _storedSessionInfo;
+      return _storedSessionInfo;
     }
     _lastEmittedPartyInfo = info;
     await _updatePersistentSession(info);
@@ -1203,19 +1584,35 @@ class ActivePartyService {
     late final StreamController<ActivePartyInfo?> out;
 
     Future<void> scheduleResolve() async {
+      if (_partyStreamResolveInFlight) return;
+      _partyStreamResolveInFlight = true;
       final g = ++resolutionGen;
+      _partyStreamResolutionGen = g;
       final snap = latestSnapshot;
       if (snap == null) {
+        _partyStreamResolveInFlight = false;
         return;
       }
-      final result =
-          await _resolveActivePartyFromPartiesSnapshot(snap, effectiveDjId);
-      if (g != resolutionGen || out.isClosed) {
-        return;
+      try {
+        final result = await _resolveActivePartyFromPartiesSnapshot(
+          snap,
+          effectiveDjId,
+          resolutionGen: g,
+        );
+        if (g != resolutionGen || out.isClosed) {
+          return;
+        }
+        out.add(result);
+      } catch (e, st) {
+        debugLog(
+          '[ACTIVE-PARTY-SERVICE] ⚠️ scheduleResolve Fehler: $e\n$st',
+        );
+      } finally {
+        _partyStreamResolveInFlight = false;
       }
-      out.add(result);
     }
 
+    VoidCallback? graceSettingsListener;
     out = StreamController<ActivePartyInfo?>.broadcast(
       onListen: () {
         fsSub ??= FirebaseFirestore.instance
@@ -1231,8 +1628,20 @@ class ActivePartyService {
             scheduleResolve();
           }
         });
+        graceSettingsListener ??= () {
+          if (latestSnapshot != null) {
+            scheduleResolve();
+          }
+        };
+        GracePeriodSettingsService.gracePeriodNotifier
+            .addListener(graceSettingsListener!);
       },
       onCancel: () {
+        if (graceSettingsListener != null) {
+          GracePeriodSettingsService.gracePeriodNotifier
+              .removeListener(graceSettingsListener!);
+          graceSettingsListener = null;
+        }
         wallClockTimer?.cancel();
         wallClockTimer = null;
         fsSub?.cancel();

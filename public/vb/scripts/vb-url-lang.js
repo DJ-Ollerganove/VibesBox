@@ -7,12 +7,12 @@
   'use strict';
 
   var DEFAULT_LANG = 'en';
-  var ALLOWED = { de: 1, en: 1, fr: 1, ru: 1, zh: 1, es: 1, tr: 1, pt: 1, it: 1, uk: 1, hi: 1 };
-  var STATIC_PWA_LANG_CODES = ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi'];
-  var REGION_TO_LANG = { de: 'de', at: 'de', ch: 'de', fr: 'fr', es: 'es', it: 'it', ru: 'ru', tr: 'tr', pt: 'pt', br: 'pt', zh: 'zh', cn: 'zh', tw: 'zh', ua: 'uk', in: 'hi', ar: 'ar', sa: 'ar', eg: 'ar' };
+  var ALLOWED = (typeof window !== 'undefined' && window.PWA_ALLOWED_LANG) ? window.PWA_ALLOWED_LANG : { de: 1, en: 1, fr: 1, ru: 1, zh: 1, es: 1, tr: 1, pt: 1, it: 1, uk: 1, hi: 1, sq: 1, vi: 1 };
+  var STATIC_PWA_LANG_CODES = (typeof window !== 'undefined' && window.PWA_STATIC_LANG_CODES) ? window.PWA_STATIC_LANG_CODES.slice() : ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi'];
+  var REGION_TO_LANG = { de: 'de', at: 'de', ch: 'de', fr: 'fr', es: 'es', it: 'it', ru: 'ru', tr: 'tr', pt: 'pt', br: 'pt', zh: 'zh', cn: 'zh', tw: 'zh', ua: 'uk', in: 'hi', al: 'sq', vn: 'vi', ar: 'ar', sa: 'ar', eg: 'ar' };
   var PERMANENT_LOCALE_KEY = 'permanent_user_locale';
   var VB_ENTRY_LANG_KEY = 'vb_entry_lang';
-  var LANGUAGE_NAMES = { de: 'German', en: 'English', fr: 'French', ru: 'Russian', zh: 'Chinese', es: 'Spanish', tr: 'Turkish', pt: 'Portuguese', it: 'Italian', uk: 'Ukrainian', hi: 'Hindi' };
+  var LANGUAGE_NAMES = { de: 'German', en: 'English', fr: 'French', ru: 'Russian', zh: 'Chinese', es: 'Spanish', tr: 'Turkish', pt: 'Portuguese', it: 'Italian', uk: 'Ukrainian', hi: 'Hindi', sq: 'Albanian', vi: 'Vietnamese' };
 
   window.IS_DEBUG = new URLSearchParams(window.location.search || '').get('x') === '99';
 
@@ -242,7 +242,8 @@
     var tr = window.translations || {};
     if (tr[lang] && tr[lang][key]) return tr[lang][key];
     if (tr[DEFAULT_LANG] && tr[DEFAULT_LANG][key]) return tr[DEFAULT_LANG][key];
-    if (tr.de && tr.de[key]) return tr.de[key];
+    var bundle = window['lang_' + lang];
+    if (bundle && bundle[key]) return bundle[key];
     return key || '';
   };
 
@@ -303,6 +304,8 @@
     window.translatePage();
     window.updatePageTitle();
     if (typeof window.updateDrawerCurrentLanguage === 'function') window.updateDrawerCurrentLanguage();
+    if (typeof window.updateBrandingLine === 'function') window.updateBrandingLine();
+    if (typeof window.syncPreWishDisclaimerUi === 'function') window.syncPreWishDisclaimerUi();
     window.dispatchEvent(new Event('translationsReady'));
   };
 
@@ -395,6 +398,8 @@
     window.translatePage();
     window.updatePageTitle();
     if (typeof window.updateDrawerCurrentLanguage === 'function') window.updateDrawerCurrentLanguage();
+    if (typeof window.updateBrandingLine === 'function') window.updateBrandingLine();
+    if (typeof window.syncPreWishDisclaimerUi === 'function') window.syncPreWishDisclaimerUi();
     window.dispatchEvent(new Event('translationsReady'));
     logVisit(code);
   }
@@ -462,8 +467,17 @@
       option.addEventListener('click', function (e) {
         var lc = this.getAttribute('data-lang');
         e.stopPropagation();
-        parent.querySelectorAll('.main-lang-option, .language-modal-option').forEach(function (o) { o.classList.remove('active'); });
-        this.classList.add('active');
+        if (typeof window.setLanguageMenuActive === 'function') {
+          window.setLanguageMenuActive(this, lc);
+        } else {
+          var menuRoot = typeof window.langMenuRootFromElement === 'function'
+            ? window.langMenuRootFromElement(this)
+            : parent;
+          (menuRoot || parent).querySelectorAll('.main-lang-option, .language-modal-option').forEach(function (o) {
+            o.classList.remove('active');
+          });
+          this.classList.add('active');
+        }
         if (!isModal) {
           var drop = document.getElementById('mainLangDropdown');
           if (drop) drop.classList.remove('show');
@@ -481,8 +495,17 @@
       parent.appendChild(option);
     }
 
+    list = typeof window.sortLanguageMenuList === 'function'
+      ? window.sortLanguageMenuList(list)
+      : list.slice();
     if (isModal) {
-      list.forEach(function (entry) { addOption(entry, container, 'language-modal-option', 'language-name'); });
+      if (typeof window.fillLanguageMenuColumns === 'function') {
+        window.fillLanguageMenuColumns(container, list, function (entry, col) {
+          addOption(entry, col, 'language-modal-option', 'language-name');
+        });
+      } else {
+        list.forEach(function (entry) { addOption(entry, container, 'language-modal-option', 'language-name'); });
+      }
     } else {
       var wrap = document.createElement('div');
       wrap.className = 'main-lang-wrap';
@@ -498,7 +521,13 @@
       dropdown.className = 'main-lang-dropdown';
       dropdown.id = 'mainLangDropdown';
       dropdown.setAttribute('role', 'menu');
-      list.forEach(function (entry) { addOption(entry, dropdown, 'main-lang-option', 'main-lang-name'); });
+      if (typeof window.fillLanguageMenuColumns === 'function') {
+        window.fillLanguageMenuColumns(dropdown, list, function (entry, col) {
+          addOption(entry, col, 'main-lang-option', 'main-lang-name');
+        });
+      } else {
+        list.forEach(function (entry) { addOption(entry, dropdown, 'main-lang-option', 'main-lang-name'); });
+      }
       function removeOutsideListener() {
         if (wrap._outsideClick) {
           document.removeEventListener('click', wrap._outsideClick);

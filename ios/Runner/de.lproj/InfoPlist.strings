@@ -1,0 +1,10 @@
+/* Info.plist Lokalisierung – VibesBox */
+"NSLocalNetworkUsageDescription" = "Damit Flutter und Xcode sich mit der App verbinden können (z. B. Hot Reload beim Entwickeln), benötigt VibesBox Zugriff auf Geräte im lokalen Netzwerk.";
+"NSMicrophoneUsageDescription" = "VibesBox benötigt Zugriff auf das Mikrofon, um laufende Musik für die Musikerkennung zu analysieren.";
+"NSAppleMusicUsageDescription" = "VibesBox kann auf deine Mediathek zugreifen, um Musikerkennung und passende Funktionen mit Apple Music zu verknüpfen.";
+"NSCameraUsageDescription" = "VibesBox benötigt Zugriff auf die Kamera, um QR-Codes zu scannen und Fotos aufzunehmen.";
+"NSPhotoLibraryUsageDescription" = "Wir benötigen Zugriff auf deine Fotos, damit du Profilbilder wählen und Party-Bilder nutzen kannst.";
+"NSPhotoLibraryAddUsageDescription" = "Wir speichern Bilder (z. B. QR-Codes oder Party-Fotos) in deiner Mediathek, wenn du das möchtest.";
+"NSLocationWhenInUseUsageDescription" = "Wir benötigen deinen Standort, um die Karte für deine Party-Location zu zentrieren.";
+"NSCalendarsUsageDescription" = "Wird benötigt, um Party-Termine in deinen Kalender zu exportieren.";
+"NSFaceIDUsageDescription" = "Face ID schützt Admin-Einstellungen – nur du erhältst Zugriff auf sensible Optionen.";

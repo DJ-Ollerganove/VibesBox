@@ -2,26 +2,11 @@ import 'dart:ui' as ui;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
-
 import '../l10n/app_localizations.dart';
+import '../utils/formatting_utils.dart';
 import '../services/active_party_service.dart';
 import '../services/wish_management_service.dart';
 import '../utils/ui_constants.dart';
-
-/// Lokalisierte Datums-/Uhrzeit-Formatierung für abgelehnte Wünsche (nur Anzeige).
-class RejectedWishLocaleFormats {
-  RejectedWishLocaleFormats._();
-
-  static String localeTag(BuildContext context) =>
-      Localizations.localeOf(context).toString();
-
-  static String formatDate(DateTime dateTime, String locale) =>
-      DateFormat.yMMMd(locale).format(dateTime);
-
-  static String formatTime(DateTime dateTime, String locale) =>
-      DateFormat.jm(locale).format(dateTime);
-}
 
 /// Bestätigungsdialog „Wunsch wieder öffnen?“ mit Gradient-Panel und orangem Rahmen.
 ///
@@ -133,7 +118,7 @@ class RejectedWishReopenConfirmDialog extends StatelessWidget {
 }
 
 /// Detail-Dialog für gruppierte abgelehnte Wünsche (optional nutzbar).
-/// Zeigt [sent_at]/Ablehnung mit [DateFormat.yMMMd] und [DateFormat.jm].
+/// Zeigt [sent_at]/Ablehnung mit [FormattingUtils] (Registry-Locale).
 class RejectedWishGroupedDetailDialog {
   RejectedWishGroupedDetailDialog._();
 
@@ -154,7 +139,6 @@ class RejectedWishGroupedDetailDialog {
         ? '$title - $artist'
         : (title.isNotEmpty ? title : artist);
 
-    final locale = RejectedWishLocaleFormats.localeTag(context);
     final createdTs = data['createdAt'];
     final rejectedTs = data['rejected_at'] ?? data['rejectedAt'];
 
@@ -169,14 +153,14 @@ class RejectedWishGroupedDetailDialog {
 
     String? submittedLine;
     if (createdDt != null) {
-      final d = RejectedWishLocaleFormats.formatDate(createdDt, locale);
-      final t = RejectedWishLocaleFormats.formatTime(createdDt, locale);
+      final d = FormattingUtils.formatDateMedium(createdDt, context);
+      final t = FormattingUtils.formatTime(createdDt, context);
       submittedLine = l.wish_timeline_submitted(d, t);
     }
     String? rejectedLine;
     if (rejectedDt != null) {
-      final d = RejectedWishLocaleFormats.formatDate(rejectedDt, locale);
-      final t = RejectedWishLocaleFormats.formatTime(rejectedDt, locale);
+      final d = FormattingUtils.formatDateMedium(rejectedDt, context);
+      final t = FormattingUtils.formatTime(rejectedDt, context);
       rejectedLine = l.wish_timeline_rejected(d, t);
     }
 

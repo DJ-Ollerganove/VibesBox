@@ -1,9 +1,9 @@
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
-
 import '../l10n/app_localizations.dart';
+import '../models/guest_floor_option.dart';
+import '../utils/formatting_utils.dart';
 import '../utils/ui_constants.dart';
 
 /// Ergebnis der Party-Code-Validierung für Feedback-Anzeige.
@@ -12,6 +12,10 @@ enum PartyCheckInFeedbackType {
   wrongCode,
   /// Party bereits beendet
   partyEnded,
+  /// Party in einem Floor beendet — andere Räume noch aktiv
+  floorEndedChooseOther,
+  /// Mehrere aktive Räume — Gast muss Floor wählen
+  selectFloor,
   /// Party hat noch nicht begonnen (mit Startzeit)
   partyNotStarted,
   /// Standby oder sonstiger Fehler
@@ -22,10 +26,18 @@ enum PartyCheckInFeedbackType {
 class PartyCheckInFeedback {
   final PartyCheckInFeedbackType type;
   final DateTime? startDateTime;
+  final String? partyName;
+  final String? djName;
+  final String? endedFloorLabel;
+  final List<GuestFloorOption>? otherFloorOptions;
 
   const PartyCheckInFeedback({
     required this.type,
     this.startDateTime,
+    this.partyName,
+    this.djName,
+    this.endedFloorLabel,
+    this.otherFloorOptions,
   });
 
   bool get isError =>
@@ -33,6 +45,8 @@ class PartyCheckInFeedback {
       type == PartyCheckInFeedbackType.partyEnded ||
       type == PartyCheckInFeedbackType.invalidOrInactive;
   bool get isNotStarted => type == PartyCheckInFeedbackType.partyNotStarted;
+  bool get isFloorRedirect =>
+      type == PartyCheckInFeedbackType.floorEndedChooseOther;
 }
 
 /// Eigenes Widget für Party-Check-In-Feedback (PWA-Design).
@@ -80,7 +94,20 @@ class PartyCheckInFeedbackWidget extends StatelessWidget {
       case PartyCheckInFeedbackType.wrongCode:
         return loc.party_code_unknown;
       case PartyCheckInFeedbackType.partyEnded:
-        return loc.party_code_ended;
+        final party = feedback.partyName?.trim().isNotEmpty == true
+            ? feedback.partyName!.trim()
+            : loc.unnamed_party;
+        final dj = feedback.djName?.trim().isNotEmpty == true
+            ? feedback.djName!.trim()
+            : 'DJ';
+        return loc.partyEndedWithDj(party, dj);
+      case PartyCheckInFeedbackType.floorEndedChooseOther:
+        final floor = feedback.endedFloorLabel?.trim().isNotEmpty == true
+            ? feedback.endedFloorLabel!.trim()
+            : loc.guest_floor_main_area;
+        return loc.guest_floor_ended_redirect_message(floor);
+      case PartyCheckInFeedbackType.selectFloor:
+        return loc.guest_floor_picker_choose;
       case PartyCheckInFeedbackType.invalidOrInactive:
         return loc.party_code_invalid_or_inactive;
       case PartyCheckInFeedbackType.partyNotStarted:
@@ -103,12 +130,10 @@ class PartyCheckInFeedbackWidget extends StatelessWidget {
   }
 
   String _formatDate(BuildContext context, DateTime d) {
-    final locale = Localizations.localeOf(context);
-    return DateFormat.yMd(locale.toString()).format(d);
+    return FormattingUtils.formatDateForLocale(d, context);
   }
 
   String _formatTime(BuildContext context, DateTime d) {
-    final locale = Localizations.localeOf(context);
-    return DateFormat.Hm(locale.toString()).format(d);
+    return FormattingUtils.formatTime(d, context);
   }
 }

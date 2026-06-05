@@ -5,6 +5,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:image_gallery_saver/image_gallery_saver.dart';
 import '../l10n/locale_helper.dart';
 import '../utils/formatting_utils.dart';
+import '../utils/party_export_filename_helper.dart';
 import '../utils/party_code_utils.dart';
 import 'dart:ui' as ui;
 import '../utils/ui_constants.dart';
@@ -30,6 +31,68 @@ class QrCodeService {
     return null;
   }
 
+  /// Party-Titel im Export: orange Füllung, schwarze Kontur, zentriert.
+  static void _paintOutlinedPartyTitle(
+    Canvas canvas, {
+    required String text,
+    required double baseX,
+    required double y,
+    required double maxWidth,
+    required double fontSize,
+  }) {
+    const fillColor = UIConstants.appOrange;
+    const strokeColor = Colors.black;
+    const strokeWidth = 2.5;
+
+    final strokeStyle = TextStyle(
+      fontSize: fontSize,
+      fontWeight: FontWeight.bold,
+      foreground: Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = strokeWidth
+        ..color = strokeColor
+        ..strokeJoin = StrokeJoin.round,
+    );
+    final fillStyle = TextStyle(
+      fontSize: fontSize,
+      fontWeight: FontWeight.bold,
+      color: fillColor,
+    );
+
+    for (final style in [strokeStyle, fillStyle]) {
+      final painter = TextPainter(
+        text: TextSpan(text: text, style: style),
+        textDirection: ui.TextDirection.ltr,
+        textAlign: TextAlign.center,
+        maxLines: 2,
+      );
+      painter.layout(maxWidth: maxWidth);
+      painter.paint(canvas, Offset(baseX, y));
+    }
+  }
+
+  static double _measureOutlinedPartyTitleHeight(
+    String text,
+    double maxWidth,
+    double fontSize,
+  ) {
+    final painter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          fontSize: fontSize,
+          fontWeight: FontWeight.bold,
+          color: UIConstants.appOrange,
+        ),
+      ),
+      textDirection: ui.TextDirection.ltr,
+      textAlign: TextAlign.center,
+      maxLines: 2,
+    );
+    painter.layout(maxWidth: maxWidth);
+    return painter.height;
+  }
+
   /// Speichert QR-Code mit Party-Informationen als Bild (Neues professionelles Layout).
   static Future<bool> saveQRCodeAsImage(
     String pwaUrl,
@@ -48,6 +111,7 @@ class QrCodeService {
     bool showEmailInExport = true,
     bool showPhoneInExport = true,
     bool showAlternativeEmailInExport = true,
+    String? exportFileName,
   }) async {
     final exportLocale = locale ?? const Locale('de');
     final startTimeFormatted = FormattingUtils.formatStartTimeForExport(startDate, exportLocale);
@@ -89,15 +153,10 @@ class QrCodeService {
 
     ui.Image? logoImage = await _loadLogoImage();
 
-    // Header Zeile 1: Party-Name oben zentriert (groß, Kursiv, farbig – VibesBox-Blau)
-    const partyNameColor = Color(0xFF1976D2); // Dezentes Blau (VibesBox-Nähe)
-    final partyNameStyle = const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, fontStyle: FontStyle.italic, color: partyNameColor);
-    final partyNamePainter = TextPainter(
-      text: TextSpan(text: partyName, style: partyNameStyle),
-      textDirection: ui.TextDirection.ltr,
-      maxLines: 2,
-    );
-    partyNamePainter.layout(maxWidth: innerWidth - 24);
+    // Header Zeile 1: Party-Name oben zentriert (orange, schwarze Kontur)
+    const partyNameFontSize = 32.0;
+    final partyNameHeight =
+        _measureOutlinedPartyTitleHeight(partyName, innerWidth, partyNameFontSize);
     // Header Zeile 2: Logo links, Startzeit rechts (l10n: "Start:" + Datum)
     final startLabelStyle = TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: UIConstants.colorWhite.withValues(alpha: 0.95));
     final startLabelPainter = TextPainter(
@@ -131,7 +190,7 @@ class QrCodeService {
       djNameFallback.layout(maxWidth: leftColWidth - 8);
       headerRowHeight = djNameFallback.height.clamp(40.0, logoAreaSize);
     }
-    final totalHeaderHeight = headerTopSpacing + partyNamePainter.height + headerRowSpacing + headerRowHeight;
+    final totalHeaderHeight = headerTopSpacing + partyNameHeight + headerRowSpacing + headerRowHeight;
 
     // Location-Block (optional, einzeilig, mit Linien)
     final hasLocation = showLocationInExport && partyLocation != null && partyLocation.trim().isNotEmpty;
@@ -248,9 +307,16 @@ class QrCodeService {
     final baseX = borderWidth + padding;
     double currentY = baseX + headerTopSpacing;
 
-    // === HEADER Zeile 1: Party-Name zentriert (groß, farbig, Kursiv) ===
-    partyNamePainter.paint(canvas, Offset(baseX + (innerWidth - partyNamePainter.width) / 2, currentY));
-    currentY += partyNamePainter.height + headerRowSpacing;
+    // === HEADER Zeile 1: Party-Name zentriert (orange, schwarze Kontur) ===
+    _paintOutlinedPartyTitle(
+      canvas,
+      text: partyName,
+      baseX: baseX,
+      y: currentY,
+      maxWidth: innerWidth,
+      fontSize: partyNameFontSize,
+    );
+    currentY += partyNameHeight + headerRowSpacing;
 
     // === HEADER Zeile 2: Logo links (oder DJ-Name wenn kein Logo), Startzeit rechts ===
     final headerRowY = currentY;
@@ -407,7 +473,11 @@ class QrCodeService {
     final result = await ImageGallerySaver.saveImage(
       pngBytes,
       quality: 100,
-      name: 'QR_Code_$partyCode',
+      name: exportFileName ??
+          PartyExportFilenameHelper.buildQrImageFileName(
+            partyName: partyName,
+            partyStartDate: startDate,
+          ),
     );
 
     if (result['isSuccess'] == true) {

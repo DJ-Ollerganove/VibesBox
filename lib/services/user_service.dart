@@ -6,8 +6,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+import '../config/app_config.dart';
 import '../helpers/security_helper.dart';
-import 'pro_free_check.dart';
+import 'dj_pro_session_service.dart';
 import 'pro_feature_guard.dart';
 import 'shazam_service.dart';
 import 'trial_expiry_service.dart';
@@ -15,48 +16,11 @@ import '../l10n/locale_helper.dart';
 import '../models/user_model.dart';
 import '../utils/auth_stream_utils.dart';
 import 'device_block_fusion_service.dart';
+import 'dj_device_notification_prefs_service.dart';
 import 'pdf_display_options_service.dart';
 import '../utils/debug_log.dart';
 
-/// Session-basierter Pro-Status: Wird aus User-Dokument + Zahlungshistorie initialisiert.
-/// Widgets lesen primär diese Session, nicht direkt das UserModel.
-class SessionProStatus {
-  final bool isActive;
-  final DateTime? proUntil;
-  final bool isLifetime;
-  final ProFreeStatus status;
-
-  const SessionProStatus({
-    required this.isActive,
-    this.proUntil,
-    this.isLifetime = false,
-    required this.status,
-  });
-
-  @override
-  bool operator ==(Object other) {
-    if (identical(this, other)) return true;
-    return other is SessionProStatus &&
-        isActive == other.isActive &&
-        proUntil == other.proUntil &&
-        isLifetime == other.isLifetime &&
-        status == other.status;
-  }
-
-  @override
-  int get hashCode => Object.hash(isActive, proUntil, isLifetime, status);
-
-  static SessionProStatus? fromUserModel(UserModel? user) {
-    if (user == null) return null;
-    final result = ProFreeCheck.determineStatus(user: user, historyEntries: []);
-    return SessionProStatus(
-      isActive: result.isActive,
-      proUntil: result.displayDate,
-      isLifetime: result.status == ProFreeStatus.PRO_LIFE,
-      status: result.status,
-    );
-  }
-}
+export 'dj_pro_session_service.dart' show DjProSessionService, SessionProStatus;
 
 /// Zentraler Service für User-Daten: Echtzeit-Stream auf users/{uid} und Logo-Cache.
 /// Nach Login wird der Firestore-Stream gestartet; bei Logout [stopUserStream] aufrufen.
@@ -79,7 +43,7 @@ class UserService {
     return _userStreamController!.stream;
   }
 
-  void _emitCurrentUser(UserModel? value) {
+  void _emitRawUser(UserModel? value) {
     if (currentUser.value == value) {
       return;
     }
@@ -87,10 +51,197 @@ class UserService {
     _userStreamController?.add(value);
   }
 
-  /// Session-basierter Pro-Status: Widgets nutzen primär diese Quelle.
-  /// Initialisiert aus User-Dokument + Zahlungshistorie (sichere Quellen).
-  final ValueNotifier<SessionProStatus?> sessionProStatus =
-      ValueNotifier<SessionProStatus?>(null);
+  void _tearDownDevicePrefsListener() {
+    _devicePrefsSub?.cancel();
+    _devicePrefsSub = null;
+    _devicePrefsStreamUid = null;
+    _devicePrefsStreamInstallId = null;
+    _devicePrefsData = null;
+  }
+
+  void _emitMergedFromCaches() {
+    final root = _userModelFromRootDoc;
+    if (root == null) {
+      _emitRawUser(null);
+      return;
+    }
+    _emitRawUser(
+      DjDeviceNotificationPrefsService.merge(root, _devicePrefsData),
+    );
+  }
+
+  /// Setzt das Root-[UserModel] aus `users/{uid}` und emittiert inkl. Geräte-Overrides.
+  void _setRootUserAndEmit(UserModel? root) {
+    if (root == null) {
+      _tearDownDevicePrefsListener();
+      _userModelFromRootDoc = null;
+      _emitRawUser(null);
+      return;
+    }
+    _userModelFromRootDoc = root;
+    _emitMergedFromCaches();
+  }
+
+  Future<void> _maybeSeedOrCreateDeviceDocument(
+    String uid,
+    String installId,
+  ) async {
+    final userRef = FirebaseFirestore.instance.collection('users').doc(uid);
+    final devRef =
+        DjDeviceNotificationPrefsService.deviceDocRef(uid, installId);
+    Map<String, dynamic>? reusablePrefs;
+    try {
+      final devCheck = await devRef.get();
+      if (!devCheck.exists) {
+        reusablePrefs =
+            await DjDeviceNotificationPrefsService.findReusableSamePlatformPrefs(
+          uid,
+          installId,
+        );
+      }
+    } catch (_) {
+      // Seed trotzdem versuchen
+    }
+    try {
+      await FirebaseFirestore.instance.runTransaction((tx) async {
+        final userSnap = await tx.get(userRef);
+        final devSnap = await tx.get(devRef);
+        if (!userSnap.exists) return;
+        final uData = userSnap.data()!;
+        final awaiting =
+            uData[DjDeviceNotificationPrefsService.userFieldAwaitingFirstDeviceSeed] ==
+                true;
+        if (!devSnap.exists) {
+          if (reusablePrefs != null) {
+            tx.set(devRef, reusablePrefs);
+          } else if (awaiting) {
+            tx.set(
+              devRef,
+              DjDeviceNotificationPrefsService.fullDevicePayload(
+                notifyNewWishes: uData['notifyNewWishes'] == true,
+                enableNotificationSound:
+                    uData['enableNotificationSound'] != false,
+                showStatusNotification:
+                    uData['show_status_notification'] == true,
+              ),
+            );
+            tx.update(userRef, {
+              DjDeviceNotificationPrefsService.userFieldAwaitingFirstDeviceSeed:
+                  false,
+            });
+          } else {
+            tx.set(
+              devRef,
+              DjDeviceNotificationPrefsService.fullDevicePayload(
+                notifyNewWishes: false,
+                enableNotificationSound: true,
+                showStatusNotification: false,
+              ),
+            );
+          }
+        } else if (awaiting) {
+          tx.update(userRef, {
+            DjDeviceNotificationPrefsService.userFieldAwaitingFirstDeviceSeed:
+                false,
+          });
+        }
+      });
+    } catch (e) {
+      debugLog('👤 UserService: Seed dj_device_prefs: $e');
+    }
+  }
+
+  Future<void> _ensureDevicePrefsForUid(String uid) async {
+    try {
+      final installId =
+          await DjDeviceNotificationPrefsService.getOrCreateInstallId();
+      if (_devicePrefsStreamUid != uid ||
+          _devicePrefsStreamInstallId != installId) {
+        _devicePrefsSub?.cancel();
+        _devicePrefsStreamUid = uid;
+        _devicePrefsStreamInstallId = installId;
+        _devicePrefsData = null;
+        final devRef =
+            DjDeviceNotificationPrefsService.deviceDocRef(uid, installId);
+        _devicePrefsSub = devRef.snapshots().listen(
+          (DocumentSnapshot<Map<String, dynamic>> snap) {
+            _devicePrefsData = snap.data();
+            _emitMergedFromCaches();
+          },
+          onError: (Object e, StackTrace st) {
+            debugLog('👤 UserService: dj_device_prefs Snapshot: $e');
+          },
+        );
+      }
+      await _maybeSeedOrCreateDeviceDocument(uid, installId);
+    } catch (e) {
+      debugLog('👤 UserService: device prefs Pipeline: $e');
+    }
+  }
+
+  /// Firestore [isAdmin()] braucht `users.admin == true` — App erkennt Admin auch über role_id.
+  Future<void> _syncFirestoreAdminFlagIfNeeded(
+    String uid,
+    UserModel userModel,
+    Map<String, dynamic>? rawData,
+  ) async {
+    if (userModel.admin == true) return;
+    final shouldBeAdmin = AppConfig.isAdminRole(userModel) ||
+        AppConfig.isMasterAdminFirebaseUid(uid);
+    if (!shouldBeAdmin) return;
+    if (rawData != null && rawData['admin'] == true) return;
+
+    try {
+      await FirebaseFirestore.instance.collection('users').doc(uid).set(
+        {'admin': true},
+        SetOptions(merge: true),
+      );
+      debugLog('👤 UserService: admin=true in Firestore gesetzt für $uid');
+    } catch (e) {
+      debugLog('👤 UserService: admin-Sync fehlgeschlagen: $e');
+    }
+  }
+
+  Future<void> _handleUserDocumentSnapshot(
+    DocumentSnapshot<Map<String, dynamic>> doc,
+    String uid, {
+    bool syncLocale = true,
+  }) async {
+    userDocSnapshotReadyNotifier.value = true;
+    final userModel = doc.exists ? UserModel.fromFirestore(doc) : null;
+    _setRootUserAndEmit(userModel);
+    if (userModel != null) {
+      PdfDisplayOptionsService.cacheFromUserModel(userModel);
+      if (syncLocale) {
+        await LocaleHelper.syncLocaleFromUserProfile(userModel);
+      }
+      unawaited(_ensureDevicePrefsForUid(uid));
+      unawaited(_syncFirestoreAdminFlagIfNeeded(uid, userModel, doc.data()));
+    }
+    debugLog(
+      '👤 UserService: currentUser gesetzt (exists=${doc.exists})',
+    );
+    debugLog(
+      '🔐 User-Dokument: admin-Feld = ${userModel?.admin == true}',
+    );
+    if (userModel == null) {
+      DjProSessionService.instance.clear();
+      return;
+    }
+    final historyEntries = await _loadPaymentHistoryEntriesOrEmpty(uid);
+    _updateSessionFromCheck(userModel, historyEntries);
+    unawaited(_reconcileTrialAfterUserLoad(userModel));
+  }
+
+  /// Trial-/Downgrade: lokales Root-Modell anpassen und mit Geräte-Prefs mergen.
+  void _emitPatchedRootUser(UserModel patchedRoot) {
+    _userModelFromRootDoc = patchedRoot;
+    _emitMergedFromCaches();
+  }
+
+  /// Session-basierter Pro-Status — delegiert an [DjProSessionService] (eine Quelle).
+  ValueNotifier<SessionProStatus?> get sessionProStatus =>
+      DjProSessionService.instance.sessionProStatus;
 
   /// Gesetzt mit `trialUntil.millisecondsSinceEpoch`, wenn die Probezeit endet (Dialog einmalig).
   final ValueNotifier<int?> trialExpiryPromptNotifier =
@@ -107,9 +258,14 @@ class UserService {
   String? _trialExpiryBusyUid;
 
   StreamSubscription<User?>? _authSub;
-  StreamSubscription<DocumentSnapshot>? _docSub;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _docSub;
 
-  /// UID, für die [_docSub] aktiv ist – verhindert Neustart bei jedem authStateChanges-Tick (Token-Refresh).
+  UserModel? _userModelFromRootDoc;
+  Map<String, dynamic>? _devicePrefsData;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _devicePrefsSub;
+  String? _devicePrefsStreamUid;
+  String? _devicePrefsStreamInstallId;
+
   String? _docListeningUid;
 
   /// Pro UID nur ein Log, wenn [users/uid/history] nicht lesbar ist (verhindert Log-Spam).
@@ -169,8 +325,8 @@ class UserService {
         _docListeningUid = null;
         userDocSnapshotReadyNotifier.value = false;
         _cancelTrialLocalTimer();
-        _emitCurrentUser(null);
-        sessionProStatus.value = null;
+        _setRootUserAndEmit(null);
+        DjProSessionService.instance.clear();
         debugLog('👤 UserService: user null – currentUser zurückgesetzt');
         return;
       }
@@ -197,31 +353,8 @@ class UserService {
           .doc(user.uid)
           .snapshots()
           .listen(
-            (DocumentSnapshot doc) async {
-              userDocSnapshotReadyNotifier.value = true;
-              final userModel = doc.exists
-                  ? UserModel.fromFirestore(doc)
-                  : null;
-              _emitCurrentUser(userModel);
-              if (userModel != null) {
-                PdfDisplayOptionsService.cacheFromUserModel(userModel);
-                await LocaleHelper.syncLocaleFromUserProfile(userModel);
-              }
-              debugLog(
-                '👤 UserService: currentUser gesetzt (exists=${doc.exists})',
-              );
-              // Beweis-Log für Rules-Abgleich: exakter Pfad und Feld wie in firestore.rules isAdmin()
-              debugLog(
-                '🔐 User-Dokument: admin-Feld = ${userModel?.admin == true}',
-              );
-              if (userModel == null) {
-                sessionProStatus.value = null;
-                return;
-              }
-              final historyEntries =
-                  await _loadPaymentHistoryEntriesOrEmpty(user.uid);
-              _updateSessionFromCheck(userModel, historyEntries);
-              unawaited(_reconcileTrialAfterUserLoad(userModel));
+            (DocumentSnapshot<Map<String, dynamic>> doc) async {
+              await _handleUserDocumentSnapshot(doc, user.uid, syncLocale: true);
             },
             onError: (Object e, StackTrace st) {
               if (_isPermissionDeniedFirestore(e)) {
@@ -232,7 +365,7 @@ class UserService {
                   );
                 }
                 if (FirebaseAuth.instance.currentUser == null) {
-                  _emitCurrentUser(null);
+                  _setRootUserAndEmit(null);
                 }
                 return;
               }
@@ -254,8 +387,8 @@ class UserService {
     _docSub = null;
     _docListeningUid = null;
     userDocSnapshotReadyNotifier.value = false;
-    _emitCurrentUser(null);
-    sessionProStatus.value = null;
+    _setRootUserAndEmit(null);
+    DjProSessionService.instance.clear();
     debugLog(
       '👤 UserService: User-Stream beendet (Auth-Listener bleibt aktiv)',
     );
@@ -273,8 +406,8 @@ class UserService {
     if (user == null) {
       _docListeningUid = null;
       userDocSnapshotReadyNotifier.value = false;
-      _emitCurrentUser(null);
-      sessionProStatus.value = null;
+      _setRootUserAndEmit(null);
+      DjProSessionService.instance.clear();
       debugLog(
         '👤 UserService: forceRefresh – kein User, currentUser auf null',
       );
@@ -291,27 +424,12 @@ class UserService {
         .doc(user.uid)
         .snapshots()
         .listen(
-          (DocumentSnapshot doc) async {
-            userDocSnapshotReadyNotifier.value = true;
-            final userModel = doc.exists ? UserModel.fromFirestore(doc) : null;
-            _emitCurrentUser(userModel);
-            if (userModel != null) {
-              PdfDisplayOptionsService.cacheFromUserModel(userModel);
-            }
-            debugLog(
-              '👤 UserService: forceRefresh – currentUser gesetzt (exists=${doc.exists})',
+          (DocumentSnapshot<Map<String, dynamic>> doc) async {
+            await _handleUserDocumentSnapshot(
+              doc,
+              user.uid,
+              syncLocale: false,
             );
-            debugLog(
-              '🔐 User-Dokument: admin-Feld = ${userModel?.admin == true}',
-            );
-            if (userModel == null) {
-              sessionProStatus.value = null;
-              return;
-            }
-            final historyEntries =
-                await _loadPaymentHistoryEntriesOrEmpty(user.uid);
-            _updateSessionFromCheck(userModel, historyEntries);
-            unawaited(_reconcileTrialAfterUserLoad(userModel));
           },
           onError: (Object e, StackTrace st) {
             if (_isPermissionDeniedFirestore(e)) {
@@ -322,7 +440,7 @@ class UserService {
                 );
               }
               if (FirebaseAuth.instance.currentUser == null) {
-                _emitCurrentUser(null);
+                _setRootUserAndEmit(null);
               }
               return;
             }
@@ -341,7 +459,7 @@ class UserService {
       final userRef = FirebaseFirestore.instance.collection('users').doc(uid);
       final userDoc = await userRef.get();
       if (!userDoc.exists) {
-        sessionProStatus.value = null;
+        DjProSessionService.instance.clear();
         return;
       }
       final userModel = UserModel.fromFirestore(userDoc);
@@ -405,7 +523,7 @@ class UserService {
     try {
       final endMs = user.trialUntil!.millisecondsSinceEpoch;
       final patched = user.copyWith(planType: 'free', isPro: false);
-      _emitCurrentUser(patched);
+      _emitPatchedRootUser(patched);
       _updateSessionFromCheck(patched, const []);
       ProFeatureGuard.invalidateCache();
       trialExpiryPromptNotifier.value = endMs;
@@ -416,24 +534,11 @@ class UserService {
     }
   }
 
-  /// Aktualisiert [sessionProStatus] über ProFreeCheck (Life -> History -> Kulanz).
-  /// Wird später von den Listenern aufgerufen, statt direkt aus dem User-Dokument zu pushen.
   void _updateSessionFromCheck(
     UserModel user,
     List<Map<String, dynamic>> history,
   ) {
-    final result = ProFreeCheck.determineStatus(
-      user: user,
-      historyEntries: history,
-    );
-    final next = SessionProStatus(
-      isActive: result.isActive,
-      proUntil: result.displayDate,
-      isLifetime: result.status == ProFreeStatus.PRO_LIFE,
-      status: result.status,
-    );
-    if (sessionProStatus.value == next) return;
-    sessionProStatus.value = next;
+    DjProSessionService.instance.applyFromUser(user, history);
   }
 
   /// Gecachtes DJ-Logo als Bytes
@@ -471,9 +576,11 @@ class UserService {
   /// Expliziter Logout (nur Nutzeraktionen, z. B. [deactivateAccount]).
   /// Keine automatischen Aufrufe aus Fehlerpfaden — Drawer nutzt direkt [FirebaseAuth.instance.signOut].
   Future<void> signOut() async {
+    // Auth zuerst: sonst kann MainPage/_onUserModelChanged bei user!=null && userModel==null
+    // vorzeitig returnen und DJ-Ansicht „kleben“ bleiben.
+    await FirebaseAuth.instance.signOut();
     stopUserStream();
     clearCache();
-    await FirebaseAuth.instance.signOut();
   }
 
   /// Deaktiviert den Account: setzt status='inaktiv' und deactivated_at in Firestore,

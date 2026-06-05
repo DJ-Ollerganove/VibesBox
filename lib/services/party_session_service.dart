@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -5,8 +6,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'public_dj_profile_service.dart';
 
 import '../utils/party_code_utils.dart';
+import '../utils/pre_wish_helper.dart';
 import '../widgets/party_check_in_feedback_widget.dart';
 import '../utils/debug_log.dart';
+import 'wishbox_suggestions_settings_service.dart';
+import '../constants/venue_constants.dart';
+import '../models/guest_floor_option.dart';
+import '../utils/floor_key_utils.dart';
+import '../utils/venue_party_fields.dart';
+import 'guest_floor_session_service.dart';
 
 /// Zentrale Session für Gast-Party-Beitritt.
 /// **Alles-drin-Prinzip:** Beim Login (validateAndJoin) werden Party, DJ und (nur bei
@@ -21,6 +29,132 @@ class PartySessionService {
 
   static final PartySessionService instance = PartySessionService._();
 
+  PartyCheckInFeedback? _pendingPartyEndedFeedback;
+  GuestFloorRedirectState? _pendingFloorRedirect;
+
+  /// Nach beendeter Floor-Party: andere Räume noch aktiv → Floor-Picker (Phase 4 UI).
+  GuestFloorRedirectState? consumePendingFloorRedirect() {
+    final pending = _pendingFloorRedirect;
+    _pendingFloorRedirect = null;
+    return pending;
+  }
+
+  /// Nach [clearSession] wegen beendeter Party — für Check-in-Hinweis.
+  PartyCheckInFeedback? consumePendingPartyEndedFeedback() {
+    final pending = _pendingPartyEndedFeedback;
+    _pendingPartyEndedFeedback = null;
+    return pending;
+  }
+
+  static Future<PartyCheckInFeedback> buildPartyEndedFeedback(
+    Map<String, dynamic> partyData,
+  ) async {
+    final partyNameRaw = (partyData['party_name'] as String?)?.trim();
+    final partyName =
+        (partyNameRaw != null && partyNameRaw.isNotEmpty) ? partyNameRaw : null;
+
+    final djIdRaw = partyData['created_by'] ?? partyData['dj_code'];
+    final djId = djIdRaw != null ? djIdRaw.toString().trim() : null;
+    var djName = 'DJ';
+    if (djId != null && djId.isNotEmpty && djId != 'manual') {
+      try {
+        final publicProfile = await PublicDjProfileService().fetchByUid(djId);
+        if (publicProfile?.displayName?.trim().isNotEmpty == true) {
+          djName = publicProfile!.displayName!.trim();
+        }
+      } catch (_) {}
+    }
+
+    return PartyCheckInFeedback(
+      type: PartyCheckInFeedbackType.partyEnded,
+      partyName: partyName,
+      djName: djName,
+    );
+  }
+
+  Future<void> _clearSessionAfterPartyEnded(
+    Map<String, dynamic> partyData, {
+    required String partyId,
+  }) async {
+    final joinCode = _shortCode ??
+        PartyCodeUtils.normalizeDigits(
+          partyData['party_code']?.toString() ?? '',
+        );
+
+    if (joinCode.length == PartyCodeUtils.codeLength) {
+      try {
+        final redirect =
+            await GuestFloorSessionService.instance.redirectAfterPartyEnded(
+          endedPartyId: partyId,
+          joinCode: joinCode,
+          endedPartyData: partyData,
+        );
+        if (redirect != null && redirect.options.isNotEmpty) {
+          _pendingFloorRedirect = redirect;
+          final endedLabel = _displayFloorLabel(partyData);
+          _pendingPartyEndedFeedback = PartyCheckInFeedback(
+            type: PartyCheckInFeedbackType.floorEndedChooseOther,
+            endedFloorLabel: endedLabel,
+            otherFloorOptions: redirect.options,
+          );
+          await _clearSessionKeepJoinCode(joinCode);
+          return;
+        }
+      } catch (e) {
+        debugLog('⚠️ Floor-Redirect: $e');
+      }
+    }
+
+    _pendingPartyEndedFeedback = await buildPartyEndedFeedback(partyData);
+    await clearSession();
+  }
+
+  Future<void> _clearSessionKeepJoinCode(String joinCode) async {
+    _partyId = null;
+    _partyName = null;
+    _djId = null;
+    _djPlan = null;
+    _djName = null;
+    _djLogoUrl = null;
+    _socialMediaLinks = {};
+    _linkOrder = [];
+    _isPreWishSession = false;
+    _partyStartAt = null;
+    _floorKey = null;
+    _floorLabel = null;
+    _shortCode = joinCode;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_keyPartyId);
+      await prefs.remove(_keyPartyName);
+      await prefs.remove(_keyDjId);
+      await prefs.remove(_keyDjPlan);
+      await prefs.remove(_keyDjName);
+      await prefs.remove(_keyDjLogoUrl);
+      await prefs.remove(_keySocialLinks);
+      await prefs.remove(_keyLinkOrder);
+      await prefs.remove(_keyIsPreWishSession);
+      await prefs.remove(_keyPartyStartMs);
+      await prefs.remove(_keyFloorKey);
+      await prefs.remove(_keyFloorLabel);
+      await prefs.setString(_keyShortCode, joinCode);
+      await prefs.setString(_keyPartyCode, joinCode);
+    } catch (_) {}
+    unawaited(WishboxSuggestionsGuestBridge.instance.unbind());
+  }
+
+  String _displayFloorLabel(Map<String, dynamic> partyData) {
+    final explicit = (partyData['floor_label'] as String?)?.trim();
+    if (explicit != null && explicit.isNotEmpty) return explicit;
+    if (FloorKeyUtils.isDefaultFloorKey(
+      VenuePartyFields.readFloorKey(partyData),
+    )) {
+      return '';
+    }
+    return VenuePartyFields.effectiveFloorKeyFromParty(partyData);
+  }
+
   static const String _keyShortCode = 'party_session_short_code';
   static const String _keyPartyId = 'party_session_party_id';
   static const String _keyPartyName = 'party_session_party_name';
@@ -30,9 +164,13 @@ class PartySessionService {
   static const String _keyDjLogoUrl = 'party_session_dj_logo_url';
   static const String _keySocialLinks = 'party_session_social_links';
   static const String _keyLinkOrder = 'party_session_link_order';
+  static const String _keyIsPreWishSession = 'party_session_is_pre_wish';
+  static const String _keyPartyStartMs = 'party_session_start_ms';
   static const String _keyPartyCode = 'party_code'; // Sync mit WishesPage (Anzeige)
   /// 8 Ziffern, eingegeben aber ggf. noch nicht mit „Prüfen“ bestätigt (Registrierung/E-Mail-Flow).
   static const String _keyPendingPartyCode = 'pending_party_code';
+  static const String _keyFloorKey = 'party_session_floor_key';
+  static const String _keyFloorLabel = 'party_session_floor_label';
 
   String? _shortCode;
   String? _partyId;
@@ -43,6 +181,11 @@ class PartySessionService {
   String? _djLogoUrl;
   Map<String, String> _socialMediaLinks = {};
   List<String> _linkOrder = [];
+  /// Einmal beim Check-in gesetzt: Vorab-Wunschbox (bis Party verlassen / neu join).
+  bool _isPreWishSession = false;
+  DateTime? _partyStartAt;
+  String? _floorKey;
+  String? _floorLabel;
   bool _loaded = false;
 
   /// 8-stelliger Party-Code (nur Ziffern, nur Anzeige/Speicher lokal)
@@ -88,6 +231,17 @@ class PartySessionService {
   bool get isDjProPlanForSocialLinks =>
       _djPlan != null && _djPlan!.toString().toLowerCase() == 'pro';
 
+  /// Gast-Navigation: Vorab-Modus (beim Join einmal aus Party-Daten ermittelt).
+  bool get isPreWishSession => _isPreWishSession;
+
+  /// Party-Start (für Vorab-Header), aus Check-in-Daten.
+  DateTime? get partyStartAt => _partyStartAt;
+
+  String? get floorKey => _floorKey;
+  String? get floorLabel => _floorLabel;
+
+  String? get joinCode => _shortCode;
+
   /// Lädt persistierte Session aus SharedPreferences.
   /// Liest immer aus Prefs (kein Cache), damit Gast-Seiten nach Check-In aktuelle Daten erhalten.
   Future<void> loadFromPrefs() async {
@@ -102,6 +256,12 @@ class PartySessionService {
       _djLogoUrl = prefs.getString(_keyDjLogoUrl);
       _socialMediaLinks = _parseSocialLinks(prefs.getString(_keySocialLinks));
       _linkOrder = _parseLinkOrder(prefs.getString(_keyLinkOrder));
+      _isPreWishSession = prefs.getBool(_keyIsPreWishSession) ?? false;
+      final startMs = prefs.getInt(_keyPartyStartMs);
+      _partyStartAt =
+          startMs != null ? DateTime.fromMillisecondsSinceEpoch(startMs) : null;
+      _floorKey = prefs.getString(_keyFloorKey);
+      _floorLabel = prefs.getString(_keyFloorLabel);
       _loaded = true;
     } catch (_) {
       _loaded = true;
@@ -143,35 +303,58 @@ class PartySessionService {
     }
 
     try {
-      QuerySnapshot<Map<String, dynamic>> query = await FirebaseFirestore.instance
-          .collection('parties')
-          .where('party_code', isEqualTo: digits)
-          .limit(1)
-          .get();
+      final options =
+          await GuestFloorSessionService.instance.listJoinableFloorOptions(digits);
 
-      if (query.docs.isEmpty) {
-        final asInt = int.tryParse(digits);
-        if (asInt != null) {
-          query = await FirebaseFirestore.instance
-              .collection('parties')
-              .where('party_code', isEqualTo: asInt)
-              .limit(1)
-              .get();
-        }
-      }
-
-      if (query.docs.isEmpty) {
+      if (options.isEmpty) {
         return const PartyCheckInFeedback(type: PartyCheckInFeedbackType.wrongCode);
       }
 
-      final partyDoc = query.docs.first;
-      return await _validateAndSaveFromPartyDoc(partyDoc, shortCodeFromInput: digits);
+      if (options.length > 1) {
+        return PartyCheckInFeedback(
+          type: PartyCheckInFeedbackType.selectFloor,
+          otherFloorOptions: options,
+        );
+      }
+
+      return joinPartyById(options.first.partyId, joinCode: digits);
     } catch (e) {
-      // Firestore Rules: parties und users haben allow read: if true (Gast-Lesezugriff).
-      // Bei Permission Denied prüfe firestore.rules – Gäste müssen parties + users lesen dürfen.
       debugLog('PartySessionService validateAndJoin Fehler (evtl. Permission Denied): $e');
       return const PartyCheckInFeedback(type: PartyCheckInFeedbackType.wrongCode);
     }
+  }
+
+  /// Join nach Floor-Auswahl (mehrere Partys am selben Code).
+  Future<PartyCheckInFeedback?> joinPartyById(
+    String partyId, {
+    required String joinCode,
+  }) async {
+    try {
+      final partyDoc = await FirebaseFirestore.instance
+          .collection('parties')
+          .doc(partyId)
+          .get();
+      if (!partyDoc.exists) {
+        return const PartyCheckInFeedback(type: PartyCheckInFeedbackType.wrongCode);
+      }
+      return _validateAndSaveFromPartyDoc(
+        partyDoc,
+        shortCodeFromInput: PartyCodeUtils.normalizeDigits(joinCode),
+      );
+    } catch (e) {
+      debugLog('PartySessionService joinPartyById Fehler: $e');
+      return const PartyCheckInFeedback(type: PartyCheckInFeedbackType.wrongCode);
+    }
+  }
+
+  /// Session leeren, Join-Code behalten (Floor erneut wählen).
+  Future<void> prepareForFloorReselection(String joinCode) async {
+    final digits = PartyCodeUtils.normalizeDigits(joinCode);
+    if (digits.length != PartyCodeUtils.codeLength) {
+      await clearSession();
+      return;
+    }
+    await _clearSessionKeepJoinCode(digits);
   }
 
   /// Zentrale Bereinigung: Löscht die gesamte Gast-Session.
@@ -225,6 +408,11 @@ class PartySessionService {
     _djLogoUrl = null;
     _socialMediaLinks = {};
     _linkOrder = [];
+    _isPreWishSession = false;
+    _partyStartAt = null;
+    _floorKey = null;
+    _floorLabel = null;
+    _pendingFloorRedirect = null;
 
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -237,10 +425,15 @@ class PartySessionService {
       await prefs.remove(_keyDjLogoUrl);
       await prefs.remove(_keySocialLinks);
       await prefs.remove(_keyLinkOrder);
+      await prefs.remove(_keyIsPreWishSession);
+      await prefs.remove(_keyPartyStartMs);
       await prefs.remove(_keyPartyCode);
       await prefs.remove(_keyPendingPartyCode);
+      await prefs.remove(_keyFloorKey);
+      await prefs.remove(_keyFloorLabel);
       await prefs.remove('guest_client_id');
     } catch (_) {}
+    unawaited(WishboxSuggestionsGuestBridge.instance.unbind());
   }
 
   /// Alias für clearSession() – Kompatibilität mit bestehendem Code.
@@ -274,7 +467,7 @@ class PartySessionService {
         finishedAt != null ||
         status == 'beendet' ||
         status == 'ended') {
-      return const PartyCheckInFeedback(type: PartyCheckInFeedbackType.partyEnded);
+      return await buildPartyEndedFeedback(partyData);
     }
 
     if (lifecycleStatus == 'standby') {
@@ -291,9 +484,12 @@ class PartySessionService {
       startDate = DateTime.fromMillisecondsSinceEpoch(startPosix * 1000);
     }
     if (startDate != null && now.isBefore(startDate)) {
-      return PartyCheckInFeedback(
+      if (!PreWishHelper.isPreWishWindowOpen(partyData, now)) {
+        return PartyCheckInFeedback(
           type: PartyCheckInFeedbackType.partyNotStarted,
-          startDateTime: startDate);
+          startDateTime: startDate,
+        );
+      }
     }
 
     DateTime? endDate;
@@ -305,7 +501,7 @@ class PartySessionService {
       endDate = DateTime.fromMillisecondsSinceEpoch(endPosix * 1000);
     }
     if (endDate != null && now.isAfter(endDate)) {
-      return const PartyCheckInFeedback(type: PartyCheckInFeedbackType.partyEnded);
+      return await buildPartyEndedFeedback(partyData);
     }
 
     final djIdRaw = partyData['created_by'] ?? partyData['dj_code'];
@@ -359,6 +555,11 @@ class PartySessionService {
     _djPlan = djPlan;
     _djName = djName;
     _djLogoUrl = djLogoUrl;
+    _isPreWishSession = PreWishHelper.isPreWishWindowOpen(partyData, now);
+    _partyStartAt = PreWishHelper.partyStartFromData(partyData);
+    _floorKey = VenuePartyFields.readFloorKey(partyData);
+    _floorLabel = (partyData['floor_label'] as String?)?.trim();
+
     _socialMediaLinks = socialLinks;
     _linkOrder = linkOrder;
     _loaded = true;
@@ -378,9 +579,26 @@ class PartySessionService {
     }
     await prefs.setString(_keySocialLinks, jsonEncode(socialLinks));
     await prefs.setString(_keyLinkOrder, jsonEncode(linkOrder));
+    await prefs.setBool(_keyIsPreWishSession, _isPreWishSession);
+    if (_partyStartAt != null) {
+      await prefs.setInt(_keyPartyStartMs, _partyStartAt!.millisecondsSinceEpoch);
+    } else {
+      await prefs.remove(_keyPartyStartMs);
+    }
+    if (_floorKey != null && _floorKey!.isNotEmpty) {
+      await prefs.setString(_keyFloorKey, _floorKey!);
+    } else {
+      await prefs.remove(_keyFloorKey);
+    }
+    if (_floorLabel != null && _floorLabel!.isNotEmpty) {
+      await prefs.setString(_keyFloorLabel, _floorLabel!);
+    } else {
+      await prefs.remove(_keyFloorLabel);
+    }
     try {
       await prefs.remove(_keyPendingPartyCode);
     } catch (_) {}
+    unawaited(WishboxSuggestionsGuestBridge.instance.bind(djId));
     return null;
   }
 
@@ -453,7 +671,7 @@ class PartySessionService {
           finishedAt != null ||
           status == 'beendet' ||
           status == 'ended') {
-        await clearSession();
+        await _clearSessionAfterPartyEnded(partyData, partyId: partyId);
         return false;
       }
 
@@ -467,7 +685,7 @@ class PartySessionService {
         endDate = DateTime.fromMillisecondsSinceEpoch(endPosix * 1000);
       }
       if (endDate != null && now.isAfter(endDate)) {
-        await clearSession();
+        await _clearSessionAfterPartyEnded(partyData, partyId: partyId);
         return false;
       }
 
@@ -488,6 +706,9 @@ class PartySessionService {
           final prefs = await SharedPreferences.getInstance();
           await prefs.setString(_keySocialLinks, jsonEncode(_socialMediaLinks));
           await prefs.setString(_keyLinkOrder, jsonEncode(_linkOrder));
+        }
+        if (_djId != null && _djId!.isNotEmpty) {
+          unawaited(WishboxSuggestionsGuestBridge.instance.bind(_djId!));
         }
         return true;
       }

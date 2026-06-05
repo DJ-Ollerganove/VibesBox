@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../config/app_config.dart';
 import '../utils/debug_log.dart';
+import 'wish_paths.dart';
 
 /// Helper-Klasse zum Finden der Admin-DJ-ID
 /// Diese Funktion wird einmalig ausgeführt, um die DJ-ID zu finden und fest einzutragen
@@ -92,8 +93,7 @@ class FindAdminDjIdHelper {
       if (possibleIds.isNotEmpty) {
         debugLog('📋 Methode 4: Suche in wishes nach djId...');
         for (final djId in possibleIds) {
-          final wishesQuery = await FirebaseFirestore.instance
-              .collection('wishes')
+          final wishesQuery = await WishPaths.allWishesCollectionGroup()
               .where('djId', isEqualTo: djId)
               .limit(1)
               .get();

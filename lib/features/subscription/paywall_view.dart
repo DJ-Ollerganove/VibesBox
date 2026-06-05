@@ -1,8 +1,7 @@
-import 'dart:ui';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import 'package:purchases_flutter/purchases_flutter.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../l10n/app_localizations.dart';
@@ -11,6 +10,7 @@ import '../../services/revenue_cat_bootstrap.dart';
 import '../../services/user_service.dart';
 import '../../utils/ui_constants.dart';
 import '../../utils/debug_log.dart';
+import '../../pages/profile/widgets/profile_edit_dialogs.dart';
 
 // --- Google Play Offers (subscriptionOptions/freePhase) statt introductoryPrice ---
 
@@ -50,6 +50,95 @@ String? getTrialDisplayString(AppLocalizations l, StoreProduct storeProduct) {
   final text = formatFreePhaseDuration(l, period);
   if (text == null) return null;
   return l.paywall_free_phase_label.replaceAll('{duration}', text);
+}
+
+/// Ersparnis in Prozent gegenüber dem Monatsabo (nur Anzeige, Store-Preise).
+int? paywallSavingsPercentVsMonthly({
+  required Package? planPackage,
+  required int planMonths,
+  required Package? monthlyPackage,
+}) {
+  if (planPackage == null || monthlyPackage == null || planMonths <= 1) {
+    return null;
+  }
+  final monthlyPrice = monthlyPackage.storeProduct.price;
+  final planPrice = planPackage.storeProduct.price;
+  if (monthlyPrice <= 0 || planPrice <= 0) return null;
+  final planPerMonth = planPrice / planMonths;
+  final savings = (1 - planPerMonth / monthlyPrice) * 100;
+  final rounded = savings.round();
+  return rounded > 0 ? rounded : null;
+}
+
+bool _paywallPriceStringShowsEuro(String priceString) {
+  return priceString.contains('€') || priceString.contains('\u20AC');
+}
+
+bool _paywallPriceStringLooksUsd(String priceString) {
+  final t = priceString.trimLeft();
+  return t.startsWith(r'$') || t.startsWith(r'US$');
+}
+
+bool _paywallPriceStringMatchesCurrency(String priceString, String currencyCode) {
+  final code = currencyCode.toUpperCase();
+  switch (code) {
+    case 'EUR':
+      return _paywallPriceStringShowsEuro(priceString);
+    case 'USD':
+      return _paywallPriceStringLooksUsd(priceString);
+    case 'GBP':
+      return priceString.contains('£');
+    case 'CHF':
+      return priceString.contains('CHF') || priceString.contains('Fr.');
+    default:
+      return true;
+  }
+}
+
+/// Geräte-Region bevorzugen (iOS: oft `de_DE`), sonst App-Sprache.
+Locale _paywallDisplayLocale(Locale materialLocale, Locale platformLocale) {
+  final pc = platformLocale.countryCode;
+  if (pc != null && pc.isNotEmpty) return platformLocale;
+  return materialLocale;
+}
+
+String _paywallFormatNumericPrice(StoreProduct sp, Locale displayLocale) {
+  final code = sp.currencyCode.toUpperCase();
+  final country = displayLocale.countryCode;
+  final localeTag = country != null && country.isNotEmpty
+      ? '${displayLocale.languageCode}_$country'
+      : displayLocale.languageCode;
+  try {
+    return NumberFormat.currency(locale: localeTag, name: code).format(sp.price);
+  } catch (_) {
+    try {
+      return NumberFormat.currency(name: code).format(sp.price);
+    } catch (_) {
+      return sp.priceString;
+    }
+  }
+}
+
+/// Store-Preis für die Paywall: immer in der **Produktwährung** ([StoreProduct.currencyCode]),
+/// nie USD-Betrag mit €-Symbol (früherer iOS-Workaround).
+///
+/// iOS Sandbox/TestFlight kann USD liefern, der Kaufdialog zeigt trotzdem die korrekte
+/// Storefront-Währung — keine manuelle „Umrechnung“ nach EUR.
+String? paywallStorePriceForDisplay(
+  Package? package,
+  Locale materialLocale,
+  Locale platformLocale,
+) {
+  if (package == null) return null;
+  final sp = package.storeProduct;
+  final ps = sp.priceString.trim();
+  if (ps.isEmpty) {
+    return _paywallFormatNumericPrice(sp, _paywallDisplayLocale(materialLocale, platformLocale));
+  }
+  if (_paywallPriceStringMatchesCurrency(ps, sp.currencyCode)) {
+    return ps;
+  }
+  return _paywallFormatNumericPrice(sp, _paywallDisplayLocale(materialLocale, platformLocale));
 }
 
 class PaywallView extends StatefulWidget {
@@ -100,11 +189,30 @@ class _PaywallViewState extends State<PaywallView> {
       if (!kIsWeb) {
         await RevenueCatBootstrap.ensureConfigured();
       }
-      final offerings = await Purchases.getOfferings();
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+        try {
+          await Purchases.syncPurchases();
+        } catch (e, st) {
+          debugLog('⚠️ Paywall: syncPurchases vor getOfferings (iOS): $e\n$st');
+        }
+      }
+      final offerings = !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS
+          ? await Purchases.syncAttributesAndOfferingsIfNeeded()
+          : await Purchases.getOfferings();
 
       final offering = offerings.all[_offeringId] ?? offerings.current;
       if (offering == null) {
         throw StateError('no_offering');
+      }
+
+      if (kDebugMode) {
+        for (final pkg in offering.availablePackages) {
+          final sp = pkg.storeProduct;
+          debugLog(
+            '💳 Paywall package=${pkg.identifier} '
+            'currencyCode=${sp.currencyCode} priceString=${sp.priceString} price=${sp.price}',
+          );
+        }
       }
 
       final customerInfo = await Purchases.getCustomerInfo();
@@ -246,7 +354,40 @@ class _PaywallViewState extends State<PaywallView> {
 
   Future<void> _startTwoDayTrial() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) return;
+    if (uid == null || _busy) return;
+
+    final l = AppLocalizations.of(context)!;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => ProfileEditDialogs.styledDialog(
+        context: dialogContext,
+        title: l.paywall_trial_confirm_title,
+        content: Text(
+          l.paywall_trial_confirm_message,
+          style: const TextStyle(color: Colors.white70, height: 1.45),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(dialogContext, rootNavigator: true).pop(false);
+            },
+            child: Text(l.cancel),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(dialogContext, rootNavigator: true).pop(true);
+            },
+            style: TextButton.styleFrom(
+              foregroundColor: UIConstants.appOrange,
+            ),
+            child: Text(l.paywall_start_trial_button),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
     setState(() => _busy = true);
     try {
       await SubscriptionSyncService.activateTwoDayTrial(uid);
@@ -417,11 +558,37 @@ class _Content extends StatelessWidget {
     final annual = findPackage(offering, PackageType.annual);
 
     final packages = <_Plan>[
-      _Plan(label: l.paywall_plan_month, package: monthly),
-      _Plan(label: l.paywall_plan_quarter, package: quarter),
-      _Plan(label: l.paywall_plan_halfyear, package: half),
-      _Plan(label: l.paywall_plan_year, package: annual, recommended: true),
+      _Plan(label: l.paywall_plan_month, package: monthly, planMonths: 1),
+      _Plan(label: l.paywall_plan_quarter, package: quarter, planMonths: 3),
+      _Plan(label: l.paywall_plan_halfyear, package: half, planMonths: 6),
+      _Plan(
+        label: l.paywall_plan_year,
+        package: annual,
+        planMonths: 12,
+        recommended: true,
+      ),
     ];
+
+    Widget planCard(_Plan plan) {
+      final savingsPercent = paywallSavingsPercentVsMonthly(
+        planPackage: plan.package,
+        planMonths: plan.planMonths,
+        monthlyPackage: monthly,
+      );
+      return _PlanCard(
+        label: plan.label,
+        package: plan.package,
+        trialText: plan.package != null
+            ? getTrialDisplayString(l, plan.package!.storeProduct)
+            : null,
+        savingsText: savingsPercent != null
+            ? l.paywall_save_up_to_percent(savingsPercent)
+            : null,
+        selected: selected?.identifier == plan.package?.identifier,
+        recommended: plan.recommended,
+        onTap: plan.package == null ? () {} : () => onSelect(plan.package!),
+      );
+    }
 
     return ListView(
       padding: const EdgeInsets.all(20),
@@ -444,61 +611,17 @@ class _Content extends StatelessWidget {
         // Grid Layout (2x2)
         Row(
           children: [
-            Expanded(
-              child: _PlanCard(
-                label: packages[0].label,
-                package: packages[0].package,
-                trialText: packages[0].package != null
-                    ? getTrialDisplayString(l, packages[0].package!.storeProduct)
-                    : null,
-                selected: selected?.identifier == packages[0].package?.identifier,
-                recommended: packages[0].recommended,
-                onTap: packages[0].package == null ? () {} : () => onSelect(packages[0].package!),
-              ),
-            ),
+            Expanded(child: planCard(packages[0])),
             const SizedBox(width: 12),
-            Expanded(
-              child: _PlanCard(
-                label: packages[1].label,
-                package: packages[1].package,
-                trialText: packages[1].package != null
-                    ? getTrialDisplayString(l, packages[1].package!.storeProduct)
-                    : null,
-                selected: selected?.identifier == packages[1].package?.identifier,
-                recommended: packages[1].recommended,
-                onTap: packages[1].package == null ? () {} : () => onSelect(packages[1].package!),
-              ),
-            ),
+            Expanded(child: planCard(packages[1])),
           ],
         ),
         const SizedBox(height: 12),
         Row(
           children: [
-            Expanded(
-              child: _PlanCard(
-                label: packages[2].label,
-                package: packages[2].package,
-                trialText: packages[2].package != null
-                    ? getTrialDisplayString(l, packages[2].package!.storeProduct)
-                    : null,
-                selected: selected?.identifier == packages[2].package?.identifier,
-                recommended: packages[2].recommended,
-                onTap: packages[2].package == null ? () {} : () => onSelect(packages[2].package!),
-              ),
-            ),
+            Expanded(child: planCard(packages[2])),
             const SizedBox(width: 12),
-            Expanded(
-              child: _PlanCard(
-                label: packages[3].label,
-                package: packages[3].package,
-                trialText: packages[3].package != null
-                    ? getTrialDisplayString(l, packages[3].package!.storeProduct)
-                    : null,
-                selected: selected?.identifier == packages[3].package?.identifier,
-                recommended: packages[3].recommended,
-                onTap: packages[3].package == null ? () {} : () => onSelect(packages[3].package!),
-              ),
-            ),
+            Expanded(child: planCard(packages[3])),
           ],
         ),
 
@@ -558,10 +681,16 @@ class _Content extends StatelessWidget {
 }
 
 class _Plan {
-  _Plan({required this.label, required this.package, this.recommended = false});
+  _Plan({
+    required this.label,
+    required this.package,
+    this.recommended = false,
+    this.planMonths = 1,
+  });
   final String label;
   final Package? package;
   final bool recommended;
+  final int planMonths;
 }
 
 class _PlanCard extends StatelessWidget {
@@ -569,6 +698,7 @@ class _PlanCard extends StatelessWidget {
     required this.label,
     required this.package,
     this.trialText,
+    this.savingsText,
     required this.selected,
     required this.recommended,
     required this.onTap,
@@ -578,6 +708,7 @@ class _PlanCard extends StatelessWidget {
   final Package? package;
   /// Testphase aus subscriptionOptions/freePhase (z. B. "4 Tage kostenlos").
   final String? trialText;
+  final String? savingsText;
   final bool selected;
   final bool recommended;
   final VoidCallback onTap;
@@ -585,7 +716,13 @@ class _PlanCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
-    final price = package?.storeProduct.priceString;
+    final materialLocale = Localizations.localeOf(context);
+    final platformLocale = WidgetsBinding.instance.platformDispatcher.locale;
+    final price = paywallStorePriceForDisplay(
+      package,
+      materialLocale,
+      platformLocale,
+    );
     final borderColor = selected ? UIConstants.appOrange : Colors.white12;
     // Leichte Orange-Füllung bei Auswahl
     final bg = selected 
@@ -645,6 +782,18 @@ class _PlanCard extends StatelessWidget {
               ),
               textAlign: TextAlign.center,
             ),
+            if (savingsText != null && savingsText!.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(
+                savingsText!,
+                style: TextStyle(
+                  color: selected ? UIConstants.appGreen : UIConstants.appGreen.withValues(alpha: 0.85),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
             if (trialText != null && trialText!.isNotEmpty) ...[
               const SizedBox(height: 2),
               Text(

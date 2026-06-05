@@ -4,6 +4,7 @@ import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:intl/intl.dart';
 import '../l10n/app_localizations.dart';
+import 'formatting_utils.dart';
 import '../utils/debug_log.dart';
 
 /// Helper für den Kalender-Export von Partys
@@ -128,7 +129,8 @@ class CalendarExportHelper {
           );
           
           // Formatiere Zeit für Titel und Beschreibung
-          timeAtLocation = DateFormat('HH:mm').format(startTimeAtLocation);
+          timeAtLocation =
+              FormattingUtils.formatClockWithSuffix(startTimeAtLocation, context);
           
         } catch (e) {
           debugLog('⚠️ Fehler bei Zeitzonen-Konvertierung: $e');
@@ -160,7 +162,10 @@ class CalendarExportHelper {
             endDateTimeUtc.second,
           );
           
-          timeAtLocation = DateFormat('HH:mm').format(startDateTimeUtc);
+          timeAtLocation = FormattingUtils.formatClockWithSuffix(
+            startDateTimeUtc.toLocal(),
+            context,
+          );
           timezoneDisplay = 'UTC';
         }
       } else {
@@ -192,7 +197,10 @@ class CalendarExportHelper {
           endDateTimeUtc.second,
         );
         
-        timeAtLocation = DateFormat('HH:mm').format(startDateTimeUtc);
+        timeAtLocation = FormattingUtils.formatClockWithSuffix(
+          startDateTimeUtc.toLocal(),
+          context,
+        );
         timezoneDisplay = 'UTC';
       }
 

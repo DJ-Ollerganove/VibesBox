@@ -1,8 +1,22 @@
 import 'package:firebase_auth/firebase_auth.dart';
 
+/// Ergebnis von [AuthService.applyEmailVerificationCodeSafely].
+enum EmailVerificationApplyOutcome {
+  /// `applyActionCode` erfolgreich.
+  applied,
+
+  /// E-Mail war bereits bestätigt (z. B. Link zuvor in Mail/Safari geöffnet).
+  alreadyVerified,
+
+  /// Gleicher oobCode wurde in dieser App-Session schon verarbeitet.
+  duplicateLink,
+}
+
 /// Gemeinsame Logik für E-Mail-Verifizierung per Deep Link (`/verify?oobCode=`) oder manuellem Code.
 class AuthService {
   AuthService._();
+
+  static final Set<String> _consumedOobCodes = <String>{};
 
   static bool uriLooksLikeAppEmailVerification(Uri uri) {
     if (uri.scheme != 'http' && uri.scheme != 'https') return false;
@@ -39,13 +53,46 @@ class AuthService {
     return null;
   }
 
-  /// Wendet den Firebase-Aktionscode an und lädt den aktuellen User neu (falls vorhanden).
-  static Future<void> applyEmailVerificationCode(String oobCode) async {
+  static Future<void> _reloadCurrentUserSilently() async {
+    try {
+      await FirebaseAuth.instance.currentUser?.reload();
+    } catch (_) {}
+  }
+
+  static bool get _isCurrentUserEmailVerified =>
+      FirebaseAuth.instance.currentUser?.emailVerified == true;
+
+  /// Wendet den Code an, ignoriert Doppel-Klicks und bereits bestätigte Konten.
+  static Future<EmailVerificationApplyOutcome> applyEmailVerificationCodeSafely(
+    String oobCode,
+  ) async {
     final trimmed = oobCode.trim();
     if (trimmed.isEmpty) {
       throw FirebaseAuthException(code: 'invalid-oob-code', message: 'empty');
     }
-    await FirebaseAuth.instance.applyActionCode(trimmed);
-    await FirebaseAuth.instance.currentUser?.reload();
+
+    if (_consumedOobCodes.contains(trimmed)) {
+      return EmailVerificationApplyOutcome.duplicateLink;
+    }
+
+    await _reloadCurrentUserSilently();
+    if (_isCurrentUserEmailVerified) {
+      _consumedOobCodes.add(trimmed);
+      return EmailVerificationApplyOutcome.alreadyVerified;
+    }
+
+    try {
+      await FirebaseAuth.instance.applyActionCode(trimmed);
+      _consumedOobCodes.add(trimmed);
+      await _reloadCurrentUserSilently();
+      return EmailVerificationApplyOutcome.applied;
+    } on FirebaseAuthException {
+      await _reloadCurrentUserSilently();
+      if (_isCurrentUserEmailVerified) {
+        _consumedOobCodes.add(trimmed);
+        return EmailVerificationApplyOutcome.alreadyVerified;
+      }
+      rethrow;
+    }
   }
 }

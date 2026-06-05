@@ -6,6 +6,7 @@ import '../l10n/app_localizations.dart';
 import '../helpers/security_helper.dart';
 import '../services/countries_service.dart';
 import '../services/user_service.dart';
+import '../services/wishbox_suggestions_settings_service.dart';
 import '../utils/ui_constants.dart';
 
 /// Pflicht-Dialog für DJs: Real Name, Land, Geburtsdatum. Nicht wegklickbar.
@@ -87,22 +88,32 @@ class _MandatoryProfileDialogState extends State<MandatoryProfileDialog> {
 
     setState(() => _saving = true);
     try {
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .update(
-            {
-              'realName': SecurityHelper.sanitize(
-                _realNameController.text.trim(),
-                maxLength: 80,
-              ),
-              'country': _selectedCountryCode,
-              'birthDate': _birthDate != null
-                  ? Timestamp.fromDate(_birthDate!)
-                  : null,
-              'hasCompletedProfile': true,
-            }.map((k, v) => MapEntry(k, SecurityHelper.sanitizeDynamic(v))),
-          );
+      final batch = FirebaseFirestore.instance.batch();
+      final userRef = FirebaseFirestore.instance.collection('users').doc(uid);
+      batch.update(
+        userRef,
+        {
+          'realName': SecurityHelper.sanitize(
+            _realNameController.text.trim(),
+            maxLength: 80,
+          ),
+          'country': _selectedCountryCode,
+          'birthDate': _birthDate != null
+              ? Timestamp.fromDate(_birthDate!)
+              : null,
+          'hasCompletedProfile': true,
+          WishboxSuggestionsSettingsService.userField: true,
+        }.map((k, v) => MapEntry(k, SecurityHelper.sanitizeDynamic(v))),
+      );
+      batch.set(
+        WishboxSuggestionsSettingsService.guestLiveRef(uid),
+        {
+          WishboxSuggestionsSettingsService.userField: true,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+      await batch.commit();
       if (mounted) {
         UserService().forceRefresh();
         Navigator.of(context).pop(true);

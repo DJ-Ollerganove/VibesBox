@@ -7,8 +7,8 @@ import '../services/active_party_service.dart';
 import '../services/duplicate_check_service.dart';
 import '../services/shazam_service.dart';
 import '../services/user_service.dart';
-import '../utils/history_last_track_dedup.dart';
 import '../utils/party_helper.dart';
+import '../utils/text_utils.dart';
 import '../utils/debug_log.dart';
 
 /// Service für Musik-History-Management
@@ -24,7 +24,7 @@ class HistoryProvider {
   
   StreamSubscription<Map<String, dynamic>?>? _shazamSubscription;
   StreamSubscription<ShazamScanStatus>? _statusSubscription;
-  StreamSubscription<QuerySnapshot>? _partiesSubscription;
+  void Function()? _storedSessionPartyListener;
   StreamSubscription<ActivePartyInfo?>? _activePartyInfoSubscription;
   StreamSubscription<QuerySnapshot>? _tracksSubscription;
   final StreamController<List<Map<String, dynamic>>> _tracksController = StreamController<List<Map<String, dynamic>>>.broadcast();
@@ -35,13 +35,16 @@ class HistoryProvider {
   String? _currentPartyName;
   bool _isRecording = false;
   bool _isProcessingTrack = false; // Lock um Race Conditions zu vermeiden
+  /// Temporärer Session-Speicher: zuletzt **in die DB geschriebener** Song (normalisierter Schlüssel).
+  /// Gleicher Song → kein erneuter Write; anderer Song → Write und Slot ersetzen. Kein Firestore-Read pro Treffer.
+  String? _lastDbWriteScopeSessionId;
+  String? _lastDbWrittenNormKey;
   bool _isHistoryListening = false; // ✅ EFFIZIENZ: Flag ob History-Streams aktiv sind
   // Caching entfernt: Threshold wird jetzt bei jedem Scan frisch aus der DB geladen
   bool get _isAdminMode => AppConfig.isAdminRole(UserService().currentUser.value);
 
   bool _coreShazamListenersAttached = false;
   String? _partiesStreamBoundUid;
-  bool _partiesStreamPermissionDeniedLogged = false;
 
   /// Initialisiert den Provider und beginnt mit dem Monitoring.
   /// Kern-Listener (Shazam) nur einmal; Party-Stream pro Firebase-UID (erneut bei Account-Wechsel).
@@ -75,29 +78,31 @@ class HistoryProvider {
 
     if (_partiesStreamBoundUid != user?.uid) {
       _partiesStreamBoundUid = user?.uid;
-      _partiesStreamPermissionDeniedLogged = false;
-      _partiesSubscription?.cancel();
-      _partiesSubscription = null;
+      if (_storedSessionPartyListener != null) {
+        ActivePartyService.storedSessionNotifier
+            .removeListener(_storedSessionPartyListener!);
+        _storedSessionPartyListener = null;
+      }
       if (user != null) {
-        _partiesSubscription = _firestore
-            .collection('parties')
-            .where('created_by', isEqualTo: user.uid)
-            .snapshots()
-            .listen(
-          (snapshot) {
-            _updateActiveParty(snapshot.docs);
-          },
-          onError: (Object e, StackTrace _) {
-            if (_partiesStreamPermissionDeniedLogged) return;
-            final msg = e.toString().toLowerCase();
-            if (msg.contains('permission')) {
-              _partiesStreamPermissionDeniedLogged = true;
-              debugLog(
-                'HistoryProvider: parties-Stream permission-denied (einmal): $e',
-              );
-            }
-          },
-        );
+        void syncFromStoredSession() {
+          final info = ActivePartyService.storedSessionNotifier.value;
+          final newId = info?.partyId;
+          final newName = info?.partyName;
+          if (_currentPartyId == newId && _currentPartyName == newName) {
+            return;
+          }
+          _currentPartyId = newId;
+          _currentPartyName = newName;
+          _checkAndUpdateSession();
+        }
+
+        _storedSessionPartyListener = syncFromStoredSession;
+        ActivePartyService.storedSessionNotifier
+            .addListener(_storedSessionPartyListener!);
+        syncFromStoredSession();
+      } else {
+        _currentPartyId = null;
+        _currentPartyName = null;
       }
     }
 
@@ -128,47 +133,6 @@ class HistoryProvider {
     _tracksSubscription = null;
     _accumulatedTracksForStream.clear();
     _lastTracksSessionId = null;
-  }
-
-  /// Aktualisiert die aktive Party basierend auf Party-Dokumenten
-  void _updateActiveParty(List<QueryDocumentSnapshot> partyDocs) {
-    try {
-      final now = DateTime.now();
-      String? activePartyId;
-      String? activePartyName;
-
-      // Finde aktive Party
-      for (final partyDoc in partyDocs) {
-        final data = partyDoc.data() as Map<String, dynamic>;
-        final startTimestamp = data['start_date'] as Timestamp?;
-        final endTimestamp = data['end_date'] as Timestamp?;
-
-        if (startTimestamp != null && endTimestamp != null) {
-          final startDate = startTimestamp.toDate();
-          final endDate = endTimestamp.toDate();
-
-          // Party ist aktiv, wenn jetzt >= Start UND jetzt < Ende
-          if (now.compareTo(startDate) >= 0 && now.compareTo(endDate) < 0) {
-            activePartyId = partyDoc.id;
-            activePartyName = data['party_name'] as String? ?? 'Unbenannte Party';
-            break;
-          }
-        }
-      }
-
-      // Aktualisiere Party-Info
-      final partyChanged = _currentPartyId != activePartyId;
-      _currentPartyId = activePartyId;
-      _currentPartyName = activePartyName;
-
-      // Tracks-Stream wird über ActivePartyService.getActivePartyInfoStream gesteuert (sessionId);
-      // bei Session-Wechsel schwenkt der Stream automatisch um.
-
-      // Prüfe ob Session gestartet/gestoppt werden muss
-      _checkAndUpdateSession();
-    } catch (e) {
-      debugLog('Fehler beim Aktualisieren der aktiven Party: $e');
-    }
   }
 
   /// Prüft ob aktuell aufgenommen werden soll
@@ -417,10 +381,8 @@ class HistoryProvider {
     }
   }
 
-  /// Prüft gegen den **letzten** Track der aktuellen Session (Party-History):
-  /// [normalizeTextForDuplicateCheck] + Durchschnitts-Ähnlichkeit ≥ 90 % und
-  /// Abstand &lt; [HistoryLastTrackDedup.minGapBeforeRepeatSameSong] → kein Schreiben.
-  /// Ablauf: zuerst nur letzten Eintrag laden → dann Dedup (ohne vorherige Keyword-/Settings-Arbeit).
+  /// Schreibt nur, wenn der Treffer **nicht** dem zuletzt in die DB geschriebenen Song entspricht
+  /// ([DuplicateCheckService]-Normalisierung wie bisher). Sonst nur Log — **kein** Firestore-Read pro Scan.
   Future<void> _checkAndAddTrack(TrackEntry newTrack) async {
     if (_currentSessionId == null) return;
 
@@ -433,95 +395,69 @@ class HistoryProvider {
     _isProcessingTrack = true;
 
     try {
-      final tracksRef = _firestore
-          .collection('music_history')
-          .doc(_currentSessionId)
-          .collection('tracks');
+      _syncLastDbWriteScope();
+      await DuplicateCheckService.ensurePartySettingsLoaded();
+      final ignored = DuplicateCheckService.getCachedIgnoredKeywords();
+      final normKey = _songNormKeyForSessionDedup(newTrack, ignored);
 
-      // 1) Zuerst nur den jüngsten Track — gleicher Song in kurzem Abstand (strengerer Match s. HistoryLastTrackDedup)
-      final lastTrack = await _fetchNewestTrackForSession(tracksRef);
-
-      if (lastTrack != null) {
-        await DuplicateCheckService.ensurePartySettingsLoaded();
-        final ignored = DuplicateCheckService.getCachedIgnoredKeywords();
-
-        final minSim = DuplicateCheckService.getCachedDuplicateThresholdOrFallback();
-        final analysis = HistoryLastTrackDedup.analyzeRapidRepeatOfLast(
-          newTitle: newTrack.title,
-          newArtist: newTrack.artist,
-          lastTitle: lastTrack.title,
-          lastArtist: lastTrack.artist,
-          lastTimestamp: lastTrack.timestamp,
-          ignoredKeywords: ignored,
-          similarityMin: minSim,
+      if (normKey.isNotEmpty && _lastDbWrittenNormKey == normKey) {
+        debugLog(
+          'History: gleicher Song wie zuletzt in DB geschrieben — überspringe Write '
+          '— „${newTrack.title}“ — „${newTrack.artist}“',
         );
-
-        if (analysis.shouldSkip) {
-          debugLog(
-            'History: Dublette ignoriert (${(analysis.avgSimilarity * 100).toStringAsFixed(0)}% eff. Match, '
-            '${analysis.elapsedSinceLast.inSeconds}s seit letztem Eintrag < '
-            '${HistoryLastTrackDedup.minGapBeforeRepeatSameSong.inSeconds}s) '
-            '— „${newTrack.title}“ — „${newTrack.artist}“',
-          );
-          return;
-        }
+        return;
       }
 
-      await addTrackToCurrentSession(newTrack);
+      final written = await addTrackToCurrentSession(newTrack);
+      if (written && normKey.isNotEmpty) {
+        _lastDbWrittenNormKey = normKey;
+      }
     } catch (e) {
-      debugLog('Fehler bei Duplikat-Prüfung: $e');
-      await addTrackToCurrentSession(newTrack);
+      debugLog('Fehler bei History-Write-Vorbereitung: $e');
+      await DuplicateCheckService.ensurePartySettingsLoaded();
+      final ignored = DuplicateCheckService.getCachedIgnoredKeywords();
+      final normKey = _songNormKeyForSessionDedup(newTrack, ignored);
+      if (normKey.isNotEmpty && _lastDbWrittenNormKey == normKey) {
+        return;
+      }
+      final written = await addTrackToCurrentSession(newTrack);
+      if (written && normKey.isNotEmpty) {
+        _lastDbWrittenNormKey = normKey;
+      }
     } finally {
       _isProcessingTrack = false;
     }
   }
 
-  /// Ein Firestore-Read für den neuesten Track (orderBy+limit), Fallback ohne Index.
-  Future<TrackEntry?> _fetchNewestTrackForSession(
-    CollectionReference<Map<String, dynamic>> tracksRef,
-  ) async {
-    try {
-      final lastSnap = await tracksRef
-          .orderBy('timestamp', descending: true)
-          .limit(1)
-          .get(const GetOptions(source: Source.serverAndCache));
-      if (lastSnap.docs.isEmpty) return null;
-      return TrackEntry.fromFirestore(lastSnap.docs.first.data());
-    } catch (e) {
-      debugLog(
-        '⚠️ HistoryProvider: letzter Track per orderBy nicht lesbar ($e), Fallback vollständiges Laden',
-      );
-      final all = await tracksRef.get(
-        const GetOptions(source: Source.serverAndCache),
-      );
-      if (all.docs.isEmpty) return null;
-      final sortedDocs = all.docs.toList()
-        ..sort((a, b) {
-          final dataA = a.data();
-          final dataB = b.data();
-          final tsA = dataA['timestamp'] as Timestamp?;
-          final tsB = dataB['timestamp'] as Timestamp?;
-          if (tsA == null && tsB == null) return 0;
-          if (tsA == null) return 1;
-          if (tsB == null) return -1;
-          return tsB.compareTo(tsA);
-        });
-      return TrackEntry.fromFirestore(sortedDocs.first.data());
+  void _syncLastDbWriteScope() {
+    final sid = _currentSessionId;
+    if (sid == null || sid.isEmpty) return;
+    if (_lastDbWriteScopeSessionId != sid) {
+      _lastDbWriteScopeSessionId = sid;
+      _lastDbWrittenNormKey = null;
     }
+  }
+
+  String _songNormKeyForSessionDedup(TrackEntry t, List<String> ignored) {
+    final nt = normalizeTextForDuplicateCheck(t.title, ignored);
+    final na = normalizeTextForDuplicateCheck(t.artist, ignored);
+    if (nt.isEmpty && na.isEmpty) return '';
+    return '$nt\x1f$na';
   }
 
   /// Fügt einen Track zur aktuellen Session hinzu
   /// WICHTIG: Pfad ist music_history/{sessionId}/tracks (Top-Level-Collection, NICHT unter parties!)
   /// Erfolgs-Log erst nach Server-Quittung; Pfad- und Auth-Validierung vor dem Schreiben
-  Future<void> addTrackToCurrentSession(TrackEntry track) async {
+  /// [true], wenn das Dokument in Firestore angelegt wurde.
+  Future<bool> addTrackToCurrentSession(TrackEntry track) async {
     // Pfad-Kontrolle: Leere/null sessionId oder party_id verhindern Schreiben
     if (_currentSessionId == null || _currentSessionId!.isEmpty) {
       debugLog('❌ HistoryProvider: ABBRUCH – sessionId ist null oder leer. Pfad music_history/{sessionId}/tracks kann nicht gebaut werden.');
-      return;
+      return false;
     }
     if (_currentPartyId == null || _currentPartyId!.isEmpty || _currentPartyId == 'manual') {
       debugLog('❌ HistoryProvider: ABBRUCH – party_id ungültig ($_currentPartyId). Schreiben ohne gültige Party verhindert.');
-      return;
+      return false;
     }
 
     final path = 'music_history/$_currentSessionId/tracks';
@@ -530,7 +466,7 @@ class HistoryProvider {
     // Berechtigungs-Check: Auth muss vorhanden sein (Firestore Rules prüfen djId == request.auth.uid)
     if (user == null || user.uid.isEmpty) {
       debugLog('❌ HistoryProvider: ABBRUCH – Kein eingeloggter User Firestore blockiert Schreibzugriff.');
-      return;
+      return false;
     }
 
     try {
@@ -565,6 +501,7 @@ class HistoryProvider {
       } catch (verifyErr) {
         debugLog('   ⚠️ Server-Verifikation fehlgeschlagen: $verifyErr');
       }
+      return true;
     } catch (e, stackTrace) {
       debugLog('❌ HistoryProvider: Fehler beim Speichern des Tracks: $e');
       debugLog('   → Exakter Fehlergrund: ${e.toString()}');
@@ -578,6 +515,7 @@ class HistoryProvider {
         } catch (_) {}
       }
       debugLog('   → Stack: $stackTrace');
+      return false;
     }
   }
 
@@ -1176,13 +1114,16 @@ class HistoryProvider {
   void dispose() {
     _shazamSubscription?.cancel();
     _statusSubscription?.cancel();
-    _partiesSubscription?.cancel();
+    if (_storedSessionPartyListener != null) {
+      ActivePartyService.storedSessionNotifier
+          .removeListener(_storedSessionPartyListener!);
+      _storedSessionPartyListener = null;
+    }
     _activePartyInfoSubscription?.cancel();
     _tracksSubscription?.cancel();
     _tracksController.close();
     _shazamSubscription = null;
     _statusSubscription = null;
-    _partiesSubscription = null;
     _activePartyInfoSubscription = null;
     _tracksSubscription = null;
   }

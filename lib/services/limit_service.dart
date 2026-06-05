@@ -2,30 +2,43 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../models/user_model.dart';
 import '../utils/time_utils.dart';
+import '../utils/wish_paths.dart';
 
 /// Service für Free-DJ-Limits (Party-Erstellung pro Abrechnungszeitraum, 12h-Dauer, Wunsch-Limits).
-/// Stichtag-Logik: Anker-Tag (anchorDay) aus freePeriodStart/createdAt.
+/// Stichtag-Logik: Anker-Tag (anchorDay) aus [freePeriodStart] (Tag des Free-Starts, z. B. Downgrade)
+/// oder ohne dieses Feld der **1.** des Monats von [createdAt] — nicht der Kalendertag der Registrierung
+/// (sonst wirkt ein Test-DJ vom 12.5. fälschlich als 12.–11.-Zyklus statt Kalendermonat Mai).
 /// Zeitraum = vom Stichtag (Start) bis genau eine Sekunde vor dem Stichtag des Folgemonats (Ende).
 ///
-/// **Gäste & Free-DJ:** Das **stündliche** Kontingent steuert die Wunschseite über
-/// `parties.guest_limit_per_hour` (bei Free-DJ typisch **1 Wish pro voller Stunde**).
-/// Zusätzlich erzwingt [canRequestSong] für `parties.dj_plan_type == 'free'` ohne Lesen von
-/// `users/` ein **2-Stunden-Fenster** (max. ein Gast-Wunsch pro Block). Das Feld `dj_plan_type`
-/// wird bei neuen Partys gesetzt und für Alt-Daten per Admin-Backfill (`backfillPartyDjPlanType`)
-/// auf den DJ-`planType` aus Firestore gespiegelt.
+/// **Gäste & Free-DJ:** Die Wunschseite (`wishes_page`) und [LimitService.canRequestSong] zählen
+/// bei `dj_plan_type == 'free'` **pro voller Kalenderstunde** ([TimeUtils.getCurrentFullHourRange])
+/// gegen `guest_limit_per_hour` bzw. `user_limit_per_hour` (typisch 1 Wunsch/Stunde). Pro-Partys:
+/// Zählung ebenfalls pro voller Stunde. Das Feld `dj_plan_type` wird bei neuen Partys gesetzt und
+/// für Alt-Daten per Admin-Backfill (`backfillPartyDjPlanType`) auf den DJ-`planType` aus Firestore gespiegelt.
 class LimitService {
   LimitService._();
 
   /// Max. Dauer einer Free-DJ-Party in Stunden.
   static const int freePartyMaxDurationHours = 12;
 
-  /// Wunsch-Limit: 1 Song pro 2-Stunden-Block (nur für Free-DJ-Partys).
-  static const double freeWishBlockHours = 2.0;
+  /// Kalenderdatum, an dem der Free-Abrechnungszyklus „hängt“ (Stichtag = dieser Tag jeden Monat).
+  /// [freePeriodStart] = tatsächlicher Free-Start (z. B. Downgrade). Ohne: **1.** des Monats von [createdAt].
+  static DateTime? effectiveFreeBillingAnchorDate(UserModel user) {
+    final fp = user.freePeriodStart;
+    if (fp != null) {
+      return DateTime(fp.year, fp.month, fp.day);
+    }
+    final ca = user.createdAt?.toDate();
+    if (ca != null) {
+      return DateTime(ca.year, ca.month, 1);
+    }
+    return null;
+  }
 
   /// Liefert den Anker-Tag (1–31) aus dem User für die Stichtag-Logik.
-  /// Quelle: [user.freePeriodStart], Fallback [user.createdAt].
+  /// Quelle: [effectiveFreeBillingAnchorDate].
   static int getAnchorDay(UserModel user) {
-    final anchor = user.freePeriodStart ?? user.createdAt?.toDate();
+    final anchor = effectiveFreeBillingAnchorDate(user);
     if (anchor == null) return 1;
     final day = anchor.day;
     if (day < 1) return 1;
@@ -120,16 +133,20 @@ class LimitService {
   /// Für Lösch-Dialog und Cloud Function, wenn kein UserModel vorhanden.
   static int getAnchorDayFromUserData(Map<String, dynamic>? data) {
     if (data == null) return 1;
-    DateTime? anchor;
+    DateTime? anchorCal;
     final fp = data['free_period_start'] as Timestamp?;
     if (fp != null) {
-      anchor = fp.toDate();
+      final d = fp.toDate();
+      anchorCal = DateTime(d.year, d.month, d.day);
     } else {
       final ca = data['created_at'] as Timestamp?;
-      if (ca != null) anchor = ca.toDate();
+      if (ca != null) {
+        final d = ca.toDate();
+        anchorCal = DateTime(d.year, d.month, 1);
+      }
     }
-    if (anchor == null) return 1;
-    final day = anchor.day;
+    if (anchorCal == null) return 1;
+    final day = anchorCal.day;
     if (day < 1) return 1;
     if (day > 31) return 31;
     return day;
@@ -222,10 +239,11 @@ class LimitService {
     return DateTime.now().isAfter(end);
   }
 
-  /// Prüft, ob ein Gast in dieser Party im aktuellen 2-Stunden-Block noch einen Wunsch abgeben darf.
+  /// Prüft, ob ein Gast in dieser Party in der **aktuellen vollen Stunde** noch einen Wunsch
+  /// abgeben darf (Free-DJ-Party).
   /// Gilt nur, wenn der DJ der Party ein Free-User ist (planType == 'free').
   /// DJ-Wünsche (is_dj_wish) zählen nicht.
-  /// Returns: true = darf Wunsch senden, false = bereits 1 Wunsch in diesem Block.
+  /// Returns: true = darf Wunsch senden, false = bereits 1 Wunsch in dieser Stunde.
   static Future<bool> canRequestSong(String clientId, String partyId) async {
     if (partyId.isEmpty || clientId.isEmpty) return true;
     try {
@@ -238,25 +256,28 @@ class LimitService {
       final djPlan =
           (partyData['dj_plan_type'] as String?)?.trim().toLowerCase();
       // Ohne `dj_plan_type`: Zusatz-Check entfällt (stündliches Limit über guest_limit_per_hour bleibt).
-      // Nach Backfill sollte der Wert gesetzt sein, damit das Free-DJ-2h-Fenster wie vorgesehen greift.
       if (djPlan == null || djPlan.isEmpty) return true;
       if (djPlan != 'free') return true;
 
-      final range = TimeUtils.getTwoHourBlockRange(DateTime.now());
-      final snapshot = await FirebaseFirestore.instance
-          .collection('wishes')
-          .where('party_id', isEqualTo: partyId)
+      final range = TimeUtils.getCurrentFullHourRange(DateTime.now());
+      final snapshot = await WishPaths.partyWishes(partyId)
           .where('client_id', isEqualTo: clientId)
+          .where(
+            'createdAt',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(range.start),
+          )
           .get();
 
       int count = 0;
       for (final doc in snapshot.docs) {
         final data = doc.data();
         if (data['is_dj_wish'] == true) continue;
+        if (data['is_pre_wish'] == true) continue;
+        if (data['is_duplicate'] == true) continue;
         final createdAt = data['createdAt'] as Timestamp?;
         if (createdAt == null) continue;
         final t = createdAt.toDate();
-        if (!t.isBefore(range.blockStart) && t.isBefore(range.blockEndExclusive)) count++;
+        if (!t.isBefore(range.start) && t.isBefore(range.endExclusive)) count++;
       }
       return count < 1;
     } catch (e) {

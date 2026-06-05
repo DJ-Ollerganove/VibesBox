@@ -1,6 +1,7 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'dart:math';
 import 'dart:convert';
@@ -23,8 +24,25 @@ import '../widgets/common/pwa_widget_cell.dart';
 import '../helpers/security_helper.dart';
 import 'location_map_picker_page.dart';
 import '../widgets/party_creation/location_picker.dart';
+import '../services/pre_wish_limit_service.dart';
+import '../widgets/party_pre_wish_settings_field.dart';
 import '../widgets/scroll_indicator_overlay.dart';
+import '../widgets/vibesbox_info_dialog.dart';
 import '../utils/debug_log.dart';
+import '../utils/formatting_utils.dart';
+import '../widgets/party_creation/party_wizard_step_kind.dart';
+import '../widgets/party_creation/public_venue_floor_field.dart';
+import '../widgets/party_creation/dj_venue_bookmark_picker.dart';
+import '../constants/venue_constants.dart';
+import '../models/venue_model.dart';
+import '../models/floor_occupancy_info.dart';
+import '../models/venue_bookmark_model.dart';
+import '../models/venue_floor.dart';
+import '../services/venue_service.dart';
+import '../services/venue_party_conflict_service.dart';
+import '../services/dj_venue_bookmark_service.dart';
+import '../utils/floor_key_utils.dart';
+import '../utils/venue_party_fields.dart';
 
 // Sanitization-Funktion: Entfernt potenziell gefährliche Zeichen und HTML-Tags
 String sanitizeInput(String input) {
@@ -37,23 +55,72 @@ class NeuePartyPage extends StatefulWidget {
   @override
   State<NeuePartyPage> createState() => _NeuePartyPageState();
 
+  /// Dialog-Breite: breit, auf Tablet leicht begrenzt.
+  static double wizardShellWidth(Size screenSize) {
+    const horizontalMargin = 16.0;
+    final isTablet = screenSize.shortestSide >= 600;
+
+    var width = screenSize.width - horizontalMargin * 2;
+    if (isTablet) {
+      width = min(width, 560.0);
+    }
+    return width.clamp(300.0, 620.0);
+  }
+
+  /// Dialog-Höhe: max. 70 % des sichtbaren Bereichs (über der Tastatur).
+  static double wizardShellHeight({
+    required double availableHeight,
+    required double fullScreenHeight,
+  }) {
+    const maxFraction = 0.70;
+    final target = min(
+      availableHeight * maxFraction,
+      fullScreenHeight * maxFraction,
+    );
+    return target.clamp(320.0, availableHeight);
+  }
+
   /// Zeigt die Neue Party Seite als Dialog
   static Future<void> show(BuildContext context) async {
     await showDialog(
       context: context,
       barrierColor: Colors.black.withValues(alpha: 0.7),
       barrierDismissible: true,
-      builder: (dialogContext) => Dialog(
-        backgroundColor: Colors.transparent,
-        insetPadding: const EdgeInsets.all(16),
-        child: Container(
-          constraints: BoxConstraints(
-            maxWidth: MediaQuery.of(context).size.width * 0.9,
-            maxHeight: MediaQuery.of(context).size.height * 0.9,
+      builder: (dialogContext) {
+        final mq = MediaQuery.of(dialogContext);
+        final topInset = mq.viewPadding.top + 12;
+        final bottomInset = mq.viewPadding.bottom + mq.viewInsets.bottom + 12;
+        final availableHeight = mq.size.height - topInset - bottomInset;
+        final width = wizardShellWidth(mq.size).clamp(280.0, mq.size.width - 32);
+        final height = wizardShellHeight(
+          availableHeight: availableHeight,
+          fullScreenHeight: mq.size.height,
+        );
+
+        return MediaQuery(
+          // Innen kein Keyboard-Resize — Höhe wird im Dialog-Builder gesteuert
+          data: mq.copyWith(
+            viewInsets: EdgeInsets.zero,
+            size: Size(width, height),
           ),
-          child: const NeuePartyPage(),
-        ),
-      ),
+          child: Dialog(
+            alignment: Alignment.center,
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            insetPadding: EdgeInsets.only(
+              left: 16,
+              right: 16,
+              top: topInset,
+              bottom: bottomInset,
+            ),
+            child: SizedBox(
+              width: width,
+              height: height,
+              child: const NeuePartyPage(),
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -89,6 +156,8 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       false; // Immer denselben Party-Code für diesen Ort verwenden
   bool _useOneTimeEventCode =
       false; // Einmaligen Event-Code nutzen (ignoriere festen Code)
+  bool _allowPreWishes = false; // Vorab-Wünsche per Party-Code vor Start
+  int _preWishLimitPerGuest = 0; // 0 = unbegrenzt, 1–50 = Limit pro Gast
   LocationModel? _selectedLocationModel; // Ausgewählte Location aus Dialog
   bool _wasMapAdjusted =
       false; // true wenn Ort gerade über Karte gewählt/angepasst wurde → Button dezenter
@@ -108,11 +177,40 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
   List<QueryDocumentSnapshot>?
   _allParties; // Alle Partys des DJs für Überschneidungsprüfung
 
+  int _wizardStep = 0;
+
+  // Venue / Floor (nur öffentliche Partys, neues Modell — Legacy-Partys unberührt)
+  final VenueService _venueService = VenueService();
+  final VenuePartyConflictService _venueConflictService =
+      VenuePartyConflictService();
+  final DjVenueBookmarkService _venueBookmarkService =
+      DjVenueBookmarkService();
+  VenueModel? _matchedVenue;
+  String? _selectedFloorKey;
+  Set<String> _occupiedFloorKeys = {};
+  Map<String, FloorOccupancyInfo> _floorOccupancyByKey = {};
+  bool _hasVenueOverlap = false;
+  bool _defaultFloorAvailable = true;
+  bool _isFirstDjInVenueWindow = true;
+  bool _venueContextLoading = false;
+  String? _pendingNewFloorLabel;
+
+  List<PartyWizardStepKind> get _activeWizardSteps =>
+      partyWizardStepsForType(_partyType);
+
+  int get _wizardStepCount => _activeWizardSteps.length;
+
+  PartyWizardStepKind get _currentWizardStepKind =>
+      _activeWizardSteps[_wizardStep];
+
   @override
   void initState() {
     super.initState();
     _loadLocations();
     _updateSystemTimezone();
+    _partyNameController.addListener(() {
+      if (mounted) setState(() {});
+    });
     _loadAllParties(); // Lade alle Partys für Überschneidungsprüfung
     // Free-DJ: Limits fest auf 1 setzen (UI wird in _buildWishLimitsSection deaktiviert)
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -210,7 +308,372 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
         _selectedGuestLimit != null &&
         _selectedUserLimit != null &&
         _validationError == null &&
-        _partyNameController.text.trim().isNotEmpty;
+        _partyNameController.text.trim().length >= 3;
+  }
+
+  bool get _isPartyNameStepValid =>
+      _partyNameController.text.trim().length >= 3;
+
+  bool get _isLocationStepValid {
+    switch (_locationSelectionMode) {
+      case 'current':
+        return _partyType == 'private';
+      case 'search':
+        return _selectedGooglePlace != null;
+      case 'dropdown':
+        return _selectedLocationModel != null;
+      default:
+        return false;
+    }
+  }
+
+  bool get _isStartStepValid {
+    if (_startDate == null || _startHour == null || _startMinute == null) {
+      return false;
+    }
+    final start = DateTime(
+      _startDate!.year,
+      _startDate!.month,
+      _startDate!.day,
+      _startHour!,
+      _startMinute!,
+    );
+    return !start.isBefore(_getMinStartDateTime());
+  }
+
+  bool get _isEndStepValid {
+    if (!_isStartStepValid) return false;
+    if (_endDate == null || _endHour == null || _endMinute == null) {
+      return false;
+    }
+    return _validationError == null;
+  }
+
+  bool get _isPublicLocationFloorStepValid {
+    if (!_isPublicLocationWithCoordinates) return false;
+    if (_venueContextLoading) return false;
+    if (_selectedFloorKey == null || _selectedFloorKey!.isEmpty) return false;
+    if (!_defaultFloorAvailable &&
+        FloorKeyUtils.isDefaultFloorKey(_selectedFloorKey)) {
+      return false;
+    }
+    if (_occupiedFloorKeys.contains(_selectedFloorKey)) return false;
+    return true;
+  }
+
+  bool get _isPublicLocationWithCoordinates {
+    return _resolveLocationCoordinates() != null;
+  }
+
+  ({double lat, double lng})? _resolveLocationCoordinates() {
+    if (_locationSelectionMode == 'dropdown' &&
+        _selectedLocationModel != null) {
+      final lat = _selectedLocationModel!.latitude;
+      final lng = _selectedLocationModel!.longitude;
+      if (lat != null && lng != null) return (lat: lat, lng: lng);
+    }
+    if (_locationSelectionMode == 'search' && _selectedGooglePlace != null) {
+      return (
+        lat: _selectedGooglePlace!.latitude,
+        lng: _selectedGooglePlace!.longitude,
+      );
+    }
+    return null;
+  }
+
+  DateTime? _plannedStartDateTime() {
+    if (_startDate == null || _startHour == null || _startMinute == null) {
+      return null;
+    }
+    return DateTime(
+      _startDate!.year,
+      _startDate!.month,
+      _startDate!.day,
+      _startHour!,
+      _startMinute!,
+    );
+  }
+
+  DateTime? _plannedEndDateTime() {
+    if (_endDate == null || _endHour == null || _endMinute == null) {
+      return null;
+    }
+    return DateTime(
+      _endDate!.year,
+      _endDate!.month,
+      _endDate!.day,
+      _endHour!,
+      _endMinute!,
+    );
+  }
+
+  Future<void> _refreshVenueContext() async {
+    if (_partyType != 'public') return;
+    final coords = _resolveLocationCoordinates();
+    final start = _plannedStartDateTime();
+    final end = _plannedEndDateTime();
+    if (coords == null || start == null || end == null) {
+      setState(() {
+        _matchedVenue = null;
+        _occupiedFloorKeys = {};
+        _hasVenueOverlap = false;
+        _defaultFloorAvailable = true;
+        _isFirstDjInVenueWindow = true;
+        _selectedFloorKey = null;
+      });
+      return;
+    }
+
+    setState(() => _venueContextLoading = true);
+    try {
+      final venue = await _venueService.findMatchingVenue(
+        latitude: coords.lat,
+        longitude: coords.lng,
+        placeId: _selectedGooglePlace?.placeId,
+      );
+
+      Set<String> occupied = {};
+      Map<String, FloorOccupancyInfo> occupancy = {};
+      var overlap = false;
+      if (venue != null) {
+        occupied = await _venueConflictService.occupiedFloorKeys(
+          venueId: venue.id,
+          start: start,
+          end: end,
+        );
+        occupancy = await _venueConflictService.occupancyByFloorKey(
+          venueId: venue.id,
+          start: start,
+          end: end,
+        );
+        overlap = await _venueConflictService.hasVenueOverlap(
+          venueId: venue.id,
+          start: start,
+          end: end,
+        );
+      }
+
+      final defaultAvailable = !occupied.contains(VenueConstants.defaultFloorKey);
+      String? nextFloorKey = _selectedFloorKey;
+      if (nextFloorKey == null ||
+          occupied.contains(nextFloorKey) ||
+          (!defaultAvailable &&
+              FloorKeyUtils.isDefaultFloorKey(nextFloorKey))) {
+        nextFloorKey = defaultAvailable
+            ? VenueConstants.defaultFloorKey
+            : null;
+        if (nextFloorKey == null && venue != null) {
+          for (final floor in venue.floors) {
+            if (!occupied.contains(floor.key)) {
+              nextFloorKey = floor.key;
+              break;
+            }
+          }
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _matchedVenue = venue;
+        _occupiedFloorKeys = occupied;
+        _floorOccupancyByKey = occupancy;
+        _hasVenueOverlap = overlap;
+        _defaultFloorAvailable = defaultAvailable;
+        _isFirstDjInVenueWindow = !overlap;
+        _selectedFloorKey = nextFloorKey;
+        if (_hasVenueOverlap) {
+          _useOneTimeEventCode = false;
+        }
+      });
+    } catch (e) {
+      debugLog('⚠️ Venue-Kontext: $e');
+    } finally {
+      if (mounted) setState(() => _venueContextLoading = false);
+    }
+  }
+
+  Future<void> _applyVenueBookmark(VenueBookmarkModel bookmark) async {
+    setState(() {
+      _locationSelectionMode = 'search';
+      _selectedLocationId = null;
+      _selectedLocationModel = null;
+      locationId = null;
+      _locationNameController.text = bookmark.locationName;
+      _currentTimezoneId = bookmark.timezoneId;
+      _selectedGooglePlace = LocationResult(
+        placeId: bookmark.venueId ?? '',
+        name: bookmark.locationName,
+        address: bookmark.address ?? '',
+        latitude: bookmark.latitude ?? 0,
+        longitude: bookmark.longitude ?? 0,
+        timezoneId: bookmark.timezoneId,
+      );
+      _wasMapAdjusted = bookmark.latitude != null && bookmark.longitude != null;
+    });
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) {
+      unawaited(
+        _venueBookmarkService.touchBookmark(
+          djId: uid,
+          bookmarkId: bookmark.id,
+        ),
+      );
+    }
+    if (_partyType == 'public') {
+      await _refreshVenueContext();
+    }
+  }
+
+  Future<void> _showAddFloorDialog() async {
+    final l = AppLocalizations.of(context)!;
+    final controller = TextEditingController();
+    final label = await showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: UIConstants.bgGradientEnd,
+          title: Text(l.party_floor_add_dialog_title),
+          content: TextField(
+            controller: controller,
+            decoration: InputDecoration(
+              hintText: l.party_floor_add_dialog_hint,
+            ),
+            autofocus: true,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(l.cancel),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.pop(ctx, controller.text.trim()),
+              child: Text(l.save),
+            ),
+          ],
+        );
+      },
+    );
+    controller.dispose();
+    if (label == null || label.isEmpty) return;
+    if (!mounted) return;
+
+    final key = FloorKeyUtils.slugFromLabel(label);
+    setState(() {
+      _pendingNewFloorLabel = label;
+      _selectedFloorKey = key;
+      if (_matchedVenue != null &&
+          _matchedVenue!.floorByKey(key) == null) {
+        _matchedVenue = VenueModel(
+          id: _matchedVenue!.id,
+          name: _matchedVenue!.name,
+          address: _matchedVenue!.address,
+          latitude: _matchedVenue!.latitude,
+          longitude: _matchedVenue!.longitude,
+          timezoneId: _matchedVenue!.timezoneId,
+          fixedPartyCode: _matchedVenue!.fixedPartyCode,
+          placeId: _matchedVenue!.placeId,
+          floors: [
+            ..._matchedVenue!.floors,
+            VenueFloor(key: key, label: label),
+          ],
+          createdBy: _matchedVenue!.createdBy,
+          createdAt: _matchedVenue!.createdAt,
+          updatedAt: _matchedVenue!.updatedAt,
+        );
+      }
+    });
+  }
+
+  void _resetVenueFloorState() {
+    _matchedVenue = null;
+    _selectedFloorKey = null;
+    _occupiedFloorKeys = {};
+    _hasVenueOverlap = false;
+    _defaultFloorAvailable = true;
+    _isFirstDjInVenueWindow = true;
+    _venueContextLoading = false;
+    _pendingNewFloorLabel = null;
+  }
+
+  void _clampWizardStepForPartyType() {
+    final maxIndex = _wizardStepCount - 1;
+    if (_wizardStep > maxIndex) {
+      _wizardStep = maxIndex;
+    }
+  }
+
+  bool get _isLimitsStepValid =>
+      _selectedGuestLimit != null && _selectedUserLimit != null;
+
+  bool _canProceedFromStep(int step) {
+    if (step < 0 || step >= _activeWizardSteps.length) return false;
+    switch (_activeWizardSteps[step]) {
+      case PartyWizardStepKind.eventType:
+        return _partyType == 'private' || _partyType == 'public';
+      case PartyWizardStepKind.partyName:
+        return _isPartyNameStepValid;
+      case PartyWizardStepKind.location:
+        return _isLocationStepValid;
+      case PartyWizardStepKind.locationWithFloor:
+        return _isPublicLocationFloorStepValid;
+      case PartyWizardStepKind.startTime:
+        return _isStartStepValid;
+      case PartyWizardStepKind.endTime:
+        return _isEndStepValid;
+      case PartyWizardStepKind.wishLimits:
+        return _isLimitsStepValid;
+      case PartyWizardStepKind.preWishes:
+        return true;
+    }
+  }
+
+  void _goBack() {
+    if (_wizardStep <= 0) return;
+    setState(() => _wizardStep--);
+    if (_scrollController.hasClients) {
+      _scrollController.jumpTo(0);
+    }
+  }
+
+  void _goNext() {
+    if (!_canProceedFromStep(_wizardStep)) return;
+    if (_wizardStep >= _wizardStepCount - 1) return;
+    final nextStep = _wizardStep + 1;
+    setState(() => _wizardStep = nextStep);
+    if (_scrollController.hasClients) {
+      _scrollController.jumpTo(0);
+    }
+    if (_activeWizardSteps[nextStep] ==
+        PartyWizardStepKind.locationWithFloor) {
+      _refreshVenueContext();
+    }
+  }
+
+  void _showRegisteredAppGuestInfo(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
+    showVibesBoxInfoDialog(
+      context,
+      title: l.party_registered_app_guest_info_title,
+      body: l.party_registered_app_guest_info_body,
+    );
+  }
+
+  Widget _wizardStepCard(Widget child) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [UIConstants.bgGradientStart, UIConstants.bgGradientEnd],
+        ),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: UIConstants.appOrange, width: 2),
+      ),
+      child: child,
+    );
   }
 
   /// Ermittelt synchron die System-Zeitzone des Geräts (für Anzeige & Speicherung bei "Meine aktuelle Zeitzone")
@@ -652,9 +1115,12 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       });
       _validatePartyTimes(); // Validierung nach Änderung
       _scrollToStartTimePicker();
-      // Free-DJ: Limit-Check für gewähltes Datum (Abrechnungszeitraum mit Stichtag-Logik)
+      // Free-DJ: Limit-Hinweis nur privat (öffentlich erst nach Location/Venue)
       final userModel = UserService().currentUser.value;
-      if (userModel != null && userModel.isFree && mounted) {
+      if (userModel != null &&
+          userModel.isFree &&
+          _partyType != 'public' &&
+          mounted) {
         final canCreate = await LimitService.checkPartyCreationLimit(
           userModel,
           plannedStartDate: picked,
@@ -1544,11 +2010,23 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
         if (locationModel.fixedPartyCode != null) {
           debugLog('   Fester Code vorhanden: ${locationModel.fixedPartyCode}');
         }
+        if (_partyType == 'public') {
+          _refreshVenueContext();
+        }
       },
     );
   }
 
   Future<void> _saveParty() async {
+    if (_partyNameController.text.trim().length < 3) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(AppLocalizations.of(context)!.party_name_min_length),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
     if (!_formKey.currentState!.validate()) {
       return;
     }
@@ -1643,6 +2121,22 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
     final isFree = userModel != null && userModel.isFree;
     final guestLimit = isFree ? 1 : _selectedGuestLimit!;
     final userLimit = isFree ? 1 : _selectedUserLimit!;
+
+    if (_partyType == 'public') {
+      if (!_isPublicLocationFloorStepValid) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              _isPublicLocationWithCoordinates
+                  ? l10n.party_floor_select_hint
+                  : l10n.party_public_location_coords_required,
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+    }
 
     setState(() {
       _isLoading = true;
@@ -1766,37 +2260,84 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
         maxLength: 100,
       );
 
-      // Nutze PartyService für Code-Generierung mit Retry-Logik
-      // Logik:
-      // - Öffentlich + Location mit fixed_party_code + "Einmaligen Code" AUS: Nutze festen Code
-      // - Öffentlich + Location mit fixed_party_code + "Einmaligen Code" AN: Generiere dynamischen Code
-      // - Öffentlich + Location ohne fixed_party_code: Generiere dynamischen Code
-      // - Privat: Immer dynamischen Code (auch bei gespeicherten Locations)
-      try {
-        // Prüfe ob Location mit festem Code gewählt wurde und ob dieser verwendet werden soll
-        bool shouldUseFixedCode = false;
-        if (_partyType == 'public' &&
-            locationIdForPartyCode != null &&
-            _selectedLocationModel != null &&
-            _selectedLocationModel!.fixedPartyCode != null &&
-            !_useOneTimeEventCode) {
-          // Öffentlich + Location mit festem Code + Option "Einmaligen Code" ist AUS
-          shouldUseFixedCode = true;
+      VenueModel? resolvedVenue;
+      var isCoVenueDj = false;
+
+      if (_partyType == 'public') {
+        final coords = _resolveLocationCoordinates();
+        if (coords == null) {
+          throw Exception(l10n.party_public_location_coords_required);
         }
 
-        if (shouldUseFixedCode) {
-          // Verwende festen Code der Location
-          partyCode = _selectedLocationModel!.fixedPartyCode!;
-          debugLog('✅ Verwende festen Code der Location: $partyCode');
-        } else {
-          // Generiere dynamischen Code (100k-899k)
-          // Bei privaten Partys: locationIdForPartyCode wird ignoriert (immer dynamisch)
-          // Bei öffentlichen Partys: locationIdForPartyCode wird ignoriert wenn _useOneTimeEventCode = true
-          partyCode = await PartyService.generatePartyCode(
-            isFixedCode: false,
+        resolvedVenue = await _venueService.resolveOrCreateVenue(
+          name: (locationName != null && locationName!.trim().isNotEmpty)
+              ? locationName!.trim()
+              : l10n.unnamed_location,
+          address: locationAddress,
+          latitude: coords.lat,
+          longitude: coords.lng,
+          timezoneId: timezoneId ?? 'UTC',
+          createdBy: createdBy,
+          placeId: placeId,
+        );
+
+        if (_pendingNewFloorLabel != null &&
+            _selectedFloorKey != null &&
+            resolvedVenue.floorByKey(_selectedFloorKey!) == null) {
+          resolvedVenue = await _venueService.addFloor(
+            venueId: resolvedVenue.id,
+            floorLabel: _pendingNewFloorLabel!,
             createdBy: createdBy,
           );
-          debugLog('✅ Dynamischer Party-Code generiert: $partyCode');
+        }
+
+        isCoVenueDj = await _venueConflictService.hasVenueOverlap(
+          venueId: resolvedVenue.id,
+          start: startDateTime,
+          end: endDateTime,
+        );
+      }
+
+      // Nutze PartyService für Code-Generierung mit Retry-Logik
+      try {
+        if (_partyType == 'public' && resolvedVenue != null) {
+          final useOneTime = _useOneTimeEventCode &&
+              !isCoVenueDj &&
+              _isFirstDjInVenueWindow;
+          if (useOneTime) {
+            partyCode = await PartyService.generatePartyCode(
+              isFixedCode: false,
+              createdBy: createdBy,
+            );
+            debugLog('✅ Einmal-Code (öffentlich): $partyCode');
+          } else {
+            partyCode = resolvedVenue.fixedPartyCode ??
+                await PartyService.generatePartyCode(
+                  isFixedCode: true,
+                  createdBy: createdBy,
+                );
+            debugLog('✅ Venue-Festcode: $partyCode');
+          }
+        } else {
+          bool shouldUseFixedCode = false;
+          if (_partyType == 'public' &&
+              locationIdForPartyCode != null &&
+              _selectedLocationModel != null &&
+              _selectedLocationModel!.fixedPartyCode != null &&
+              !_useOneTimeEventCode) {
+            shouldUseFixedCode = true;
+          }
+
+          if (shouldUseFixedCode) {
+            partyCode = _selectedLocationModel!.fixedPartyCode!;
+            debugLog('✅ Verwende festen Code der Location: $partyCode');
+          } else {
+            partyCode = await PartyService.generatePartyCode(
+              isFixedCode: false,
+              createdBy: createdBy,
+            );
+            debugLog('✅ Dynamischer Party-Code generiert: $partyCode');
+          }
         }
       } catch (e) {
         debugLog('❌ Fehler bei Party-Code-Generierung: $e');
@@ -1947,16 +2488,33 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
         'djId': createdBy, // Explizit für Firestore-Rules (allow create: djId == request.auth.uid)
         'created_by_email': createdByEmail, // Email des DJs
         'dj_code': createdBy, // DJ-Code (User-ID des DJs)
-        // Für Gäste: Abo-Stufe ohne users-Lesezugriff (Wish-Limit pro 2h-Block)
+        // Für Gäste: Abo-Stufe ohne users-Lesezugriff (Wish-Limit pro voller Stunde bei Free-DJ)
         'dj_plan_type':
             (userModel?.planType ?? 'free').trim().toLowerCase(),
         'guest_limit_per_hour': guestLimit,
         'user_limit_per_hour': userLimit,
       };
 
-      // Füge location_id nur bei öffentlichen Partys hinzu (wenn vorhandene Location ausgewählt)
+      // Füge location_id nur bei öffentlichen Partys hinzu (Legacy-Kompatibilität)
       if (_partyType == 'public' && locationIdForPartyCode != null) {
         partyData['location_id'] = locationIdForPartyCode;
+      }
+
+      if (_partyType == 'public' && resolvedVenue != null) {
+        final floorLabel = _selectedFloorKey != null &&
+                !FloorKeyUtils.isDefaultFloorKey(_selectedFloorKey)
+            ? resolvedVenue.floorByKey(_selectedFloorKey!)?.label ??
+                _pendingNewFloorLabel
+            : null;
+        final venueFields = VenuePartyFields.build(
+          venueId: resolvedVenue.id,
+          floorKey: _selectedFloorKey,
+          floorLabel: floorLabel,
+          isCoVenueDj: isCoVenueDj,
+        );
+        for (final entry in venueFields.entries) {
+          partyData[entry.key] = entry.value;
+        }
       }
 
       // Füge Location-Daten hinzu (nur wenn vorhanden – keine Platzhalter)
@@ -2005,6 +2563,13 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       }
       // Privatsphäre-Einstellung
       partyData['show_location_publicly'] = _showLocationPublicly;
+      partyData['allow_pre_wishes'] =
+          _partyType == 'public' ? false : _allowPreWishes;
+      partyData['pre_wish_limit_per_guest'] =
+          PreWishLimitService.clampForSave(
+        _preWishLimitPerGuest,
+        allowPreWishes: _partyType == 'public' ? false : _allowPreWishes,
+      );
 
       // ✅ Füge DJ-Logo hinzu (Key: dj_logo für PWA-Kompatibilität)
       if (djLogoUrl != null && djLogoUrl.isNotEmpty) {
@@ -2016,10 +2581,9 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       debugLog('🔍 Location ID: ${locationIdForPartyCode ?? "null"}');
       debugLog('🔍 DJ Logo URL: ${djLogoUrl ?? "kein Logo"}');
 
-      // Free-DJ: Wenn bereits eine aktive Party im Zyklus existiert, neue als standby speichern (mit Hinweis).
-      // Sonst: bei Limit-Erreichen (canCreate=false) trotzdem speichern als standby, damit User die Party anlegt.
+      // Free-DJ: Co-DJ an Venue zählt nicht gegen Monatslimit (active, kein standby).
       bool saveAsStandby = false;
-      if (userModel != null && userModel.isFree) {
+      if (userModel != null && userModel.isFree && !isCoVenueDj) {
         final canCreate = await PartyService.canCreateParty(
           userModel,
           plannedStartDate: localStartDateTime,
@@ -2075,6 +2639,43 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
           _isLoading = false;
         });
         return;
+      }
+
+      if (_partyType == 'public' && resolvedVenue != null) {
+        try {
+          await _venueBookmarkService.upsertBookmark(
+            djId: createdBy,
+            venueId: resolvedVenue.id,
+            locationName: (locationName != null && locationName!.trim().isNotEmpty)
+                ? locationName!.trim()
+                : resolvedVenue.name,
+            address: locationAddress ?? resolvedVenue.address,
+            latitude: latitude ?? resolvedVenue.latitude,
+            longitude: longitude ?? resolvedVenue.longitude,
+            timezoneId: timezoneId ?? resolvedVenue.timezoneId,
+            source: VenueBookmarkModel.sourcePublic,
+          );
+        } catch (e) {
+          debugLog('⚠️ Venue-Bookmark: $e');
+        }
+      } else if (_partyType == 'private' &&
+          locationName != null &&
+          locationName!.trim().isNotEmpty &&
+          latitude != null &&
+          longitude != null) {
+        try {
+          await _venueBookmarkService.upsertBookmark(
+            djId: createdBy,
+            locationName: locationName!.trim(),
+            address: locationAddress,
+            latitude: latitude,
+            longitude: longitude,
+            timezoneId: timezoneId ?? 'UTC',
+            source: VenueBookmarkModel.sourcePrivate,
+          );
+        } catch (e) {
+          debugLog('⚠️ Venue-Bookmark (privat): $e');
+        }
       }
 
       // Location speichern (wenn Checkbox aktiviert und Google Place/Karte ausgewählt)
@@ -2274,9 +2875,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
   String _formatDate(DateTime? date, BuildContext context) {
     final localizations = AppLocalizations.of(context)!;
     if (date == null) return localizations.not_selected;
-    // Verwende dynamisches Datumsformat basierend auf Locale
-    final locale = Localizations.localeOf(context);
-    return DateFormat.yMd(locale.toString()).format(date);
+    return FormattingUtils.formatDateForLocale(date, context);
   }
 
   String _formatStartTime(BuildContext context) {
@@ -2583,41 +3182,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
   String _formatTime(TimeOfDay? time, BuildContext context) {
     final localizations = AppLocalizations.of(context)!;
     if (time == null) return localizations.not_selected;
-
-    // Erstelle ein DateTime-Objekt für die Formatierung
-    final now = DateTime.now();
-    final dateTime = DateTime(
-      now.year,
-      now.month,
-      now.day,
-      time.hour,
-      time.minute,
-    );
-
-    // Verwende die zentrale Formatierungsfunktion
-    final locale = Localizations.localeOf(context);
-    final minute = time.minute.toString().padLeft(2, '0');
-    final use12HourFormat = locale.languageCode == 'en';
-    final useHInsteadOfColon = locale.languageCode == 'fr';
-    final timeSeparator = useHInsteadOfColon ? 'h' : ':';
-
-    if (use12HourFormat) {
-      final hour12 = time.hour == 0
-          ? 12
-          : (time.hour > 12 ? time.hour - 12 : time.hour);
-      final amPm = time.hour < 12
-          ? localizations.time_am
-          : localizations.time_pm;
-      return '$hour12$timeSeparator$minute $amPm';
-    } else {
-      final hour = time.hour.toString().padLeft(2, '0');
-      final clock = localizations.party_time_clock;
-      if (useHInsteadOfColon) {
-        return '$hour$timeSeparator$minute';
-      } else {
-        return '$hour$timeSeparator$minute $clock';
-      }
-    }
+    return FormattingUtils.formatTimeOfDay(time, context);
   }
 
   // Helper-Methoden für die einzelnen Sektionen der build-Methode
@@ -2635,7 +3200,17 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
           groupValue: _partyType,
           onChanged: (String? value) {
             if (value != null) {
-              setState(() => _partyType = value);
+              setState(() {
+                _partyType = value;
+                if (value == 'public' && _locationSelectionMode == 'current') {
+                  _locationSelectionMode = 'search';
+                }
+                if (value == 'public') {
+                  _allowPreWishes = false;
+                }
+                _resetVenueFloorState();
+                _clampWizardStepForPartyType();
+              });
             }
           },
           child: Row(
@@ -2669,21 +3244,39 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
 
   Widget _buildPartyNameSection(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
-    return TextFormField(
-      controller: _partyNameController,
-      maxLength: 100,
-      inputFormatters: [FilteringTextInputFormatter.deny(RegExp(r'[<>]'))],
-      decoration: InputDecoration(
-        labelText: l10n.party_name_label_new,
-        hintText: l10n.party_name_hint,
-        border: const OutlineInputBorder(),
-      ),
-      validator: (value) {
-        if (value == null || value.trim().isEmpty) {
-          return l10n.party_name_required;
-        }
-        return null;
-      },
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          l10n.party_name_label_new,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        TextFormField(
+          controller: _partyNameController,
+          maxLength: 100,
+          inputFormatters: [FilteringTextInputFormatter.deny(RegExp(r'[<>]'))],
+          decoration: InputDecoration(
+            hintText: l10n.party_name_hint,
+            border: const OutlineInputBorder(),
+            counterText: '',
+          ),
+          validator: (value) {
+            if (value == null || value.trim().length < 3) {
+              return l10n.party_name_min_length;
+            }
+            return null;
+          },
+        ),
+        if (!_isPartyNameStepValid &&
+            _partyNameController.text.trim().isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Text(
+            l10n.party_name_min_length,
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade400),
+          ),
+        ],
+      ],
     );
   }
 
@@ -2695,81 +3288,235 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       'fa',
       'ur',
     ].contains(Localizations.localeOf(context).languageCode);
-    return Scaffold(
-      resizeToAvoidBottomInset: false,
-      backgroundColor: Colors.transparent,
-      body: Material(
-        type: MaterialType.transparency,
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Container(
-            decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.3)),
-            child: PwaWidgetCell(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Header mit Titel und Schließen-Button
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    final l = AppLocalizations.of(context)!;
+    final canProceed = _canProceedFromStep(_wizardStep);
+    final isLastStep = _wizardStep == _wizardStepCount - 1;
+
+    return Material(
+      type: MaterialType.transparency,
+      child: PwaWidgetCell(
+        padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        AppLocalizations.of(context)!.new_party_title,
+                        l.new_party_title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          fontSize: 20,
+                          fontSize: 16,
                           fontWeight: FontWeight.bold,
                           color: Colors.white,
                         ),
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white),
-                        onPressed: () => Navigator.of(context).pop(),
+                      Text(
+                        _partyType == 'public'
+                            ? l.party_wizard_step_number_only(_wizardStep + 1)
+                            : l.party_wizard_step_indicator(
+                                _wizardStep + 1,
+                                _wizardStepCount,
+                              ),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey.shade400,
+                        ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 16),
-                  // Scrollbarer Inhalt
-                  Flexible(
-                    child: ScrollIndicatorOverlay(
-                      child: SingleChildScrollView(
-                        controller: _scrollController,
-                        child: Form(
-                          key: _formKey,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              const SizedBox(height: 8),
-                              // Art der Veranstaltung
-                              _buildEventTypeSection(context),
-                              const SizedBox(height: 16),
-                              // Party-Name
-                              _buildPartyNameSection(context),
-                              const SizedBox(height: 16),
-                              // Standort & Zeitzone
-                              _buildLocationSection(context),
-                              const SizedBox(height: 16),
-                              // Beginn
-                              _buildStartTimeSection(context, isRtl),
-                              const SizedBox(height: 16),
-                              // Ende
-                              _buildEndTimeSection(context, isRtl),
-                              const SizedBox(height: 24),
-                              // Wunsch-Limits
-                              _buildWishLimitsSection(context),
-                              const SizedBox(height: 24),
-                              // Speichern-Button
-                              _buildSaveButton(context),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
+                ),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 36,
+                    minHeight: 36,
                   ),
-                ],
+                  icon: const Icon(Icons.close, color: Colors.white, size: 22),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: ScrollIndicatorOverlay(
+                child: SingleChildScrollView(
+                  controller: _scrollController,
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  child: Form(
+                    key: _formKey,
+                    child: _buildWizardStepContent(context, isRtl),
+                  ),
+                ),
               ),
             ),
-          ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                if (_wizardStep > 0)
+                  OutlinedButton(
+                    onPressed: _isLoading ? null : _goBack,
+                    style: OutlinedButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      foregroundColor: Colors.white,
+                      side: BorderSide(
+                        color: UIConstants.appOrange.withValues(alpha: 0.8),
+                      ),
+                    ),
+                    child: Text(l.back),
+                  )
+                else
+                  const SizedBox(width: 8),
+                const Spacer(),
+                FilledButton(
+                  onPressed: (_isLoading || !canProceed)
+                      ? null
+                      : (isLastStep ? _saveParty : _goNext),
+                  style: FilledButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    backgroundColor: UIConstants.appOrange,
+                    foregroundColor: Colors.black,
+                    disabledBackgroundColor: Colors.grey.shade800,
+                    disabledForegroundColor: Colors.grey.shade600,
+                  ),
+                  child: _isLoading && isLastStep
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : Text(
+                          isLastStep
+                              ? l.save_party_data
+                              : l.party_wizard_next,
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
+    );
+  }
+
+  Widget _buildWizardStepContent(BuildContext context, bool isRtl) {
+    switch (_currentWizardStepKind) {
+      case PartyWizardStepKind.eventType:
+        return _buildEventTypeSection(context);
+      case PartyWizardStepKind.partyName:
+        return _buildPartyNameSection(context);
+      case PartyWizardStepKind.location:
+        return _buildLocationSection(context);
+      case PartyWizardStepKind.locationWithFloor:
+        return _buildPublicLocationFloorSection(context);
+      case PartyWizardStepKind.startTime:
+        return _wizardStepCard(_buildStartTimeSection(context, isRtl));
+      case PartyWizardStepKind.endTime:
+        return _wizardStepCard(_buildEndTimeSection(context, isRtl));
+      case PartyWizardStepKind.wishLimits:
+        return _buildWishLimitsSection(context);
+      case PartyWizardStepKind.preWishes:
+        return _buildPreWishesStepSection(context);
+    }
+  }
+
+  Widget _buildPublicLocationFloorSection(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildLocationSection(context),
+        if (!_isPublicLocationWithCoordinates &&
+            (_selectedGooglePlace != null || _selectedLocationModel != null))
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              l.party_public_location_coords_required,
+              style: const TextStyle(color: Colors.orange, fontSize: 12),
+            ),
+          ),
+        if (_isPublicLocationWithCoordinates) ...[
+          const SizedBox(height: 16),
+          PublicVenueFloorField(
+            floors: _matchedVenue?.floors ?? const [],
+            selectedFloorKey: _selectedFloorKey,
+            defaultFloorAvailable: _defaultFloorAvailable,
+            occupiedFloorKeys: _occupiedFloorKeys,
+            hasVenueOverlap: _hasVenueOverlap,
+            isLoading: _venueContextLoading,
+            floorOccupancy: _floorOccupancyByKey,
+            onFloorSelected: (key) => setState(() => _selectedFloorKey = key),
+            onOccupiedFloorTap: (key, info) async {
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    AppLocalizations.of(context)!.party_floor_swap_after_save_hint,
+                  ),
+                ),
+              );
+            },
+            onAddFloor: _showAddFloorDialog,
+          ),
+          if (_isFirstDjInVenueWindow &&
+              !_hasVenueOverlap &&
+              (_matchedVenue?.fixedPartyCode != null ||
+                  _selectedLocationModel?.fixedPartyCode != null)) ...[
+            const SizedBox(height: 12),
+            SwitchListTile(
+              title: Text(
+                l.party_one_time_event_code,
+                style: const TextStyle(color: Colors.white),
+              ),
+              subtitle: Text(
+                _useOneTimeEventCode
+                    ? l.party_one_time_code_range_hint
+                    : l.party_fixed_code_in_use_hint(
+                        _matchedVenue?.fixedPartyCode ??
+                            _selectedLocationModel!.fixedPartyCode!,
+                      ),
+                style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+              ),
+              value: _useOneTimeEventCode,
+              activeThumbColor: UIConstants.appOrange,
+              onChanged: (value) {
+                setState(() => _useOneTimeEventCode = value);
+              },
+            ),
+          ],
+        ],
+      ],
+    );
+  }
+
+  Widget _buildPreWishesStepSection(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          l.party_allow_pre_wishes,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        PartyPreWishSettingsField(
+          allowPreWishes: _allowPreWishes,
+          limitPerGuest: _preWishLimitPerGuest,
+          onAllowChanged: (v) => setState(() => _allowPreWishes = v),
+          onLimitChanged: (n) => setState(() => _preWishLimitPerGuest = n),
+        ),
+      ],
     );
   }
 
@@ -2788,6 +3535,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
           ),
         ),
         const SizedBox(height: 8),
+        DjVenueBookmarkPicker(onBookmarkSelected: _applyVenueBookmark),
         // Button für gespeicherte Locations (bei beiden Party-Typen)
         if (_locations.isNotEmpty) ...[
           ElevatedButton.icon(
@@ -2914,6 +3662,9 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                         _useOneTimeEventCode = false;
                         _wasMapAdjusted = true;
                       });
+                      if (_partyType == 'public') {
+                        _refreshVenueContext();
+                      }
                       if (refined.timezoneId == null) {
                         GooglePlacesService.getTimezoneIdForCoordinates(
                           refined.latitude,
@@ -2994,6 +3745,9 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                           });
                         }
                       });
+                      if (_partyType == 'public') {
+                        _refreshVenueContext();
+                      }
                     }
                   },
                 ),
@@ -3205,8 +3959,10 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
               ),
             ),
           ),
-          // Code-Option für öffentliche Partys mit festem Code
+          // Code-Option nur für ersten DJ am Ort (kein Venue-Overlap)
           if (_partyType == 'public' &&
+              _isFirstDjInVenueWindow &&
+              !_hasVenueOverlap &&
               _selectedLocationModel!.fixedPartyCode != null) ...[
             const SizedBox(height: 12),
             Container(
@@ -3266,114 +4022,100 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
           style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+        Text(
+          l10n.party_date_label,
+          style: const TextStyle(fontSize: 12),
+        ),
+        const SizedBox(height: 4),
+        Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            onTap: _selectStartDate,
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 12,
+              ),
+              decoration: BoxDecoration(
+                border: Border.all(
+                  color: UIConstants.appOrange.withValues(alpha: 0.75),
+                ),
+                borderRadius: BorderRadius.circular(8),
+                color: Colors.black.withValues(alpha: 0.2),
+              ),
+              child: Row(
                 children: [
-                  Text(
-                    l10n.party_date_label,
-                    style: const TextStyle(fontSize: 12),
+                  const Icon(Icons.calendar_today, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _formatDate(_startDate, context),
+                      style: const TextStyle(fontSize: 14),
+                    ),
                   ),
-                  const SizedBox(height: 4),
-                  Material(
-                    type: MaterialType.transparency,
-                    child: InkWell(
-                      onTap: _selectStartDate,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 12,
-                        ),
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.grey),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.calendar_today, size: 18),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                _formatDate(_startDate, context),
-                                style: const TextStyle(fontSize: 14),
-                              ),
-                            ),
-                            Transform.flip(
-                              flipX: isRtl,
-                              child: const Icon(
-                                Icons.arrow_forward_ios,
-                                size: 14,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                  Transform.flip(
+                    flipX: isRtl,
+                    child: const Icon(
+                      Icons.arrow_forward_ios,
+                      size: 14,
                     ),
                   ),
                 ],
               ),
             ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Text(
+          l10n.party_time_label,
+          style: const TextStyle(fontSize: 12),
+        ),
+        const SizedBox(height: 4),
+        Row(
+          key: _startTimePickerKey,
+          children: [
+            Expanded(
+              child: _buildTimeDropdown<int>(
+                value: _startHour,
+                items: _getAvailableStartHours(),
+                label: l10n.select_hour,
+                enabled: _startDate != null,
+                itemLabel: (h) => '$h',
+                onChanged: (h) {
+                  if (h == null) return;
+                  setState(() {
+                    _startHour = h;
+                    final mins = _getAvailableStartMinutes(h);
+                    _startMinute = mins.contains(_startMinute)
+                        ? _startMinute
+                        : (mins.isNotEmpty ? mins.first : null);
+                    _endDate = null;
+                    _endHour = null;
+                    _endMinute = null;
+                  });
+                  _validatePartyTimes();
+                },
+              ),
+            ),
             const SizedBox(width: 8),
             Expanded(
-              child: Column(
-                key: _startTimePickerKey,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    l10n.party_time_label,
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _buildTimeDropdown<int>(
-                          value: _startHour,
-                          items: _getAvailableStartHours(),
-                          label: l10n.select_hour,
-                          enabled: _startDate != null,
-                          itemLabel: (h) => '$h',
-                          onChanged: (h) {
-                            if (h == null) return;
-                            setState(() {
-                              _startHour = h;
-                              final mins = _getAvailableStartMinutes(h);
-                              _startMinute = mins.contains(_startMinute)
-                                  ? _startMinute
-                                  : (mins.isNotEmpty ? mins.first : null);
-                              _endDate = null;
-                              _endHour = null;
-                              _endMinute = null;
-                            });
-                            _validatePartyTimes();
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: _buildTimeDropdown<int>(
-                          value: _startMinute,
-                          items: _getAvailableStartMinutes(),
-                          label: l10n.select_minute,
-                          enabled: _startDate != null && _startHour != null,
-                          itemLabel: (m) => m.toString().padLeft(2, '0'),
-                          onChanged: (m) {
-                            if (m == null) return;
-                            setState(() {
-                              _startMinute = m;
-                              _endDate = null;
-                              _endHour = null;
-                              _endMinute = null;
-                            });
-                            _validatePartyTimes();
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+              child: _buildTimeDropdown<int>(
+                value: _startMinute,
+                items: _getAvailableStartMinutes(),
+                label: l10n.select_minute,
+                enabled: _startDate != null && _startHour != null,
+                itemLabel: (m) => m.toString().padLeft(2, '0'),
+                onChanged: (m) {
+                  if (m == null) return;
+                  setState(() {
+                    _startMinute = m;
+                    _endDate = null;
+                    _endHour = null;
+                    _endMinute = null;
+                  });
+                  _validatePartyTimes();
+                },
               ),
             ),
           ],
@@ -3469,142 +4211,121 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
           style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+        Text(
+          l10n.party_date_label,
+          style: const TextStyle(fontSize: 12),
+        ),
+        const SizedBox(height: 4),
+        Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            onTap: (_startDate != null &&
+                    _startHour != null &&
+                    _startMinute != null)
+                ? _selectEndDate
+                : null,
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 12,
+              ),
+              decoration: BoxDecoration(
+                border: Border.all(
+                  color: (_startDate != null &&
+                          _startHour != null &&
+                          _startMinute != null)
+                      ? UIConstants.appOrange.withValues(alpha: 0.75)
+                      : Colors.grey.shade600,
+                ),
+                borderRadius: BorderRadius.circular(8),
+                color: Colors.black.withValues(alpha: 0.2),
+              ),
+              child: Row(
                 children: [
-                  Text(
-                    l10n.party_date_label,
-                    style: const TextStyle(fontSize: 12),
+                  Icon(
+                    Icons.calendar_today,
+                    size: 18,
+                    color: (_startDate != null &&
+                            _startHour != null &&
+                            _startMinute != null)
+                        ? null
+                        : Colors.grey.shade600,
                   ),
-                  const SizedBox(height: 4),
-                  Material(
-                    type: MaterialType.transparency,
-                    child: InkWell(
-                      onTap:
-                          (_startDate != null &&
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _formatDate(_endDate, context),
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: (_startDate != null &&
+                                _startHour != null &&
+                                _startMinute != null)
+                            ? null
+                            : Colors.grey.shade600,
+                      ),
+                    ),
+                  ),
+                  Transform.flip(
+                    flipX: isRtl,
+                    child: Icon(
+                      Icons.arrow_forward_ios,
+                      size: 14,
+                      color: (_startDate != null &&
                               _startHour != null &&
                               _startMinute != null)
-                          ? _selectEndDate
-                          : null,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 12,
-                        ),
-                        decoration: BoxDecoration(
-                          border: Border.all(
-                            color:
-                                (_startDate != null &&
-                                    _startHour != null &&
-                                    _startMinute != null)
-                                ? Colors.grey
-                                : Colors.grey.shade600,
-                          ),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.calendar_today,
-                              size: 18,
-                              color:
-                                  (_startDate != null &&
-                                      _startHour != null &&
-                                      _startMinute != null)
-                                  ? null
-                                  : Colors.grey.shade600,
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                _formatDate(_endDate, context),
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color:
-                                      (_startDate != null &&
-                                          _startHour != null &&
-                                          _startMinute != null)
-                                      ? null
-                                      : Colors.grey.shade600,
-                                ),
-                              ),
-                            ),
-                            Transform.flip(
-                              flipX: isRtl,
-                              child: Icon(
-                                Icons.arrow_forward_ios,
-                                size: 14,
-                                color:
-                                    (_startDate != null &&
-                                        _startHour != null &&
-                                        _startMinute != null)
-                                    ? null
-                                    : Colors.grey.shade600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                          ? null
+                          : Colors.grey.shade600,
                     ),
                   ),
                 ],
               ),
             ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Text(
+          l10n.party_time_label,
+          style: const TextStyle(fontSize: 12),
+        ),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Expanded(
+              child: _buildTimeDropdown<int>(
+                value: _endHour,
+                items: _getAvailableEndHours(),
+                label: l10n.select_hour,
+                enabled: _endDate != null,
+                itemLabel: (h) => '$h',
+                onChanged: (h) {
+                  if (h == null) return;
+                  setState(() {
+                    _endHour = h;
+                    final mins = _getAvailableEndMinutes(h);
+                    _endMinute = mins.contains(_endMinute)
+                        ? _endMinute
+                        : (mins.isNotEmpty ? mins.first : null);
+                  });
+                  _validateAndCorrectEndTime();
+                  _validatePartyTimes();
+                },
+              ),
+            ),
             const SizedBox(width: 8),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    l10n.party_time_label,
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _buildTimeDropdown<int>(
-                          value: _endHour,
-                          items: _getAvailableEndHours(),
-                          label: l10n.select_hour,
-                          enabled: _endDate != null,
-                          itemLabel: (h) => '$h',
-                          onChanged: (h) {
-                            if (h == null) return;
-                            setState(() {
-                              _endHour = h;
-                              final mins = _getAvailableEndMinutes(h);
-                              _endMinute = mins.contains(_endMinute)
-                                  ? _endMinute
-                                  : (mins.isNotEmpty ? mins.first : null);
-                            });
-                            _validateAndCorrectEndTime();
-                            _validatePartyTimes();
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: _buildTimeDropdown<int>(
-                          value: _endMinute,
-                          items: _getAvailableEndMinutes(),
-                          label: l10n.select_minute,
-                          enabled: _endDate != null && _endHour != null,
-                          itemLabel: (m) => m.toString().padLeft(2, '0'),
-                          onChanged: (m) {
-                            if (m == null) return;
-                            setState(() => _endMinute = m);
-                            _validateAndCorrectEndTime();
-                            _validatePartyTimes();
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+              child: _buildTimeDropdown<int>(
+                value: _endMinute,
+                items: _getAvailableEndMinutes(),
+                label: l10n.select_minute,
+                enabled: _endDate != null && _endHour != null,
+                itemLabel: (m) => m.toString().padLeft(2, '0'),
+                onChanged: (m) {
+                  if (m == null) return;
+                  setState(() => _endMinute = m);
+                  _validateAndCorrectEndTime();
+                  _validatePartyTimes();
+                },
               ),
             ),
           ],
@@ -3679,11 +4400,20 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                 key: ValueKey<int>(effectiveUserLimit ?? 1),
                 initialValue: effectiveUserLimit ?? 1,
                 decoration: InputDecoration(
-                  labelText: loc.party_user_limit,
+                  labelText: loc.party_registered_app_guest,
                   border: const OutlineInputBorder(),
                   prefixIcon: Icon(
                     Icons.person,
                     color: isFree ? Colors.grey : null,
+                  ),
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      Icons.info_outline,
+                      color: Colors.grey.shade400,
+                      size: 20,
+                    ),
+                    tooltip: loc.party_registered_app_guest_info_title,
+                    onPressed: () => _showRegisteredAppGuestInfo(context),
                   ),
                   filled: isFree,
                   fillColor: isFree ? Colors.grey.shade800 : null,
@@ -3718,46 +4448,9 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
             style: TextStyle(fontSize: 12, color: Colors.grey.shade400),
           ),
         ],
+        const SizedBox(height: 12),
       ],
     );
   }
 
-  Widget _buildSaveButton(BuildContext context) {
-    final isValid = _isFormValid;
-    return ElevatedButton(
-      onPressed: (_isLoading || !isValid) ? null : _saveParty,
-      style: ElevatedButton.styleFrom(
-        backgroundColor: UIConstants.appOrange,
-        foregroundColor: Colors.white,
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        disabledBackgroundColor: Colors.grey.shade800,
-        disabledForegroundColor: Colors.grey.shade600,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      ),
-      child: _isLoading
-          ? Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const SizedBox(
-                  height: 20,
-                  width: 20,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.white,
-                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  AppLocalizations.of(context)!.party_saving_progress,
-                  style: const TextStyle(color: Colors.white),
-                ),
-              ],
-            )
-          : Text(
-              AppLocalizations.of(context)!.save_party_data,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-    );
-  }
 }

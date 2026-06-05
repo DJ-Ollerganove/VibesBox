@@ -16,11 +16,15 @@ import '../../l10n/app_localizations.dart';
 import '../../utils/formatting_utils.dart';
 import '../../utils/ui_constants.dart';
 import '../../services/active_party_service.dart';
+import '../../services/grace_period_settings_service.dart';
 import '../../services/limit_service.dart';
 import '../../services/party_autostart_service.dart';
 import '../../services/user_service.dart';
-import '../../widgets/pro_promotion_banner.dart';
-import '../../widgets/pro_comparison_table.dart';
+import '../../utils/party_grace_period_helper.dart';
+import '../../services/dj_home_layout_service.dart';
+import 'dj/dj_home_edit_sheet.dart';
+import 'dj/dj_home_party_resolver.dart';
+import 'dj/dj_home_widget_host.dart';
 
 class HomeDj extends StatefulWidget {
   final Widget Function(BuildContext context, Widget child) cardBuilder;
@@ -47,6 +51,8 @@ class _HomeDjState extends State<HomeDj> {
   List<QueryDocumentSnapshot>? _cachedParties;
   String? _lastDisplaySignature;
   int _timerIntervalSeconds = 60;
+  int _gracePeriodMinutes = GracePeriodSettingsService.defaultGracePeriodMinutes;
+  StreamSubscription<int>? _gracePeriodSub;
 
   static const int _thresholdSecondsForMinuteTick = 120;
 
@@ -55,6 +61,8 @@ class _HomeDjState extends State<HomeDj> {
 
   bool _quickstartOnboardingDialogScheduled = false;
   VoidCallback? _quickstartUserListener;
+  VoidCallback? _sessionProListener;
+  bool? _lastSessionProActive;
 
   Stream<DateTime> get _timeStream {
     _timeController ??= StreamController<DateTime>.broadcast();
@@ -73,11 +81,28 @@ class _HomeDjState extends State<HomeDj> {
   @override
   void initState() {
     super.initState();
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) {
+      DjHomeLayoutService.instance.startForUid(uid);
+    }
     _loadEffectiveDjId();
     _quickstartUserListener = _tryScheduleQuickstartOnboarding;
     UserService().currentUser.addListener(_quickstartUserListener!);
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _tryScheduleQuickstartOnboarding());
+    _lastSessionProActive =
+        UserService().sessionProStatus.value?.isActive == true;
+    _sessionProListener = _onSessionProStatusChanged;
+    UserService().sessionProStatus.addListener(_sessionProListener!);
+  }
+
+  void _onSessionProStatusChanged() {
+    final active = UserService().sessionProStatus.value?.isActive == true;
+    final wasPro = _lastSessionProActive == true;
+    _lastSessionProActive = active;
+    if (wasPro && !active) {
+      unawaited(DjHomeLayoutService.instance.applyProToFreePromotionPin());
+    }
   }
 
   void _startPartyStreamAndTimer() {
@@ -89,6 +114,13 @@ class _HomeDjState extends State<HomeDj> {
         .snapshots()
         .listen((snapshot) {
       _cachedParties = snapshot.docs;
+    });
+    _gracePeriodSub?.cancel();
+    _gracePeriodSub =
+        GracePeriodSettingsService.streamForDj(_effectiveDjId!).listen((m) {
+      if (mounted) {
+        setState(() => _gracePeriodMinutes = m);
+      }
     });
     _scheduleTickTimer();
   }
@@ -104,12 +136,18 @@ class _HomeDjState extends State<HomeDj> {
   void _onTick() {
     if (!mounted) return;
     final nowUnix = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
+    final nowDate = DateTime.now();
     final parties = _cachedParties ?? [];
     bool hasActive = false;
     int? secondsUntilNextStart;
+    int? secondsUntilGraceEnd;
     for (final party in parties) {
       final data = party.data() as Map<String, dynamic>;
-      if (data['lifecycle_status'] == 'finished' || data['lifecycle_status'] == 'standby' || data['finished_at'] != null) continue;
+      if (data['lifecycle_status'] == 'finished' ||
+          data['lifecycle_status'] == 'standby' ||
+          data['finished_at'] != null) {
+        continue;
+      }
       final startPosix = data['start_time_posix'] as int?;
       final endPosix = data['end_time_posix'] as int?;
       if (startPosix == null || endPosix == null) continue;
@@ -124,11 +162,38 @@ class _HomeDjState extends State<HomeDj> {
         }
       }
     }
+    if (!hasActive) {
+      for (final party in parties) {
+        final data = party.data() as Map<String, dynamic>;
+        if (data['lifecycle_status'] == 'standby') continue;
+        final end = PartyGracePeriodHelper.partyEndDate(data);
+        if (end == null || nowDate.isBefore(end)) continue;
+        if (PartyGracePeriodHelper.wishesManuallyHidden(data)) continue;
+        if (!PartyGracePeriodHelper.isWithinGracePeriod(
+          nowDate,
+          end,
+          _gracePeriodMinutes,
+        )) {
+          continue;
+        }
+        final sec = PartyGracePeriodHelper.graceEndsAt(end, _gracePeriodMinutes)
+            .difference(nowDate)
+            .inSeconds;
+        if (sec > 0 &&
+            (secondsUntilGraceEnd == null || sec < secondsUntilGraceEnd)) {
+          secondsUntilGraceEnd = sec;
+        }
+      }
+    }
     String signature;
     int nextInterval;
     if (hasActive) {
       signature = 'running';
       nextInterval = 60;
+    } else if (secondsUntilGraceEnd != null) {
+      signature = 'grace_$secondsUntilGraceEnd';
+      nextInterval =
+          secondsUntilGraceEnd > _thresholdSecondsForMinuteTick ? 60 : 1;
     } else if (secondsUntilNextStart != null) {
       signature = 'upcoming_$secondsUntilNextStart';
       nextInterval = secondsUntilNextStart > _thresholdSecondsForMinuteTick ? 60 : 1;
@@ -153,14 +218,33 @@ class _HomeDjState extends State<HomeDj> {
 
   @override
   void dispose() {
+    DjHomeLayoutService.instance.stop();
+    if (_sessionProListener != null) {
+      UserService().sessionProStatus.removeListener(_sessionProListener!);
+    }
     if (_quickstartUserListener != null) {
       UserService().currentUser.removeListener(_quickstartUserListener!);
     }
     _secondTickTimer?.cancel();
     _partySubscription?.cancel();
+    _gracePeriodSub?.cancel();
     _timeTimer?.cancel();
     _timeController?.close();
     super.dispose();
+  }
+
+  String _resolveDisplayName(User user, AppLocalizations l) {
+    final userModel = UserScope.userOf(context);
+    final fromModel = userModel?.displayName?.trim();
+    final emailParts = user.email?.split('@');
+    return (fromModel != null && fromModel.isNotEmpty)
+        ? fromModel
+        : (user.displayName?.trim().isNotEmpty == true
+            ? user.displayName!.trim()
+            : (emailParts != null && emailParts.isNotEmpty
+                ? emailParts[0]
+                : null)) ??
+            l.dj_home_display_name_fallback;
   }
 
   void _tryScheduleQuickstartOnboarding() {
@@ -526,6 +610,77 @@ class _HomeDjState extends State<HomeDj> {
     }
   }
 
+  Widget _buildUpcomingPartyHomeCard(
+    BuildContext context,
+    QueryDocumentSnapshot party,
+  ) {
+    final localizations = AppLocalizations.of(context)!;
+    final data = party.data() as Map<String, dynamic>;
+    final partyName =
+        data['party_name'] as String? ?? localizations.unnamed_party;
+    final startTimestamp = data['start_date'] as Timestamp?;
+    final endTimestamp = data['end_date'] as Timestamp?;
+    if (startTimestamp == null || endTimestamp == null) {
+      return const SizedBox.shrink();
+    }
+    final startDate = startTimestamp.toDate();
+    final endDate = endTimestamp.toDate();
+    final status = _getPartyStatus(startDate, endDate, context);
+    final partyCode = data['party_code'] as String?;
+    final partyId = party.id;
+    final hasNotStarted = DateTime.now().compareTo(startDate) < 0;
+    final statusColor = _getPartyStatusColor(status, context);
+    final startTimePosix = data['start_time_posix'] as int?;
+    final endTimePosix = data['end_time_posix'] as int?;
+    dynamic timezoneIdRaw = data['timezone_id'] ??
+        data['timezoneId'] ??
+        data['time_zone_id'] ??
+        data['timezone'];
+    final timezoneId = (timezoneIdRaw != null &&
+            timezoneIdRaw is String &&
+            timezoneIdRaw.trim().isNotEmpty)
+        ? timezoneIdRaw.trim()
+        : null;
+    final latitude = (data['latitude'] as num?)?.toDouble();
+    final longitude = (data['longitude'] as num?)?.toDouble();
+    final locationName = data['location_name'] as String?;
+    final locationStreet = (data['location_street'] as String?)?.trim();
+    final locationZip = (data['location_zip'] as String?)?.trim();
+    final locationCity = (data['location_city'] as String?)?.trim();
+    final isPaused = data['is_paused'] as bool? ?? false;
+    final allowPreWishes = data['allow_pre_wishes'] == true;
+
+    return SettingsPartyCard(
+      partyId: partyId,
+      partyName: partyName,
+      startDate: startDate,
+      endDate: endDate,
+      partyCode: partyCode,
+      status: status,
+      statusColor: statusColor,
+      hasNotStarted: hasNotStarted,
+      timeStream: _timeStream,
+      formatDateTime: _formatDateTime,
+      startTimePosix: startTimePosix,
+      endTimePosix: endTimePosix,
+      timezoneId: timezoneId,
+      latitude: latitude,
+      longitude: longitude,
+      locationName: locationName,
+      locationStreet: locationStreet?.isNotEmpty == true ? locationStreet : null,
+      locationZip: locationZip?.isNotEmpty == true ? locationZip : null,
+      locationCity: locationCity?.isNotEmpty == true ? locationCity : null,
+      isPaused: hasNotStarted ? true : isPaused,
+      hideActions: true,
+      hideCalendarExport: true,
+      hideMapsLink: false,
+      hideBorder: false,
+      allowPreWishes: allowPreWishes,
+      onEdit: () {},
+      onQrCode: () {},
+    );
+  }
+
   Widget _buildStatisticsSection(BuildContext context, String? partyId) {
     // Wenn DJ-ID noch nicht geladen ist, zeige Loading-Indikator
     if (_effectiveDjId == null) {
@@ -544,18 +699,376 @@ class _HomeDjState extends State<HomeDj> {
     );
   }
 
-  Widget _buildAdditionalStatistics(BuildContext context) {
-    // Wenn DJ-ID noch nicht geladen ist, zeige nichts
+  Widget _buildPartyStatusSection(
+    BuildContext context,
+    List<QueryDocumentSnapshot> parties,
+  ) {
+    final localizations = AppLocalizations.of(context)!;
+    final user = FirebaseAuth.instance.currentUser!;
+
     if (_effectiveDjId == null) {
-      return const SizedBox.shrink();
+      return _partyStatusLoadingShell(localizations);
     }
-    
-    // Zeige Login und Gesamtbilanz (die erste Karte wird bereits im Container oben angezeigt)
-    return DualStatisticsCard(
-      cardBuilder: widget.cardBuilder,
-      effectiveDjId: _effectiveDjId!,
-      onlyFirstCard: false, // Alle Karten außer der ersten anzeigen
-      skipFirstCard: true, // Erste Karte überspringen, da bereits im Container oben
+
+    final partySnap = DjHomePartySnapshot.resolve(
+      parties,
+      gracePeriodMinutes: _gracePeriodMinutes,
+    );
+    final activeParty = partySnap.activeParty;
+    final lastFinishedParty = partySnap.lastFinishedParty;
+    final upcomingParty = partySnap.upcomingParty;
+    final graceParty = partySnap.graceParty;
+
+    String statusTitle;
+    Color statusTitleColor;
+    if (activeParty != null) {
+      statusTitle = localizations.status_running;
+      statusTitleColor = Colors.green;
+    } else if (graceParty != null) {
+      statusTitle = localizations.party_status_grace_period;
+      statusTitleColor = Colors.orange;
+    } else if (upcomingParty != null) {
+      statusTitle = localizations.status_upcoming;
+      statusTitleColor = Colors.white;
+    } else {
+      statusTitle = localizations.status_no_party_planned;
+      statusTitleColor = Colors.white;
+    }
+
+    String statsTitle;
+    if (activeParty != null) {
+      statsTitle = localizations.stats_live;
+    } else if (lastFinishedParty != null) {
+      statsTitle = localizations.stats_last_party;
+    } else {
+      statsTitle = localizations.stats_no_party_completed;
+    }
+
+    return PwaWidgetCell(
+      borderColor: (activeParty ?? graceParty ?? upcomingParty) != null
+          ? UIConstants.partyYellow
+          : UIConstants.appOrange,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            statusTitle,
+            style: TextStyle(
+              fontSize: 12,
+              color: statusTitleColor,
+              fontWeight: FontWeight.bold,
+            ),
+            textAlign: TextAlign.start,
+          ),
+          const SizedBox(height: 16),
+          Builder(
+            builder: (context) {
+              final displayParty =
+                  activeParty ?? graceParty ?? upcomingParty;
+
+              if (displayParty == null) {
+                return Text(
+                  localizations.no_further_parties_planned,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.grey[400],
+                    fontSize: 14,
+                  ),
+                );
+              }
+
+              final data = displayParty.data() as Map<String, dynamic>;
+              final partyName =
+                  data['party_name'] as String? ?? localizations.unnamed_party;
+              final startTimestamp = data['start_date'] as Timestamp?;
+              final endTimestamp = data['end_date'] as Timestamp?;
+
+              if (startTimestamp == null || endTimestamp == null) {
+                return const SizedBox.shrink();
+              }
+
+              final startDate = startTimestamp.toDate();
+              final endDate = endTimestamp.toDate();
+              final isGraceDisplay =
+                  graceParty != null && displayParty.id == graceParty.id;
+              final status = isGraceDisplay
+                  ? localizations.party_status_ended
+                  : _getPartyStatus(startDate, endDate, context);
+              final partyCode = data['party_code'] as String?;
+              final partyId = displayParty.id;
+              final hasNotStarted = DateTime.now().compareTo(startDate) < 0;
+              final statusColor = isGraceDisplay
+                  ? Colors.orange
+                  : _getPartyStatusColor(status, context);
+              final gracePeriodEndsAt = isGraceDisplay
+                  ? PartyGracePeriodHelper.graceEndsAt(
+                      endDate,
+                      _gracePeriodMinutes,
+                    )
+                  : null;
+
+              final startTimePosix = data['start_time_posix'] as int?;
+              final endTimePosix = data['end_time_posix'] as int?;
+              dynamic timezoneIdRaw = data['timezone_id'] ??
+                  data['timezoneId'] ??
+                  data['time_zone_id'] ??
+                  data['timezone'];
+              final timezoneId =
+                  (timezoneIdRaw != null &&
+                          timezoneIdRaw is String &&
+                          timezoneIdRaw.trim().isNotEmpty)
+                      ? timezoneIdRaw.trim()
+                      : null;
+              final latitude = (data['latitude'] as num?)?.toDouble();
+              final longitude = (data['longitude'] as num?)?.toDouble();
+              final locationName = data['location_name'] as String?;
+              final locationStreet =
+                  (data['location_street'] as String?)?.trim();
+              final locationZip = (data['location_zip'] as String?)?.trim();
+              final locationCity = (data['location_city'] as String?)?.trim();
+              final isPaused = data['is_paused'] as bool? ?? false;
+              final running = localizations.party_status_running;
+              final isRunning = status == running;
+              final isUpcoming = hasNotStarted;
+              final userModel = UserScope.userOf(context);
+              final lifecycleStatus = data['lifecycle_status'] as String?;
+              final nonFinishedParties = parties.where((p) {
+                final d = p.data() as Map<String, dynamic>?;
+                return d != null &&
+                    d['lifecycle_status'] != 'finished' &&
+                    d['finished_at'] == null;
+              }).toList();
+              final quotaExceededIds = (userModel != null && userModel.isFree)
+                  ? LimitService.getQuotaExceededPartyIds(
+                      userModel,
+                      nonFinishedParties,
+                    )
+                  : <String>{};
+              final isDeactivated = lifecycleStatus == 'standby' ||
+                  quotaExceededIds.contains(partyId);
+
+              return SettingsPartyCard(
+                partyId: partyId,
+                partyName: partyName,
+                startDate: startDate,
+                endDate: endDate,
+                partyCode: partyCode,
+                status: status,
+                statusColor: statusColor,
+                hasNotStarted: hasNotStarted,
+                timeStream: _timeStream,
+                formatDateTime: _formatDateTime,
+                startTimePosix: startTimePosix,
+                endTimePosix: endTimePosix,
+                timezoneId: timezoneId,
+                latitude: latitude,
+                longitude: longitude,
+                locationName: locationName,
+                locationStreet:
+                    locationStreet?.isNotEmpty == true ? locationStreet : null,
+                locationZip: locationZip?.isNotEmpty == true ? locationZip : null,
+                locationCity:
+                    locationCity?.isNotEmpty == true ? locationCity : null,
+                isPaused: isUpcoming ? true : isPaused,
+                hideActions: false,
+                hideCalendarExport: true,
+                hideMapsLink: false,
+                hideBorder: true,
+                isDeactivated: isDeactivated,
+                gracePeriodEndsAt: gracePeriodEndsAt,
+                onEdit: () {
+                  SettingsPartyEditDialog.show(
+                    context,
+                    partyId,
+                    partyName,
+                    startDate,
+                    endDate,
+                    data['party_type'] as String?,
+                    _formatDateTime,
+                    currentGuestLimit: data['guest_limit_per_hour'] as int?,
+                    currentUserLimit: data['user_limit_per_hour'] as int?,
+                  );
+                },
+                onDelete: isUpcoming
+                    ? () => SettingsPartyDeleteDialog.confirm(
+                          context,
+                          partyId,
+                          partyName,
+                        )
+                    : null,
+                onPause: isRunning
+                    ? () => _showPauseConfirmationDialog(
+                          context,
+                          partyId,
+                          partyName,
+                          isPaused,
+                        )
+                    : null,
+                onEnd: isRunning
+                    ? () => _showEndPartyConfirmationDialog(
+                          context,
+                          partyId,
+                          partyName,
+                        )
+                    : null,
+                onQrCode: partyCode != null && partyCode.isNotEmpty
+                    ? () async {
+                        final locName = locationName?.trim();
+                        final street = locationStreet?.trim();
+                        final zip = locationZip?.trim();
+                        final city = locationCity?.trim();
+                        final zipCityPart = [
+                          if (zip != null && zip.isNotEmpty) zip,
+                          if (city != null && city.isNotEmpty) city,
+                        ].join(' ').trim();
+                        final addressPart = [
+                          if (street != null && street.isNotEmpty) street,
+                          if (zipCityPart.isNotEmpty) zipCityPart,
+                        ].join(', ');
+                        final isExplicitName = locName != null &&
+                            locName.isNotEmpty &&
+                            (street == null ||
+                                street.isEmpty ||
+                                locName.toLowerCase() !=
+                                    street.toLowerCase()) &&
+                            (city == null ||
+                                city.isEmpty ||
+                                locName.toLowerCase() != city.toLowerCase());
+                        final locationDisplay = addressPart.isNotEmpty
+                            ? (isExplicitName
+                                ? '$locName · $addressPart'
+                                : addressPart)
+                            : (locName != null && locName.isNotEmpty
+                                ? locName
+                                : null);
+                        final mapsUrl = (latitude != null && longitude != null)
+                            ? 'https://www.google.com/maps/search/?api=1&query=$latitude,$longitude'
+                            : null;
+
+                        String? djLogoUrl;
+                        String? profileImageUrl;
+                        String? djEmail;
+                        String? djPhone;
+                        String? djAlternativeEmail;
+                        try {
+                          final userDoc = await FirebaseFirestore.instance
+                              .collection('users')
+                              .doc(user.uid)
+                              .get();
+                          final userData = userDoc.data();
+                          djLogoUrl = userData?['djLogoUrl'];
+                          profileImageUrl =
+                              userData?['profileImageUrl'] ?? user.photoURL;
+                          djEmail = user.email ?? userData?['email'] as String?;
+                          djPhone = userData?['phoneNumber'] as String?;
+                          if (userData?['useAlternativeEmail'] == true) {
+                            djAlternativeEmail =
+                                userData?['alternativeEmail'] as String?;
+                          }
+                        } catch (_) {}
+
+                        if (context.mounted) {
+                          PartyQrCodeDialog.show(
+                            context: context,
+                            party: Party(
+                              partyName: partyName,
+                              startDate: startDate,
+                              endDate: endDate,
+                              partyCode: partyCode,
+                              partyId: partyId,
+                              partyLocation: locationDisplay,
+                              locationUrl: mapsUrl,
+                            ),
+                            djName:
+                                FirebaseAuth.instance.currentUser?.displayName,
+                            djLogoUrl: djLogoUrl,
+                            profileImageUrl: profileImageUrl,
+                            djEmail: djEmail,
+                            djPhone: djPhone,
+                            djAlternativeEmail: djAlternativeEmail,
+                          );
+                        }
+                      }
+                    : () {},
+              );
+            },
+          ),
+          const SizedBox(height: 24),
+          const Divider(),
+          const SizedBox(height: 16),
+          Text(
+            statsTitle,
+            style: const TextStyle(
+              fontSize: 12,
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+            ),
+            textAlign: TextAlign.start,
+          ),
+          const SizedBox(height: 16),
+          if (activeParty != null || lastFinishedParty != null)
+            _buildStatisticsSection(
+              context,
+              activeParty?.id ?? lastFinishedParty?.id,
+            )
+          else
+            Text(
+              localizations.stats_no_party_completed_hint,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.grey[400],
+                fontSize: 14,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _partyStatusLoadingShell(AppLocalizations localizations) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context)
+            .colorScheme
+            .surfaceContainerHighest
+            .withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: UIConstants.appOrange,
+          width: 2,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              localizations.status_no_party_planned,
+              style: const TextStyle(
+                fontSize: 12,
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.start,
+            ),
+            const SizedBox(height: 16),
+            const Center(child: CircularProgressIndicator()),
+            const SizedBox(height: 24),
+            const Divider(),
+            const SizedBox(height: 16),
+            Text(
+              localizations.stats_no_party_completed,
+              style: const TextStyle(
+                fontSize: 12,
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.start,
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -575,487 +1088,93 @@ class _HomeDjState extends State<HomeDj> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Builder(
-              builder: (context) {
+            ValueListenableBuilder<DjHomeLayoutConfig>(
+              valueListenable: DjHomeLayoutService.instance.configNotifier,
+              builder: (context, layout, _) {
+                return ValueListenableBuilder<SessionProStatus?>(
+                  valueListenable: UserService().sessionProStatus,
+                  builder: (context, session, _) {
+                return ValueListenableBuilder<ActivePartyInfo?>(
+                  valueListenable: ActivePartyService.storedSessionNotifier,
+                  builder: (context, activeSession, _) {
                 final l = AppLocalizations.of(context)!;
-                final userModel = UserScope.userOf(context);
-                final fromModel = userModel?.displayName?.trim();
-                final emailParts = user.email?.split('@');
-                String name = (fromModel != null && fromModel.isNotEmpty)
-                    ? fromModel
-                    : (user.displayName?.trim().isNotEmpty == true
-                        ? user.displayName!.trim()
-                        : (emailParts != null && emailParts.isNotEmpty
-                            ? emailParts[0]
-                            : null)) ??
-                        l.dj_home_display_name_fallback;
-                return WelcomeHeader(displayNameOrFallback: name);
-              },
-            ),
-            _buildTrialBanner(context),
-            Builder(
-              builder: (context) {
-                final userModel = UserScope.userOf(context);
-                final sessionActive = UserService().sessionProStatus.value?.isActive == true;
-                if (userModel == null || sessionActive) return const SizedBox.shrink();
-                if (!userModel.trialUsed) return const SizedBox.shrink();
-                return const Padding(
-                  padding: EdgeInsets.only(top: 12),
-                  child: ProPromotionBanner(compactPadding: false),
+                final displayName = _resolveDisplayName(user, l);
+                final isFreeDj = session?.isActive != true;
+                final trialUsed =
+                    UserScope.userOf(context)?.trialUsed ?? true;
+                final visibleIds = layout.modularVisibleOrderForSession(
+                  isFreeDj: isFreeDj,
+                  trialUsed: trialUsed,
+                  showPreWishesWidget:
+                      activeSession?.hasQueuedPreWishes == true,
                 );
-              },
-            ),
-            Builder(
-              builder: (context) {
-                // sessionProStatus: Pro inkl. Trial; bei Store-Pro weiterhin Kulanz in ProFreeCheck (nicht bei planType trial).
-                // Tabelle nur anzeigen, wenn User aktuell NICHT als Pro gilt.
-                final sessionActive = UserService().sessionProStatus.value?.isActive == true;
-                if (sessionActive) return const SizedBox.shrink();
-                return const Padding(
-                  padding: EdgeInsets.fromLTRB(12, 16, 12, 12),
-                  child: ProComparisonTable(),
-                );
-              },
-            ),
-            const SizedBox(height: 16),
-            // Zentraler Container mit Überschrift, Party-Status und Statistik
-            // Wird IMMER angezeigt, unabhängig vom Party-Status
-            Builder(
-              builder: (context) {
-                final localizations = AppLocalizations.of(context)!;
-                
-                // Wenn DJ-ID noch nicht geladen ist, zeige Loading-State
-                if (_effectiveDjId == null) {
-                  return Container(
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.55),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: UIConstants.appOrange,
-                        width: 2,
+
+                Widget buildWidgets(List<QueryDocumentSnapshot> parties) {
+                  final partySnap = DjHomePartySnapshot.resolve(
+                    parties,
+                    gracePeriodMinutes: _gracePeriodMinutes,
+                  );
+                  final deps = DjHomeWidgetDeps(
+                    effectiveDjId: _effectiveDjId,
+                    gracePeriodMinutes: _gracePeriodMinutes,
+                    cardBuilder: widget.cardBuilder,
+                    partySnapshot: partySnap,
+                    parties: parties,
+                    timeStream: _timeStream,
+                    formatDateTime: _formatDateTime,
+                    buildPartyStatusSection: (ctx) =>
+                        _buildPartyStatusSection(ctx, parties),
+                    buildTrialBanner: _buildTrialBanner,
+                    buildUpcomingPartyCard: _buildUpcomingPartyHomeCard,
+                    displayName: displayName,
+                    onCustomizeHome: () => showDjHomeEditSheet(context),
+                  );
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      WelcomeHeader(
+                        displayNameOrFallback: displayName,
+                        onCustomize: () => showDjHomeEditSheet(context),
                       ),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          // Titel 1: Status-Titel (Loading)
-                          Text(
-                            localizations.status_no_party_planned,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                            ),
-                            textAlign: TextAlign.start,
-                          ),
-                          const SizedBox(height: 16),
-                          const Center(child: CircularProgressIndicator()),
-                          const SizedBox(height: 24),
-                          const Divider(),
-                          const SizedBox(height: 16),
-                          // Titel 2: Statistik-Titel (Loading)
-                          Text(
-                            localizations.stats_no_party_completed,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                            ),
-                            textAlign: TextAlign.start,
-                          ),
-                        ],
-                      ),
-                    ),
+                      const SizedBox(height: 16),
+                      for (final id in visibleIds)
+                        if (DjHomeWidgetHost.build(context, id, deps)
+                            case final child?)
+                          ...[
+                            child,
+                            const SizedBox(height: 16),
+                          ],
+                    ],
                   );
                 }
-                
-                // Lade Partys für den DJ
+
+                if (_effectiveDjId == null) {
+                  return buildWidgets(const []);
+                }
+
                 return StreamBuilder<QuerySnapshot>(
                   stream: FirebaseFirestore.instance
                       .collection('parties')
                       .where('created_by', isEqualTo: _effectiveDjId!)
                       .snapshots(),
                   builder: (context, snapshot) {
-                    if (!snapshot.hasData) {
-                      return Container(
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.55),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: UIConstants.appOrange,
-                            width: 2,
-                          ),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.all(16.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              // Titel 1: Status-Titel (Loading)
-                              Text(
-                                localizations.status_no_party_planned,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                                textAlign: TextAlign.start,
-                              ),
-                              const SizedBox(height: 16),
-                              const Center(child: CircularProgressIndicator()),
-                              const SizedBox(height: 24),
-                              const Divider(),
-                              const SizedBox(height: 16),
-                              // Titel 2: Statistik-Titel (Loading)
-                              Text(
-                                localizations.stats_no_party_completed,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                                textAlign: TextAlign.start,
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    }
-
-                final parties = snapshot.data?.docs ?? [];
-                // "Jetzt" als UTC Unix-Timestamp (Sekunden) – gleiche Basis wie Firestore (start_time_posix/end_time_posix)
-                final nowUnix = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
-
-                // ============================================
-                // 1. DREI ZUSTÄNDE DEFINIEREN (FAKTEN-CHECK)
-                // ============================================
-                
-                // activeParty: Eine Party, bei der nowUnix zwischen Start und Ende liegt und nicht beendet (lifecycle_status/finished_at)
-                QueryDocumentSnapshot? activeParty;
-                for (final party in parties) {
-                  final data = party.data() as Map<String, dynamic>;
-                  if (data['lifecycle_status'] == 'finished' || data['lifecycle_status'] == 'standby' || data['finished_at'] != null) continue;
-                  final startPosix = data['start_time_posix'] as int?;
-                  final endPosix = data['end_time_posix'] as int?;
-
-                  if (startPosix != null && endPosix != null) {
-                    if (nowUnix >= startPosix && nowUnix < endPosix) {
-                      activeParty = party;
-                      break;
-                    }
-                  }
-                }
-
-                // lastFinishedParty: Die letzte beendete Party (für das Kreisdiagramm unten)
-                QueryDocumentSnapshot? lastFinishedParty;
-                final pastParties = parties.where((party) {
-                  final data = party.data() as Map<String, dynamic>;
-                  final endPosix = data['end_time_posix'] as int?;
-                  // Party ist in der Vergangenheit, wenn end_time_posix < jetzt
-                  return (endPosix ?? 0) < nowUnix;
-                }).toList();
-
-                if (pastParties.isNotEmpty) {
-                  // Sortiere nach end_time_posix ABSTEIGEND, um die letzte zu erwischen
-                  pastParties.sort((a, b) {
-                    final endA = (a.data() as Map<String, dynamic>)['end_time_posix'] as int? ?? 0;
-                    final endB = (b.data() as Map<String, dynamic>)['end_time_posix'] as int? ?? 0;
-                    return endB.compareTo(endA); // Absteigend sortieren
-                  });
-                  lastFinishedParty = pastParties.first;
-                }
-
-                // upcomingParty: Die zeitlich am nächsten liegende Party in der Zukunft
-                QueryDocumentSnapshot? upcomingParty;
-                final futureParties = parties.where((party) {
-                  final data = party.data() as Map<String, dynamic>;
-                  if (data['lifecycle_status'] == 'standby') return false;
-                  final startPosix = data['start_time_posix'] as int?;
-                  return (startPosix ?? 0) > nowUnix;
-                }).toList();
-
-                if (futureParties.isNotEmpty) {
-                  // Sortiere nach start_time_posix aufsteigend, um die nächste zu erwischen
-                  futureParties.sort((a, b) {
-                    final startA = (a.data() as Map<String, dynamic>)['start_time_posix'] as int? ?? 0;
-                    final startB = (b.data() as Map<String, dynamic>)['start_time_posix'] as int? ?? 0;
-                    return startA.compareTo(startB); // Aufsteigend sortieren
-                  });
-                  upcomingParty = futureParties.first;
-                }
-
-                // ============================================
-                // 2. TITEL 1 (STATUS-TITEL) - OBERER BEREICH
-                // ============================================
-                String statusTitle;
-                Color statusTitleColor;
-                if (activeParty != null) {
-                  statusTitle = localizations.status_running;
-                  statusTitleColor = Colors.green;
-                } else if (upcomingParty != null) {
-                  statusTitle = localizations.status_upcoming;
-                  statusTitleColor = Colors.white;
-                } else {
-                  statusTitle = localizations.status_no_party_planned;
-                  statusTitleColor = Colors.white;
-                }
-
-                // ============================================
-                // 3. TITEL 2 (STATISTIK-TITEL) - UNTERER BEREICH
-                // ============================================
-                // Kreisdiagramm: Immer Statistik der letzten beendeten Party, bis die neue Party "Laufend" ist.
-                // upcomingParty darf das Diagramm nicht ersetzen oder leeren.
-                String statsTitle;
-                if (activeParty != null) {
-                  statsTitle = localizations.stats_live;
-                } else if (lastFinishedParty != null) {
-                  statsTitle = localizations.stats_last_party;
-                } else {
-                  statsTitle = localizations.stats_no_party_completed;
-                }
-
-                // Zentraler Container mit Überschrift, Party-Status und Statistik
-                // Wird IMMER angezeigt, unabhängig davon, ob eine Party vorhanden ist
-                // Rahmen Gelb, wenn aktive oder bevorstehende Party angezeigt wird; sonst Orange
-                return PwaWidgetCell(
-                  borderColor: (activeParty ?? upcomingParty) != null ? UIConstants.partyYellow : UIConstants.appOrange,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // Titel 1: Status-Titel (LAUFEND/BEVORSTEHEND/NOCH KEINE PARTY GEPLANT)
-                      Text(
-                        statusTitle,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: statusTitleColor,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        textAlign: TextAlign.start,
-                      ),
-                      const SizedBox(height: 16),
-                      // Party-Status (Mitte): activeParty ODER upcomingParty anzeigen
-                      // Nutze displayParty für die Karten-Anzeige
-                      Builder(
-                        builder: (context) {
-                          // displayParty = activeParty ?? upcomingParty
-                          final displayParty = activeParty ?? upcomingParty;
-                          
-                          if (displayParty == null) {
-                            // Keine Party vorhanden: Zeige Hinweistext
-                            return Text(
-                              localizations.no_further_parties_planned,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: Colors.grey[400],
-                                fontSize: 14,
-                              ),
-                            );
-                          }
-                          
-                          // Party vorhanden: Zeige Party-Info
-                          final data = displayParty.data() as Map<String, dynamic>;
-                            final partyName = data['party_name'] as String? ?? localizations.unnamed_party;
-                            final startTimestamp = data['start_date'] as Timestamp?;
-                            final endTimestamp = data['end_date'] as Timestamp?;
-
-                            if (startTimestamp == null || endTimestamp == null) {
-                              return const SizedBox.shrink();
-                            }
-
-                            final startDate = startTimestamp.toDate();
-                            final endDate = endTimestamp.toDate();
-                            final status = _getPartyStatus(startDate, endDate, context);
-                          final partyCode = data['party_code'] as String?;
-                          final partyId = displayParty.id;
-                          final hasNotStarted = DateTime.now().compareTo(startDate) < 0;
-                          final statusColor = _getPartyStatusColor(status, context);
-                          
-                          // Lade zusätzliche Daten für vereinfachte Ansicht
-                          final startTimePosix = data['start_time_posix'] as int?;
-                          final endTimePosix = data['end_time_posix'] as int?;
-                          dynamic timezoneIdRaw = data['timezone_id'] ?? 
-                                                 data['timezoneId'] ?? 
-                                                 data['time_zone_id'] ??
-                                                 data['timezone'];
-                          final timezoneId = (timezoneIdRaw != null && timezoneIdRaw is String && timezoneIdRaw.trim().isNotEmpty) 
-                              ? timezoneIdRaw.trim() 
-                              : null;
-                          final latitude = (data['latitude'] as num?)?.toDouble();
-                          final longitude = (data['longitude'] as num?)?.toDouble();
-                          final locationName = data['location_name'] as String?;
-                          final locationStreet = (data['location_street'] as String?)?.trim();
-                          final locationZip = (data['location_zip'] as String?)?.trim();
-                          final locationCity = (data['location_city'] as String?)?.trim();
-                          final isPaused = data['is_paused'] as bool? ?? false;
-                          final running = localizations.party_status_running;
-                          final isRunning = status == running;
-                          // Bevorstehend: Start-Button (Play) anzeigen; Laufend/Pausiert: Pause/Play + Beenden. Kein Löschen bei active.
-                          final isUpcoming = hasNotStarted;
-                          final userModel = UserScope.userOf(context);
-                          final lifecycleStatus = data['lifecycle_status'] as String?;
-                          // Wie in party_verwaltung_page: Deaktiviert nur wenn diese Party Standby ist ODER Quota im eigenen Stichtag-Slot überschritten (nicht pauschal „Limit für heute“).
-                          final nonFinishedParties = parties.where((p) {
-                            final d = p.data() as Map<String, dynamic>?;
-                            return d != null && d['lifecycle_status'] != 'finished' && d['finished_at'] == null;
-                          }).toList();
-                          final quotaExceededIds = (userModel != null && userModel.isFree)
-                              ? LimitService.getQuotaExceededPartyIds(userModel, nonFinishedParties)
-                              : <String>{};
-                          final isDeactivated = lifecycleStatus == 'standby' || quotaExceededIds.contains(partyId);
-
-                          return SettingsPartyCard(
-                                partyId: partyId,
-                                partyName: partyName,
-                                startDate: startDate,
-                                endDate: endDate,
-                                partyCode: partyCode,
-                                status: status,
-                                statusColor: statusColor,
-                                hasNotStarted: hasNotStarted,
-                                timeStream: _timeStream,
-                                formatDateTime: _formatDateTime,
-                                startTimePosix: startTimePosix,
-                                endTimePosix: endTimePosix,
-                                timezoneId: timezoneId,
-                                latitude: latitude,
-                                longitude: longitude,
-                                locationName: locationName,
-                                locationStreet: locationStreet?.isNotEmpty == true ? locationStreet : null,
-                                locationZip: locationZip?.isNotEmpty == true ? locationZip : null,
-                                locationCity: locationCity?.isNotEmpty == true ? locationCity : null,
-                                isPaused: isUpcoming ? true : isPaused,
-                                hideActions: false,
-                                hideCalendarExport: true,
-                                hideMapsLink: true,
-                                hideBorder: true,
-                                isDeactivated: isDeactivated,
-                                onEdit: () {
-                              SettingsPartyEditDialog.show(
-                                context,
-                                partyId,
-                                partyName,
-                                startDate,
-                                endDate,
-                                data['party_type'] as String?,
-                                _formatDateTime,
-                                currentGuestLimit: data['guest_limit_per_hour'] as int?,
-                                currentUserLimit: data['user_limit_per_hour'] as int?,
-                              );
-                            },
-                            onDelete: isUpcoming ? () => SettingsPartyDeleteDialog.confirm(context, partyId, partyName) : null,
-                            onPause: isRunning ? () => _showPauseConfirmationDialog(context, partyId, partyName, isPaused) : null,
-                            onEnd: isRunning ? () => _showEndPartyConfirmationDialog(context, partyId, partyName) : null,
-                            onQrCode: partyCode != null && partyCode.isNotEmpty
-                                ? () async {
-                                    // Einzeilige Anzeige mit Dubletten-Schutz (Name nur wenn kein Duplikat von Straße/Ort)
-                                    final locName = locationName?.trim();
-                                    final street = locationStreet?.trim();
-                                    final zip = locationZip?.trim();
-                                    final city = locationCity?.trim();
-                                    final zipCityPart = [if (zip != null && zip.isNotEmpty) zip, if (city != null && city.isNotEmpty) city].join(' ').trim();
-                                    final addressPart = [if (street != null && street.isNotEmpty) street, if (zipCityPart.isNotEmpty) zipCityPart].join(', ');
-                                    final isExplicitName = locName != null && locName.isNotEmpty &&
-                                        (street == null || street.isEmpty || locName.toLowerCase() != street.toLowerCase()) &&
-                                        (city == null || city.isEmpty || locName.toLowerCase() != city.toLowerCase());
-                                    final locationDisplay = addressPart.isNotEmpty
-                                        ? (isExplicitName ? '$locName · $addressPart' : addressPart)
-                                        : (locName != null && locName.isNotEmpty ? locName : null);
-                                    final mapsUrl = (latitude != null && longitude != null)
-                                        ? 'https://www.google.com/maps/search/?api=1&query=$latitude,$longitude'
-                                        : null;
-
-                                    // Fetch DJ Logo + Kontaktdaten
-                                    String? djLogoUrl;
-                                    String? profileImageUrl;
-                                    String? djEmail;
-                                    String? djPhone;
-                                    String? djAlternativeEmail;
-                                    try {
-                                      final userDoc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
-                                      final userData = userDoc.data();
-                                      djLogoUrl = userData?['djLogoUrl'];
-                                      profileImageUrl = userData?['profileImageUrl'] ?? user.photoURL;
-                                      djEmail = user.email ?? userData?['email'] as String?;
-                                      djPhone = userData?['phoneNumber'] as String?;
-                                      if (userData?['useAlternativeEmail'] == true) {
-                                        djAlternativeEmail = userData?['alternativeEmail'] as String?;
-                                      }
-                                    } catch (_) {}
-
-                                    if (context.mounted) {
-                                      PartyQrCodeDialog.show(
-                                        context: context,
-                                        party: Party(
-                                          partyName: partyName,
-                                          startDate: startDate,
-                                          endDate: endDate,
-                                          partyCode: partyCode,
-                                          partyId: partyId,
-                                          partyLocation: locationDisplay,
-                                          locationUrl: mapsUrl,
-                                        ),
-                                        djName: FirebaseAuth.instance.currentUser?.displayName,
-                                        djLogoUrl: djLogoUrl,
-                                        profileImageUrl: profileImageUrl,
-                                        djEmail: djEmail,
-                                        djPhone: djPhone,
-                                        djAlternativeEmail: djAlternativeEmail,
-                                      );
-                                    }
-                                  }
-                                : () {},
-                              );
-                        },
-                      ),
-                      const SizedBox(height: 24),
-                      const Divider(),
-                      const SizedBox(height: 16),
-                      // Titel 2: Statistik-Titel (LIVE-STATISTIK / LETZTE PARTY / NOCH KEINE PARTY DURCHGEFÜHRT)
-                      Text(
-                        statsTitle,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        textAlign: TextAlign.start,
-                      ),
-                      const SizedBox(height: 16),
-                      // Statistik-Bereich (unten): Entweder Statistik oder Hinweistext
-                      // STRENGE TRENNUNG: upcomingParty darf hier NIEMALS rein!
-                      // FALL A: activeParty != null → Live-Statistik
-                      // FALL B: activeParty == null && lastFinishedParty != null → Letzte Party-Statistik
-                      // FALL C: beide null → Platzhalter (auch wenn upcomingParty existiert)
-                      if (activeParty != null || lastFinishedParty != null)
-                        _buildStatisticsSection(context, activeParty?.id ?? lastFinishedParty?.id)
-                      else
-                        // FALL C (Leerstand): Platzhalter-Text
-                        Text(
-                          localizations.stats_no_party_completed_hint,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: Colors.grey[400],
-                            fontSize: 14,
-                          ),
-                        ),
-                    ],
-                  ),
+                    final parties = snapshot.hasData
+                        ? snapshot.data!.docs
+                        : (_cachedParties ?? []);
+                    return buildWidgets(parties);
+                  },
                 );
-                    },
-                  );
+                  },
+                );
+                  },
+                );
               },
             ),
-            const SizedBox(height: 16),
-            // Weitere Statistik-Karten (Login, Gesamtbilanz)
-            if (_effectiveDjId != null)
-              _buildAdditionalStatistics(context),
             if (widget.adminRoleSwitcherBottom != null) ...[
               widget.adminRoleSwitcherBottom!,
               const SizedBox(height: 24),
             ],
-            // Leerblock am Ende, damit der letzte Eintrag vollständig oberhalb der Pegellinie scrollbar ist
             const SizedBox(height: 200),
           ],
         ),
@@ -1063,4 +1182,3 @@ class _HomeDjState extends State<HomeDj> {
     );
   }
 }
-

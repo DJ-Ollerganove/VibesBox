@@ -1,6 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'dart:ui' as ui;
 import '../l10n/app_localizations.dart';
 import '../models/song_request.dart';
@@ -10,11 +9,16 @@ import '../utils/relative_time_minutes.dart';
 import '../services/wish_management_service.dart';
 import '../services/user_blocking_service.dart';
 import '../services/active_party_service.dart';
+import '../utils/wish_paths.dart';
 import '../services/user_service.dart';
 import '../pages/rejected_wish_detail_page.dart';
 import 'free_feature_locked.dart';
 import '../utils/debug_log.dart';
 import '../utils/string_utils.dart';
+import '../utils/wish_grouping_helper.dart';
+import '../utils/formatting_utils.dart';
+import '../utils/pre_wish_helper.dart';
+import 'wish_greeting_display.dart';
 
 /// Vereinheitlichtes Widget für die Anzeige von Musikwünschen
 /// Unterstützt die Modi: 'Offen', 'Gespielt', 'Abgelehnt'
@@ -66,6 +70,11 @@ class WishCard extends StatelessWidget {
   final Key? cardKey;
   /// Optionale Rahmenfarbe für den Wunsch-Detail-Dialog (sonst aus Typ abgeleitet).
   final Color? detailDialogBorderColor;
+  /// Optional: Rahmen der Karte in der Liste (z. B. Vorab-Wünsche = Lila).
+  final Color? listBorderColorOverride;
+  /// Vorab-Übersicht: Detail mit Publish/Löschen (ohne Gespielt/Ablehnen/Sperren).
+  final bool isPreWishOverviewMode;
+  final Function(BuildContext, List<String>)? onPublishPreWish;
 
   const WishCard({
     super.key,
@@ -89,6 +98,9 @@ class WishCard extends StatelessWidget {
     this.onRestore,
     this.cardKey,
     this.detailDialogBorderColor,
+    this.listBorderColorOverride,
+    this.isPreWishOverviewMode = false,
+    this.onPublishPreWish,
   }) : assert(
           request != null || groupedData != null,
           'Mindestens request oder groupedData muss gesetzt sein',
@@ -106,7 +118,10 @@ class WishCard extends StatelessWidget {
     final artist = unescapeHtml((data['artist'] ?? '') as String);
     final requestedBy = List<String>.from((data['requested_by'] as List?) ?? []);
     final name = (data['name'] ?? '') as String;
-    final namesToShow = requestedBy.isNotEmpty ? requestedBy : (name.isNotEmpty ? [name] : []);
+    final namesToShow = WishGroupingHelper.dedupeNamesPreserveOrder(
+      requestedBy.isNotEmpty ? requestedBy : (name.isNotEmpty ? [name] : ['']),
+    );
+    final effectiveNames = namesToShow.isEmpty ? const [''] : namesToShow;
     final isRegisteredUsers = Map<String, bool>.from(
       (data['is_registered_users'] as Map<String, dynamic>?) ?? {},
     );
@@ -126,7 +141,14 @@ class WishCard extends StatelessWidget {
     final autoRecognized = data['auto_recognized'] as bool? ?? false;
     final isFavorite = (data['is_favorite'] as bool?) ?? false;
     final isDjWish = (data['is_dj_wish'] as bool?) ?? false;
-    
+    final showPreWishMarker = data['is_pre_wish'] == true;
+    /// In Offen freigegebene Vorab-Wünsche: eigene Zeitzeile + immer Lila-Rahmen.
+    final isPublishedPreWishInOffen = type == WishCardType.offen &&
+        showPreWishMarker &&
+        !isPreWishOverviewMode;
+    final isPublishedPreWishInOverview = isPreWishOverviewMode &&
+        PreWishHelper.isPublishedPreWish(data);
+
     // ✅ SYNCHRONISIERT: Read-Status kombiniert beide Systeme (isSeen Feld + seenWishIds Set)
     // Ein Song gilt als "gelesen" (Blauer Rahmen), wenn:
     // 1. DAS FELD data['isSeen'] == true ist ODER
@@ -158,11 +180,16 @@ class WishCard extends StatelessWidget {
     final cardColor = isNew 
         ? const Color.fromRGBO(208, 162, 0, 0.25) 
         : const Color(0xFF1E1E1E);
-    const textColor = Colors.white;
-    const secondaryTextColor = Color(0xFFB0B0B0);
+    final isPreWishAccentContext =
+        isPreWishOverviewMode || isPublishedPreWishInOffen;
+    final pageAccent = UIConstants.wishCardAccentFor(
+      _wishCardListKind(type, isPreWishContext: isPreWishAccentContext),
+    );
+    const labelColor = UIConstants.wishCardLabelColor;
+    const dateTimeColor = UIConstants.wishCardDateTimeColor;
 
     // Erstelle Wünscher-Liste mit Sortierung (ältester zuerst)
-    final wishersList = _buildWishersList(data, greetings, greeting, name, List<String>.from(namesToShow), isRegisteredUsers);
+    final wishersList = _buildWishersList(data, greetings, greeting, name, List<String>.from(effectiveNames), isRegisteredUsers);
     final totalWishes = wishCountForBadge(data, groupedData);
     final showWishCount = totalWishes > 1;
     final hasGreeting = wishersList.any((w) => (w['greeting'] as String? ?? '').isNotEmpty);
@@ -193,7 +220,9 @@ class WishCard extends StatelessWidget {
           title,
           artist,
           l,
-          detailDialogBorderColor,
+          detailDialogBorderColor ??
+              (isPublishedPreWishInOffen ? UIConstants.framePreWish : null),
+          isPreWishOverviewMode: isPreWishOverviewMode,
         ),
             splashColor: Colors.amber.shade800,
             highlightColor: Colors.amber.shade900.withValues(alpha: 0.3),
@@ -203,7 +232,10 @@ class WishCard extends StatelessWidget {
                 color: cardColor,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: _getBorderColor(type, isNew, effectivelySeen),
+                  color: listBorderColorOverride ??
+                      (isPublishedPreWishInOffen
+                          ? UIConstants.framePreWish
+                          : _getBorderColor(type, isNew, effectivelySeen)),
                   width: 2.5,
                 ),
               ),
@@ -223,11 +255,13 @@ class WishCard extends StatelessWidget {
                       isNew,
                       autoRecognized,
                       isRtl,
-                      textColor,
+                      dateTimeColor,
+                      pageAccent,
                       l,
                       data,
                       isFavorite,
                       docIds,
+                      isPreWishOverviewMode: isPreWishOverviewMode,
                     ),
                     const SizedBox(height: 8),
                     _buildCompactMusicRow(
@@ -237,20 +271,76 @@ class WishCard extends StatelessWidget {
                       autoRecognized,
                       type,
                       isRtl,
-                      textColor,
+                      labelColor,
+                      pageAccent,
                       l,
                       isDjWish: isDjWish,
+                      isPreWish: showPreWishMarker &&
+                          !isPublishedPreWishInOverview,
+                      preWishIconColor: isPreWishOverviewMode
+                          ? UIConstants.colorPreWish
+                          : null,
                     ),
+                    if (WishGreetingCompactRow.wishersForCompactDisplay(wishersList)
+                        .isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      WishGreetingCompactRow(
+                        wishers: wishersList,
+                        isRtl: isRtl,
+                        nameStyle: const TextStyle(
+                          fontSize: 12,
+                          color: UIConstants.wishCardLabelColor,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        greetingStyle: TextStyle(
+                          fontSize: 12,
+                          color: pageAccent,
+                          fontStyle: FontStyle.italic,
+                        ),
+                        translationStyle: const TextStyle(
+                          fontSize: 11,
+                          color: UIConstants.wishCardTranslationColor,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                    ],
                     if (titleVariants.isNotEmpty) ...[
                       const SizedBox(height: 4),
                       Text(
                         'Gewünschte Versionen: ${titleVariants.join(", ")}',
                         style: const TextStyle(
                           fontSize: 11,
-                          color: secondaryTextColor,
+                          color: UIConstants.wishCardTranslationColor,
                         ),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                    if (isPreWishOverviewMode) ...[
+                      const SizedBox(height: 8),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(
+                            child: Align(
+                              alignment: isRtl
+                                  ? Alignment.centerRight
+                                  : Alignment.centerLeft,
+                              child: _buildPreWishOverviewStatusBadge(
+                                l,
+                                publishedToOpen: isPublishedPreWishInOverview,
+                              ),
+                            ),
+                          ),
+                          _buildPreWishOverviewActionIcons(
+                            context,
+                            isRtl,
+                            l,
+                            data,
+                            request,
+                            docIds,
+                          ),
+                        ],
                       ),
                     ],
                   ],
@@ -263,7 +353,85 @@ class WishCard extends StatelessWidget {
     );
   }
 
-  /// Zeile 1: Kompakte Status-Zeile (Eingang + Icons)
+  /// In Offen — direkt in der Vorab-Listenkarte (Löschen nur im Detail-Modal).
+  Widget _buildPreWishOverviewActionIcons(
+    BuildContext context,
+    bool isRtl,
+    AppLocalizations l,
+    Map<String, dynamic> data,
+    SongRequest? request,
+    List<String>? docIds,
+  ) {
+    final isGrouped = docIds != null && docIds!.isNotEmpty;
+    if (onPublishPreWish == null) return const SizedBox.shrink();
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
+      children: [
+        IconButton(
+          onPressed: () {
+            final ids = isGrouped
+                ? docIds!
+                : (request?.id != null ? [request!.id] : <String>[]);
+            if (ids.isEmpty) return;
+            onPublishPreWish!(context, ids);
+          },
+          icon: const Icon(
+            Icons.publish,
+            color: UIConstants.colorPreWish,
+            size: 24,
+          ),
+          tooltip: l.pre_wish_publish_tooltip,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+        ),
+      ],
+    );
+  }
+
+  /// Status-Chip in der Vorab-Übersicht: „Vorab“ (lila) oder „Offen“ (weiß).
+  Widget _buildPreWishOverviewStatusBadge(
+    AppLocalizations l, {
+    required bool publishedToOpen,
+  }) {
+    final color = publishedToOpen ? Colors.white : UIConstants.colorPreWish;
+    final label = publishedToOpen ? l.open_songs_label : l.pre_wish_badge;
+    final tooltip = publishedToOpen
+        ? l.pre_wish_overview_status_open_tooltip
+        : l.pre_wish_badge_tooltip;
+    return Tooltip(
+      message: tooltip,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color, width: 1.5),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              publishedToOpen ? Icons.queue_music : Icons.playlist_add,
+              size: 14,
+              color: color,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Zeile 1: Kompakte Status-Zeile (Datum/Uhrzeit + Icons rechts)
   Widget _buildCompactStatusRow(
     BuildContext context,
     DateTime created,
@@ -274,68 +442,67 @@ class WishCard extends StatelessWidget {
     bool isNew,
     bool autoRecognized,
     bool isRtl,
-    Color textColor,
+    Color dateTimeColor,
+    Color pageAccent,
     AppLocalizations l,
     Map<String, dynamic> cardData,
     bool isFavorite,
-    List<String>? docIds,
-  ) {
+    List<String>? docIds, {
+    bool isPreWishOverviewMode = false,
+  }) {
     final loc = l;
     final hasGreeting = wishersList.any((w) => (w['greeting'] as String? ?? '').isNotEmpty);
     final summary = _resolveWishTimeSummary(cardData, created);
     final totalWishes = wishCountForBadge(cardData, groupedData);
     final showWishCount = totalWishes > 1;
-    final showFavorite = type == WishCardType.offen && docIds != null && docIds.isNotEmpty;
-
+    final showFavorite = type == WishCardType.offen &&
+        docIds != null &&
+        docIds.isNotEmpty &&
+        !isPreWishOverviewMode;
     // Für Gespielt-Seite: Zweizeilige Anzeige (Weiß/Grün)
-    Widget statusWidget;
+    Widget timeContent;
     if (type == WishCardType.gespielt && played != null) {
       final playedTime = _formatClockWithSuffixForLocale(context, played, l);
       final waitMinutes = played.difference(summary.oldestWishDate).inMinutes;
       final minutesText = loc.minutes_short;
-      
-      statusWidget = Column(
+
+      timeContent = Column(
         crossAxisAlignment: isRtl ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Zeile 1: Nur ältester Wunschzeitstempel
           Text(
             '${loc.requested_at} ${_formatClockWithSuffixForLocale(context, summary.oldestWishDate, l)}',
             style: TextStyle(
               fontSize: 12,
-              color: textColor,
+              color: dateTimeColor,
             ),
             textAlign: isRtl ? TextAlign.right : TextAlign.left,
             textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
           ),
-          // Zeile 2: Gespielt (Grün, fett) mit Wartezeit in Klammern
           Row(
             textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Auto-Icon: in der Titelzeile (_buildCompactMusicRow), hier kein Duplikat
-              // "Gespielt: [Datum] [Zeit]" in Grün
               Flexible(
                 child: Text.rich(
                   TextSpan(
                     children: [
                       TextSpan(
                         text: '${loc.played}: $playedTime',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 12,
-                          color: UIConstants.frameGespielt,
+                          color: dateTimeColor,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
-                // Wartezeit in Klammern (Weiß/Standardfarbe): "(Wartezeit: 3 Min)"
-                TextSpan(
-                  text: ' (${loc.wait_time_label}: $waitMinutes $minutesText)',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: textColor,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
+                      TextSpan(
+                        text: ' (${loc.wait_time_label}: $waitMinutes $minutesText)',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: dateTimeColor,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
                     ],
                   ),
                   textAlign: isRtl ? TextAlign.right : TextAlign.left,
@@ -346,14 +513,27 @@ class WishCard extends StatelessWidget {
           ),
         ],
       );
+    } else if (type == WishCardType.offen &&
+        cardData['is_pre_wish'] == true) {
+      timeContent = Text(
+        FormattingUtils.formatCompactDateTimeLine(
+          summary.oldestWishDate,
+          context,
+        ),
+        style: TextStyle(fontSize: 12, color: dateTimeColor),
+        textAlign: isRtl ? TextAlign.right : TextAlign.left,
+        textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      );
     } else if (type == WishCardType.offen) {
-      statusWidget = Row(
+      timeContent = Row(
         mainAxisSize: MainAxisSize.min,
         textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
         children: [
           Text(
             _formatClockWithSuffixForLocale(context, summary.oldestWishDate, l),
-            style: TextStyle(fontSize: 12, color: textColor),
+            style: TextStyle(fontSize: 12, color: dateTimeColor),
             textAlign: isRtl ? TextAlign.right : TextAlign.left,
             textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
             maxLines: 1,
@@ -361,7 +541,7 @@ class WishCard extends StatelessWidget {
           ),
           _SinceTimeDisplay(
             wishDate: summary.oldestWishDate,
-            textStyle: TextStyle(fontSize: 12, color: textColor),
+            textStyle: TextStyle(fontSize: 12, color: dateTimeColor),
             isRtl: isRtl,
             l: l,
           ),
@@ -369,22 +549,20 @@ class WishCard extends StatelessWidget {
       );
     } else if (type == WishCardType.abgelehnt && rejected != null) {
       final rejectedTime = _formatClockWithSuffixForLocale(context, rejected, l);
-      
-      statusWidget = Column(
+
+      timeContent = Column(
         crossAxisAlignment: isRtl ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Zeile 1: Nur ältester Wunschzeitstempel
           Text(
             '${loc.requested_at} ${_formatClockWithSuffixForLocale(context, summary.oldestWishDate, l)}',
             style: TextStyle(
               fontSize: 12,
-              color: textColor,
+              color: dateTimeColor,
             ),
             textAlign: isRtl ? TextAlign.right : TextAlign.left,
             textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
           ),
-          // Zeile 2: Abgelehnt (Orange, fett) + Absende-/Ablehnungs-Uhrzeit – ohne Wartezeit
           Row(
             textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
             mainAxisSize: MainAxisSize.min,
@@ -392,9 +570,9 @@ class WishCard extends StatelessWidget {
               Flexible(
                 child: Text(
                   '${loc.rejected}: $rejectedTime',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12,
-                    color: UIConstants.frameAbgelehnt,
+                    color: dateTimeColor,
                     fontWeight: FontWeight.bold,
                   ),
                   textAlign: isRtl ? TextAlign.right : TextAlign.left,
@@ -407,98 +585,99 @@ class WishCard extends StatelessWidget {
         ],
       );
     } else {
-      // Standard-Anzeige für andere Seiten: Nur Uhrzeit
-      statusWidget = Text(
-        _formatTime(created),
+      timeContent = Text(
+        FormattingUtils.formatClockWithSuffix(created, context),
         style: TextStyle(
           fontSize: 12,
-          color: textColor,
+          color: dateTimeColor,
         ),
         textAlign: isRtl ? TextAlign.right : TextAlign.left,
         textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
       );
     }
 
+    final iconsWidget = Row(
+      mainAxisSize: MainAxisSize.min,
+      textDirection: ui.TextDirection.ltr,
+      children: [
+        if (type == WishCardType.offen &&
+            (showWishCount || hasGreeting || showFavorite))
+          const SizedBox(width: 2),
+        if (showWishCount)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+            decoration: BoxDecoration(
+              color: UIConstants.frameAbgelehnt,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              '$totalWishes',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        if (showWishCount && hasGreeting) const SizedBox(width: 8),
+        if (hasGreeting)
+          Icon(
+            Icons.chat_bubble_outline,
+            size: 18,
+            color: pageAccent,
+          ),
+        if (hasGreeting && showFavorite) const SizedBox(width: 8),
+        if (showFavorite)
+          Builder(
+            builder: (context) {
+              final isFree = UserService().currentUser.value?.isFree ?? true;
+              return Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: () {
+                    if (isFree) {
+                      FreeFeatureLockedDialog.show(
+                        context,
+                        title: l.free_feature_favorites_title,
+                        description:
+                            l.free_feature_favorites_description,
+                      );
+                      return;
+                    }
+                    _toggleFavorite(context, docIds!.first);
+                  },
+                  borderRadius: BorderRadius.circular(24),
+                  child: SizedBox(
+                    width: 34,
+                    height: 34,
+                    child: Center(
+                      child: Icon(
+                        isFavorite ? Icons.favorite : Icons.favorite_border,
+                        size: 20,
+                        color: isFree
+                            ? UIConstants.freeLimitBorderRed
+                            : (isFavorite
+                                  ? UIConstants.frameNoParty
+                                  : Colors.white70),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+      ],
+    );
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Expanded(
-          child: statusWidget,
+          child: timeContent,
         ),
         const SizedBox(width: 8),
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          textDirection: ui.TextDirection.ltr,
-          children: [
-            if (type == WishCardType.offen &&
-                (showWishCount || hasGreeting || showFavorite))
-              const SizedBox(width: 2),
-            if (showWishCount)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                decoration: BoxDecoration(
-                  color: UIConstants.frameAbgelehnt,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(
-                  '$totalWishes',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            if (showWishCount && hasGreeting) const SizedBox(width: 8),
-            if (hasGreeting)
-              const Icon(
-                Icons.chat_bubble_outline,
-                size: 18,
-                color: UIConstants.frameOffen,
-              ),
-            if (hasGreeting && showFavorite) const SizedBox(width: 8),
-            if (showFavorite)
-              Builder(
-                builder: (context) {
-                  final isFree = UserService().currentUser.value?.isFree ?? true;
-                  return Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: () {
-                        if (isFree) {
-                          FreeFeatureLockedDialog.show(
-                            context,
-                            title: l.free_feature_favorites_title,
-                            description:
-                                l.free_feature_favorites_description,
-                          );
-                          return;
-                        }
-                        _toggleFavorite(context, docIds!.first);
-                      },
-                      borderRadius: BorderRadius.circular(24),
-                      child: SizedBox(
-                        width: 34,
-                        height: 34,
-                        child: Center(
-                          child: Icon(
-                            isFavorite ? Icons.favorite : Icons.favorite_border,
-                            size: 20,
-                            color: isFree
-                                ? UIConstants.freeLimitBorderRed
-                                : (isFavorite
-                                      ? UIConstants.frameNoParty
-                                      : Colors.white70),
-                          ),
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-          ],
-        ),
+        iconsWidget,
       ],
     );
   }
@@ -572,10 +751,24 @@ class WishCard extends StatelessWidget {
     bool autoRecognized,
     WishCardType type,
     bool isRtl,
-    Color textColor,
+    Color labelColor,
+    Color valueColor,
     AppLocalizations l, {
     bool isDjWish = false,
+    bool isPreWish = false,
+    Color? preWishIconColor,
   }) {
+    final preWishColor = preWishIconColor ?? UIConstants.colorPreWish;
+    final titleLabel = _getLabelWithoutColon(
+      type == WishCardType.gespielt ? l.history_label_title : l.wish_title_label,
+    );
+    final artistLabel = _getLabelWithoutColon(l.wish_artist_label);
+
+    TextStyle labelStyle({required double fontSize, FontWeight weight = FontWeight.normal}) =>
+        TextStyle(fontSize: fontSize, color: labelColor, fontWeight: weight);
+    TextStyle valueStyle({required double fontSize, FontWeight weight = FontWeight.bold}) =>
+        TextStyle(fontSize: fontSize, color: valueColor, fontWeight: weight);
+
     return Column(
       crossAxisAlignment: isRtl ? CrossAxisAlignment.end : CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -596,6 +789,21 @@ class WishCard extends StatelessWidget {
                   color: UIConstants.appOrange,
                 ),
               ),
+            if (isPreWish)
+              Padding(
+                padding: EdgeInsets.only(
+                  right: isRtl ? 0 : 6,
+                  left: isRtl ? 6 : 0,
+                ),
+                child: Tooltip(
+                  message: l.pre_wish_badge_tooltip,
+                  child: Icon(
+                    Icons.playlist_add,
+                    size: 14,
+                    color: preWishColor,
+                  ),
+                ),
+              ),
             if (autoRecognized)
               Padding(
                 padding: EdgeInsets.only(
@@ -613,47 +821,58 @@ class WishCard extends StatelessWidget {
                       size: 14,
                       color: type == WishCardType.gespielt
                           ? _kAutoRecognizedIconGespielt
-                          : UIConstants.frameOffen,
+                          : valueColor,
                     ),
                   ),
                 ),
               ),
             Expanded(
-              child: Text(
-                title.isNotEmpty
-                    ? (() {
-                        final label = type == WishCardType.gespielt
-                            ? l.history_label_title
-                            : l.wish_title_label;
-                        return '${_getLabelWithoutColon(label)}: $title';
-                      })()
-                    : l.no_title,
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                    color: textColor,
-                                  ),
-                textAlign: isRtl ? TextAlign.right : TextAlign.left,
-                textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
-              ),
+              child: title.isNotEmpty
+                  ? Text.rich(
+                      TextSpan(
+                        children: [
+                          TextSpan(
+                            text: '$titleLabel: ',
+                            style: labelStyle(fontSize: 16, weight: FontWeight.bold),
+                          ),
+                          TextSpan(
+                            text: title,
+                            style: valueStyle(fontSize: 16),
+                          ),
+                        ],
+                      ),
+                      textAlign: isRtl ? TextAlign.right : TextAlign.left,
+                      textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
+                    )
+                  : Text(
+                      l.no_title,
+                      style: labelStyle(fontSize: 16, weight: FontWeight.bold),
+                      textAlign: isRtl ? TextAlign.right : TextAlign.left,
+                      textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
+                    ),
             ),
-            // Anzahl der Wünsche beim Titel ENTFERNT - wird jetzt nur noch oben rechts angezeigt
-            // (Keine Anzeige mehr beim Titel für Offen-Seite)
           ],
         ),
-                              if (artist.isNotEmpty) ...[
+        if (artist.isNotEmpty) ...[
           const SizedBox(height: 4),
-                                Text(
-            '${_getLabelWithoutColon(l.wish_artist_label)}: $artist',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    color: textColor.withValues(alpha: 0.9),
-                                  ),
+          Text.rich(
+            TextSpan(
+              children: [
+                TextSpan(
+                  text: '$artistLabel: ',
+                  style: labelStyle(fontSize: 14),
+                ),
+                TextSpan(
+                  text: artist,
+                  style: valueStyle(fontSize: 14, weight: FontWeight.normal),
+                ),
+              ],
+            ),
             textAlign: isRtl ? TextAlign.right : TextAlign.left,
             textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
-                                ),
-                              ],
-                            ],
+          ),
+        ],
+      ],
     );
   }
 
@@ -688,7 +907,7 @@ class WishCard extends StatelessWidget {
       children: wishersList.asMap().entries.map((entry) {
         final index = entry.key;
         final wisher = entry.value;
-        final wisherName = wisher['name'] as String;
+        final wisherName = wisherDisplayName(wisher['name'] as String?, l);
         final isRegisteredUser = wisher['isRegistered'] as bool;
 
         return Row(
@@ -739,7 +958,10 @@ class WishCard extends StatelessWidget {
         crossAxisAlignment: isRtl ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: wishersList.map((wisher) {
-        final wisherName = wisher['name'] as String;
+        final wisherName = wisherDisplayName(
+          wisher['name'] as String?,
+          AppLocalizations.of(context)!,
+        );
         final wisherGreeting = wisher['greeting'] as String;
         final isRegisteredUser = wisher['isRegistered'] as bool;
 
@@ -777,76 +999,19 @@ class WishCard extends StatelessWidget {
               if (wisherGreeting.isNotEmpty) ...[
                 const SizedBox(width: 8),
                 Flexible(
-                  child: Column(
-                    crossAxisAlignment: isRtl ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                        children: [
-                      // Original-Grußtext
-                            Text(
-                        wisherGreeting,
-                              style: TextStyle(
-                          fontSize: 14,
-                                color: secondaryTextColor,
-                          fontStyle: FontStyle.italic,
-                        ),
-                        textAlign: isRtl ? TextAlign.right : TextAlign.left,
-                        textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
-                      ),
-                      // Übersetzung (asynchron geladen)
-                      FutureBuilder<String?>(
-                        future: GreetingTranslator.translateGreetingIfNeeded(wisherGreeting, context),
-                        builder: (context, snapshot) {
-                          if (snapshot.connectionState == ConnectionState.waiting) {
-                            // Minimaler Lade-Indikator
-                            return const Padding(
-                              padding: EdgeInsets.only(top: 4),
-                              child: SizedBox(
-                                height: 12,
-                                width: 12,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 1.5,
-                                  color: Color(0xFFB0B0B0),
-                                ),
-                              ),
-                            );
-                          }
-                          
-                          if (snapshot.hasData && snapshot.data != null) {
-                            // Übersetzung vorhanden
-                            return Padding(
-                              padding: const EdgeInsets.only(top: 4),
-                              child: Row(
-                                textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                            Icon(
-                                    Icons.translate,
-                              size: 14,
-                                    color: secondaryTextColor.withValues(alpha: 0.7),
-                            ),
-                            const SizedBox(width: 4),
-                            Flexible(
-                              child: Text(
-                                      snapshot.data!,
-                                style: TextStyle(
-                                        fontSize: 13,
-                                        color: secondaryTextColor.withValues(alpha: 0.8),
-                                        fontStyle: FontStyle.italic,
-                                ),
-                                      textAlign: isRtl ? TextAlign.right : TextAlign.left,
-                                      textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
-                              ),
-                            ),
-                          ],
-                              ),
-                            );
-                          }
-                          
-                          // Keine Übersetzung nötig oder Fehler
-                          return const SizedBox.shrink();
-                        },
-                      ),
-                    ],
+                  child: WishGreetingTextWithTranslation(
+                    greeting: wisherGreeting,
+                    isRtl: isRtl,
+                    greetingStyle: TextStyle(
+                      fontSize: 14,
+                      color: secondaryTextColor,
+                      fontStyle: FontStyle.italic,
+                    ),
+                    translationStyle: TextStyle(
+                      fontSize: 13,
+                      color: secondaryTextColor.withValues(alpha: 0.8),
+                      fontStyle: FontStyle.italic,
+                    ),
                   ),
                 ),
               ],
@@ -877,12 +1042,23 @@ class WishCard extends StatelessWidget {
     String title,
     String artist,
     AppLocalizations l,
-    Color? borderColorOverride,
-  ) async {
+    Color? borderColorOverride, {
+    bool isPreWishOverviewMode = false,
+  }) async {
     final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
     const textColor = Colors.white;
     const secondaryTextColor = Color(0xFFB0B0B0);
-    final borderColor = borderColorOverride ?? _getBorderColor(type, false, true);
+    final isPreWishInOffenDetail =
+        type == WishCardType.offen &&
+        data['is_pre_wish'] == true &&
+        !isPreWishOverviewMode;
+    final showPreWishDetailBadge =
+        data['is_pre_wish'] == true &&
+        (isPreWishInOffenDetail || isPreWishOverviewMode);
+    final borderColor = borderColorOverride ??
+        (isPreWishInOffenDetail
+            ? UIConstants.framePreWish
+            : _getBorderColor(type, false, true));
 
     // Für Offen-Seite: Markiere Wünsche als gelesen, wenn Detail-Dialog geöffnet wird
     if (type == WishCardType.offen && docIds != null && docIds.isNotEmpty) {
@@ -965,7 +1141,34 @@ class WishCard extends StatelessWidget {
                           _buildDetailStatusRow(context, data, created, played, rejected, type, isRtl, textColor, l),
                           const SizedBox(height: 8),
                         ],
-                        // Song-Info Box direkt unter Icons (Haupt-Fokus)
+                        if (showPreWishDetailBadge) ...[
+                          const SizedBox(height: 8),
+                          Align(
+                            alignment: isRtl
+                                ? Alignment.centerRight
+                                : Alignment.centerLeft,
+                            child: _buildPreWishOverviewStatusBadge(
+                              l,
+                              publishedToOpen:
+                                  PreWishHelper.isPublishedPreWish(data),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            FormattingUtils.formatCompactDateTimeLine(
+                              _resolveWishTimeSummary(data, created)
+                                  .oldestWishDate,
+                              context,
+                            ),
+                            style: TextStyle(fontSize: 13, color: textColor),
+                            textAlign: isRtl ? TextAlign.right : TextAlign.left,
+                            textDirection: isRtl
+                                ? ui.TextDirection.rtl
+                                : ui.TextDirection.ltr,
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                        // Song-Info Box (Titel / Interpret)
                         const SizedBox(height: 8),
                         _buildDetailSongSection(context, title, artist, data, isNew, autoRecognized, isRtl, textColor, l, type),
                         // Gewünschte Versionen (abweichende Titel innerhalb der Gruppe)
@@ -1402,7 +1605,8 @@ class WishCard extends StatelessWidget {
         ? (data['createdAt'] as Timestamp).toDate()
         : DateTime.now();
     final summary = _resolveWishTimeSummary(data, fallbackCreated);
-    final createdAtList = groupedData != null ? (groupedData!['createdAt_list'] as List?) : null;
+    final createdAtList = (data['createdAt_list'] as List?) ??
+        (groupedData?['createdAt_list'] as List?);
 
     final wishTimes = (createdAtList ?? [])
         .map((ts) => ts is Timestamp ? ts.toDate() : null)
@@ -1440,7 +1644,7 @@ class WishCard extends StatelessWidget {
       crossAxisAlignment: isRtl ? CrossAxisAlignment.end : CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: pairedWishers.map((wisher) {
-        final name = wisher['name'] as String? ?? '';
+        final name = wisherDisplayName(wisher['name'] as String?, l);
         final greeting = wisher['greeting'] as String? ?? '';
         final isRegistered = wisher['isRegistered'] as bool? ?? false;
         final createdAt =
@@ -1467,7 +1671,13 @@ class WishCard extends StatelessWidget {
               ),
               const SizedBox(height: 2),
               Text(
-                _buildDetailTimeWithRelative(context, createdAt, l),
+                _buildDetailTimeWithRelative(
+                  context,
+                  createdAt,
+                  l,
+                  type: type,
+                  isPreWishInOffen: data['is_pre_wish'] == true,
+                ),
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.normal,
@@ -1556,8 +1766,14 @@ class WishCard extends StatelessWidget {
   String _buildDetailTimeWithRelative(
     BuildContext context,
     DateTime wishDate,
-    AppLocalizations l,
-  ) {
+    AppLocalizations l, {
+    WishCardType type = WishCardType.offen,
+    bool isPreWishInOffen = false,
+  }) {
+    if (type == WishCardType.offen && isPreWishInOffen) {
+      return FormattingUtils.formatCompactDateTimeLine(wishDate, context);
+    }
+
     final clockTime = _formatClockWithSuffixForLocale(context, wishDate, l);
     final elapsed = RelativeTimeMinutes.elapsedCalendarMinutes(
       wishDate,
@@ -1647,12 +1863,39 @@ class WishCard extends StatelessWidget {
         : (title.isNotEmpty ? title : artist);
     final isGrouped = docIds != null && docIds.length > 0;
     final firstRequest = request ?? _mapToRequest(data);
+    final publishedPreWishInOverview = isPreWishOverviewMode &&
+        PreWishHelper.isPublishedPreWish(data);
 
     return Row(
       mainAxisAlignment: isRtl ? MainAxisAlignment.start : MainAxisAlignment.end,
                   mainAxisSize: MainAxisSize.min,
       textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
       children: [
+        // Lila Pfeil: In Offen (nur Vorab-Queue)
+        if (isPreWishOverviewMode &&
+            !publishedPreWishInOverview &&
+            onPublishPreWish != null)
+          IconButton(
+            onPressed: () {
+              final ids = isGrouped && docIds != null && docIds!.isNotEmpty
+                  ? docIds!
+                  : (request?.id != null ? [request!.id] : <String>[]);
+              if (ids.isEmpty) return;
+              onPublishPreWish!(context, ids);
+            },
+            icon: const Icon(
+              Icons.publish,
+              color: UIConstants.colorPreWish,
+              size: 24,
+            ),
+            tooltip: l.pre_wish_publish_tooltip,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+          ),
+        if (isPreWishOverviewMode &&
+            !publishedPreWishInOverview &&
+            onPublishPreWish != null)
+          const SizedBox(width: 8),
         // Grüner Haken: Als gespielt markieren (nur Icon)
         if ((isGrouped && onPlay != null) || (!isGrouped && onPlaySingle != null))
           IconButton(
@@ -2056,7 +2299,10 @@ class WishCard extends StatelessWidget {
   ) async {
     final requestedBy = List<String>.from((data['requested_by'] as List?) ?? []);
     final name = (data['name'] ?? '') as String;
-    final namesToShow = requestedBy.isNotEmpty ? requestedBy : (name.isNotEmpty ? [name] : []);
+    final namesToShow = WishGroupingHelper.dedupeNamesPreserveOrder(
+      requestedBy.isNotEmpty ? requestedBy : (name.isNotEmpty ? [name] : ['']),
+    );
+    final effectiveNames = namesToShow.isEmpty ? const [''] : namesToShow;
     final greetings = List<Map<String, dynamic>>.from(
       (data['greetings'] as List?)?.map((g) => g as Map<String, dynamic>) ?? [],
     );
@@ -2064,9 +2310,9 @@ class WishCard extends StatelessWidget {
 
     // Wenn mehr als 1 Wünscher: Zeige Auswahlmenü
     final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
-    if (namesToShow.length > 1) {
+    if (effectiveNames.length > 1) {
       final remainingGreetings = List<Map<String, dynamic>>.from(greetings);
-      final selectEntries = namesToShow.map((n) {
+      final selectEntries = effectiveNames.map((n) {
         final greetingIndex = remainingGreetings.indexWhere(
           (g) => (g['name'] as String? ?? '') == n,
         );
@@ -2096,7 +2342,7 @@ class WishCard extends StatelessWidget {
 
                 return ListTile(
                   title: Text(
-                    n,
+                    wisherDisplayName(n, l),
                     style: const TextStyle(color: Colors.white),
                     textAlign: isRtl ? TextAlign.right : TextAlign.left,
                     textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
@@ -2128,7 +2374,7 @@ class WishCard extends StatelessWidget {
     }
 
     // Zeige Sperr-Dialog (One-Click: Ja -> Sofort sperren)
-    final userName = namesToShow.isNotEmpty ? namesToShow[0] : name;
+    final userName = effectiveNames.isNotEmpty ? effectiveNames[0] : name;
     final shouldBlock = await showDialog<bool>(
       context: context,
       builder: (context) {
@@ -2316,6 +2562,8 @@ class WishCard extends StatelessWidget {
       'auto_recognized': request.autoRecognized ?? false,
       'isSeen': request.isSeen, // ✅ FIX: isSeen Feld für Read-Status-Logik
       'is_dj_wish': request.isDjWish ?? false,
+      'is_pre_wish': request.isPreWish == true,
+      'pre_wish_published': request.preWishPublished == true,
     };
   }
 
@@ -2325,26 +2573,12 @@ class WishCard extends StatelessWidget {
     return label.replaceAll(':', '').trim();
   }
 
-  /// Formatiert Datum immer im LTR-Format (Tag.Monat.Jahr)
-  /// Das Datum wird durch Directionality-Widget vor RTL-Spiegelung geschützt
-  String _formatShortDate(DateTime date, bool isRtl) {
-    // Immer LTR-Format: Tag.Monat.Jahr (z.B. 13.01.2026)
-    final day = date.day.toString().padLeft(2, '0');
-    final month = date.month.toString().padLeft(2, '0');
-    final year = date.year.toString();
-    return '$day.$month.$year';
+  String _formatShortDate(DateTime date, BuildContext context) {
+    return FormattingUtils.formatDateForLocale(date, context);
   }
 
-  String _formatTime(DateTime date) {
-    return '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')} Uhr';
-  }
-
-  /// Formatiert die Uhrzeit basierend auf der Locale (Hm = 24h, jm = 12h je nach Sprachnorm)
   String _formatTimeForLocale(BuildContext context, DateTime date) {
-    final locale = Localizations.localeOf(context);
-    // 24h-Locales (de, fr, ru, zh, es, tr, ar, pt) → Hm; 12h → jm
-    final use24h = ['de', 'fr', 'ru', 'zh', 'es', 'tr', 'ar', 'pt'].contains(locale.languageCode);
-    return use24h ? DateFormat.Hm(locale.toString()).format(date) : DateFormat.jm(locale.toString()).format(date);
+    return FormattingUtils.formatTime(date, context);
   }
 
   String _formatClockWithSuffixForLocale(
@@ -2352,10 +2586,7 @@ class WishCard extends StatelessWidget {
     DateTime date,
     AppLocalizations l,
   ) {
-    final clock = _formatTimeForLocale(context, date);
-    final suffix = (l.time_suffix).trim();
-    if (suffix.isEmpty) return clock;
-    return '$clock\u00A0$suffix';
+    return FormattingUtils.formatClockWithSuffix(date, context);
   }
 
   /// Formatiert die Zeitdifferenz zwischen einem Zeitstempel und jetzt
@@ -2475,7 +2706,10 @@ class WishCard extends StatelessWidget {
                 const SizedBox(height: 16),
                 // Grüße-Liste mit Übersetzung
                 ...greetingsWithText.map((w) {
-                  final wisherName = w['name'] as String? ?? '';
+                  final wisherName = wisherDisplayName(
+                    w['name'] as String?,
+                    AppLocalizations.of(context)!,
+                  );
                   final wisherGreeting = w['greeting'] as String? ?? '';
                   final isRegistered = w['is_registered'] as bool? ?? false;
                   
@@ -2601,6 +2835,21 @@ class WishCard extends StatelessWidget {
 
   /// Bestimmt die Rahmenfarbe basierend auf Typ, Neu-Status und Gelesen-Status
   /// Verwendet UIConstants-Rollen (frameOffen, frameNeu, frameGespielt, frameAbgelehnt) für zentrale Steuerung
+  static WishCardListKind _wishCardListKind(
+    WishCardType type, {
+    required bool isPreWishContext,
+  }) {
+    if (isPreWishContext) return WishCardListKind.preWish;
+    switch (type) {
+      case WishCardType.offen:
+        return WishCardListKind.offen;
+      case WishCardType.gespielt:
+        return WishCardListKind.gespielt;
+      case WishCardType.abgelehnt:
+        return WishCardListKind.abgelehnt;
+    }
+  }
+
   static Color _getBorderColor(WishCardType type, bool isNew, bool effectivelySeen) {
     if (type == WishCardType.offen) {
       if (!effectivelySeen) {
@@ -2625,14 +2874,21 @@ class WishCard extends StatelessWidget {
     Map<String, dynamic>? data,]
   ) async {
     try {
-      final docRef = FirebaseFirestore.instance.collection('wishes').doc(docId);
+      final partyId = (data?['party_id'] as String?) ??
+          ActivePartyService.getStoredSession()?.partyId ??
+          '';
+      if (partyId.isEmpty) {
+        debugLog('⚠️ WishCard: keine party_id für Favorit');
+        return;
+      }
+      final docRef = WishPaths.partyWish(partyId, docId);
       final docSnapshot = await docRef.get();
-      
+
       if (!docSnapshot.exists) {
         debugLog('⚠️ WishCard: Dokument $docId existiert nicht');
         return;
       }
-      
+
       final currentFavorite = (docSnapshot.data()?['is_favorite'] as bool?) ?? false;
       await docRef.update({'is_favorite': !currentFavorite});
       
@@ -2661,19 +2917,22 @@ class WishCard extends StatelessWidget {
   /// ✅ SYNCHRONISIERT: Aktualisiert beide Systeme (Firestore isSeen Feld + lokales seenWishIds Set)
   static Future<void> _markWishesAsSeen(List<String> docIds) async {
     if (docIds.isEmpty) return;
-    
+
+    final partyId = ActivePartyService.getStoredSession()?.partyId ?? '';
+    if (partyId.isEmpty) return;
+
     try {
-      // Weg 1: Aktualisiere Firestore isSeen Feld
       final batch = FirebaseFirestore.instance.batch();
       for (final docId in docIds) {
-        final docRef = FirebaseFirestore.instance.collection('wishes').doc(docId);
+        final docRef = WishPaths.partyWish(partyId, docId);
         batch.update(docRef, {'isSeen': true});
       }
       await batch.commit();
       
       // Weg 2: Aktualisiere lokales seenWishIds Set (für sofortige UI-Aktualisierung)
       ActivePartyService.seenWishIds.addAll(docIds);
-      
+      ActivePartyService.trimSeenWishIdsIfNeeded();
+
       debugLog('✅ ${docIds.length} Wünsche als gelesen markiert (Firestore + seenWishIds)');
     } catch (e) {
       debugLog('⚠️ Fehler beim Markieren der Wünsche als gelesen: $e');

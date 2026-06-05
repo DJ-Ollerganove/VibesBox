@@ -1,6 +1,12 @@
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:flutter/foundation.dart';
+
 import '../utils/debug_log.dart';
+
+void _appCheckPrint(String message) {
+  // Immer ausgeben (auch Profile) — nicht nur [kDebugMode], sonst fehlt das Debug-Token in Xcode/Geräte-Logs.
+  debugPrint('[AppCheck] $message');
+}
 
 /// App Check: **Release** = Play Integrity / App Attest / Web reCAPTCHA v3.
 /// **Debug** = [AndroidDebugProvider] / [AppleDebugProvider] — Token aus Log in der Firebase Console
@@ -25,10 +31,14 @@ class AppCheckService {
 
   static Future<void> initialize() async {
     try {
-      if (kDebugMode) {
-        debugLog(
-          'ℹ️ App Check: Debug-Provider — nach erstem Start das ausgegebene Debug-Token in der '
-          'Firebase Console (App Check) eintragen.',
+      // Profile (`flutter run --profile`, install-stable) hat kDebugMode == false — würde sonst
+      // App Attest nutzen und mit „App not registered“ spammen, wenn die iOS-App in Firebase
+      // App Check noch nicht passt. Nicht-Release = Debug-Provider wie im reinen Debug-Build.
+      final useDebugProviders = !kReleaseMode;
+      if (useDebugProviders) {
+        _appCheckPrint(
+          'Debug-Provider aktiv (${kDebugMode ? "Debug" : "Profile"}) — Token unten in Firebase Console '
+          '→ App Check → iOS-App → „Debug-Tokens verwalten“ eintragen.',
         );
         await FirebaseAppCheck.instance.activate(
           providerWeb: kIsWeb ? ReCaptchaV3Provider(recaptchaWebSiteKey) : null,
@@ -36,26 +46,34 @@ class AppCheckService {
           providerApple: const AppleDebugProvider(),
         );
         try {
-          final token = await FirebaseAppCheck.instance.getToken();
+          // Einmal Token ziehen, damit das Secret sicher im Log landet (JWT; zur Registrierung meist ausreichend).
+          final token = await FirebaseAppCheck.instance.getToken(true);
           if (token != null && token.isNotEmpty) {
-            debugLog(
-              'ℹ️ App Check Debug-Token (für Firebase Console → App Check → Apps → Debug): $token',
+            _appCheckPrint(
+              'DEBUG TOKEN / App Check JWT (Firebase Console → App Check → Apps → iOS → Debug-Tokens): $token',
             );
           } else {
-            debugLog(
-              'ℹ️ App Check: getToken() leer — ggf. Logcat nach nativer „Enter this debug secret“-Zeile prüfen.',
+            _appCheckPrint(
+              'getToken() leer — in Xcode/Konsole nach nativer Zeile „Firebase App Check“ / '
+              '„Enter this debug secret“ suchen.',
             );
           }
         } catch (e) {
-          debugLog(
-            'ℹ️ App Check: Debug-Token konnte nicht gelesen werden (nativer Log kann trotzdem Token zeigen): $e',
+          _appCheckPrint(
+            'getToken fehlgeschlagen (nativer Log kann trotzdem Debug-Secret zeigen): $e',
           );
         }
+        debugLog(
+          'ℹ️ App Check: Debug-Provider — siehe [AppCheck]-Zeilen oben (auch in Profile sichtbar).',
+        );
       } else {
         await FirebaseAppCheck.instance.activate(
           providerWeb: kIsWeb ? ReCaptchaV3Provider(recaptchaWebSiteKey) : null,
           providerAndroid: const AndroidPlayIntegrityProvider(),
           providerApple: const AppleAppAttestProvider(),
+        );
+        _appCheckPrint(
+          'Release: Play Integrity / App Attest aktiv — Durchsetzung in Firebase Console prüfen.',
         );
         debugLog(
           '✅ Firebase App Check aktiv (Android: Play Integrity, Apple: App Attest, Web: reCAPTCHA v3). '
@@ -65,6 +83,7 @@ class AppCheckService {
 
       await FirebaseAppCheck.instance.setTokenAutoRefreshEnabled(true);
     } catch (e) {
+      _appCheckPrint('Aktivierung fehlgeschlagen: $e');
       debugLog('⚠️ Firebase App Check Aktivierung fehlgeschlagen: $e');
     }
   }

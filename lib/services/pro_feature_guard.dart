@@ -1,11 +1,12 @@
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../config/app_config.dart';
+import 'dj_pro_session_service.dart';
 import 'user_service.dart';
 
 /// Zentraler Guard für Pro/Premium-gesperrte Features (z.B. Musikerkennung).
 ///
-/// Nutzt [UserService.sessionProStatus] (lokal/trial-timer-synchron), kein periodisches Firestore-Polling.
+/// Nutzt [DjProSessionService] (Echtzeit via Firestore + Trial-Timer).
 /// Admin-Status wird über Firestore role_id (AppConfig.isAdminRole) ermittelt, nicht über E-Mail.
 class ProFeatureGuard {
   ProFeatureGuard._();
@@ -30,7 +31,7 @@ class ProFeatureGuard {
         model.planType == 'free') {
       return true;
     }
-    return UserService().sessionProStatus.value?.isActive == true;
+    return DjProSessionService.instance.isProActive;
   }
 
   /// True, wenn der aktuelle User Musikerkennung nutzen darf
