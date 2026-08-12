@@ -526,6 +526,17 @@ class _Content extends StatelessWidget {
             ),
             child: Text(l.paywall_start_trial_button),
           ),
+          const SizedBox(height: 8),
+          Text(
+            l.paywall_promo_access_hint,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 13,
+              height: 1.35,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
           const SizedBox(height: 12),
         ],
 
