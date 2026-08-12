@@ -9,6 +9,7 @@ import '../helpers/security_helper.dart';
 import 'user_service.dart';
 import '../utils/debug_log.dart';
 import '../utils/party_helper.dart';
+import 'music_history_session_resolver.dart';
 
 /// Ergebnis-Objekt für aktive Party-Informationen
 class ActivePartyInfo {
@@ -494,6 +495,36 @@ class ActivePartyService {
     );
   }
 
+  /// Synchronisiert die kanonische music_history-Session (Schreiben + UI).
+  static Future<void> applyMusicHistorySessionId(String sessionId) async {
+    if (sessionId.isEmpty) return;
+    final current = _storedSessionInfo ?? storedSessionNotifier.value;
+    if (current == null) return;
+    if (current.sessionId == sessionId) return;
+
+    final updated = ActivePartyInfo(
+      partyId: current.partyId,
+      partyCode: current.partyCode,
+      sessionId: sessionId,
+      partyName: current.partyName,
+      startDate: current.startDate,
+      endDate: current.endDate,
+      status: current.status,
+    );
+    await _updatePersistentSession(updated);
+    try {
+      await _startHeartbeat(sessionId);
+    } catch (e) {
+      debugLog(
+        '[ACTIVE-PARTY-SERVICE] ⚠️ Heartbeat nach applyMusicHistorySessionId: $e',
+      );
+    }
+    debugLog(
+      '[ACTIVE-PARTY-SERVICE] ✅ music_history Session gesetzt: $sessionId '
+      '(Party ${current.partyId})',
+    );
+  }
+
   /// Legt eine music_history-Session an, falls noch keine für diese Party existiert.
   /// Wird aufgerufen, wenn der Stream eine aktive Party findet, aber keine Session.
   /// Gibt die Session-ID zurück oder null bei Fehler.
@@ -507,30 +538,13 @@ class ActivePartyService {
     if (user == null || user.uid != djId) return null;
 
     try {
-      // Prüfe erneut, ob eine Session existiert (Race-Condition mit HistoryProvider)
-      final existing = await FirebaseFirestore.instance
-          .collection('music_history')
-          .where('djId', isEqualTo: djId)
-          .where('party_id', isEqualTo: partyId)
-          .limit(1)
-          .get();
-      if (existing.docs.isNotEmpty) return existing.docs.first.id;
-
-      final sessionData = {
-        'djId': djId,
-        'party_id': partyId,
-        'partyName': partyName,
-        'startTime': FieldValue.serverTimestamp(),
-        'endTime': null,
-        'isActive': true,
-      };
-      final sessionRef = await FirebaseFirestore.instance
-          .collection('music_history')
-          .add(_sanitizeWriteMap(sessionData));
-      debugLog(
-        '[ACTIVE-PARTY-SERVICE] ✅ music_history-Session erstellt für Party $partyId: ${sessionRef.id}',
+      return await MusicHistorySessionResolver.ensureSession(
+        firestore: FirebaseFirestore.instance,
+        djId: djId,
+        partyId: partyId,
+        partyName: partyName,
+        sanitize: _sanitizeWriteMap,
       );
-      return sessionRef.id;
     } catch (e) {
       debugLog('[ACTIVE-PARTY-SERVICE] ⚠️ Fehler beim Erstellen der Session: $e');
       return null;
@@ -924,22 +938,14 @@ class ActivePartyService {
     debugLog(
       'ANALYSE [Auth]: Eingeloggte UID ist = ${FirebaseAuth.instance.currentUser?.uid}',
     );
-    QuerySnapshot<Map<String, dynamic>> sessionQuery;
+
+    String? sessionId;
     try {
-      sessionQuery = await FirebaseFirestore.instance
-          .collection('music_history')
-          .where('djId', isEqualTo: effectiveDjId)
-          .where('party_id', isEqualTo: activePartyId)
-          .limit(1)
-          .get();
-      if (sessionQuery.docs.isEmpty) {
-        sessionQuery = await FirebaseFirestore.instance
-            .collection('music_history')
-            .where('djId', isEqualTo: effectiveDjId)
-            .where('partyId', isEqualTo: activePartyId)
-            .limit(1)
-            .get();
-      }
+      sessionId = await MusicHistorySessionResolver.pickBestSessionId(
+        firestore: FirebaseFirestore.instance,
+        djId: effectiveDjId,
+        partyId: activePartyId,
+      );
     } catch (e) {
       debugLog('ANALYSE [History-Error]: Firebase meldet folgenden Fehler: $e');
       if (e.toString().contains('index') || e.toString().contains('Index')) {
@@ -951,13 +957,11 @@ class ActivePartyService {
     }
 
     debugLog(
-      'ANALYSE [History-Data]: Empfangen wurden ${sessionQuery.docs.length} Dokumente (getActivePartyInfo / materialize)',
+      'ANALYSE [History-Data]: Beste Session = ${sessionId ?? "(keine)"} (getActivePartyInfo / materialize)',
     );
-    String? sessionId;
-    if (sessionQuery.docs.isNotEmpty) {
-      sessionId = sessionQuery.docs.first.id;
+    if (sessionId != null) {
       try {
-        await _startHeartbeat(sessionId!);
+        await _startHeartbeat(sessionId);
       } catch (e) {
         debugLog(
           '[ACTIVE-PARTY-SERVICE] ⚠️ Fehler beim Starten des Heartbeats: $e',

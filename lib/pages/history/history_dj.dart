@@ -8,6 +8,7 @@ import '../../l10n/app_localizations.dart';
 import '../../models/playlist_model.dart';
 import '../../services/active_party_service.dart';
 import '../../services/history_pagination_service.dart';
+import '../../services/music_history_session_resolver.dart';
 import '../../services/results_per_page_service.dart';
 import '../../utils/ui_constants.dart';
 import '../../widgets/empty_list_message.dart';
@@ -40,6 +41,8 @@ class _HistoryDjPageState extends State<HistoryDjPage> {
   final List<Map<String, dynamic>> _accumulatedTracks = [];
 
   bool _isInitialLoading = true;
+  bool _partyWideResolveInFlight = false;
+  bool _didPartyWideFallback = false;
 
   @override
   void initState() {
@@ -224,6 +227,53 @@ class _HistoryDjPageState extends State<HistoryDjPage> {
     }
   }
 
+  /// Wenn die aktuelle Session leer ist: beste Session wählen bzw. alle
+  /// Party-Tracks laden (wie PWA) — behebt iOS/Android Session-Mismatch.
+  Future<void> _resolvePartyTracksIfEmpty(String partyId) async {
+    if (_partyWideResolveInFlight || _didPartyWideFallback) return;
+    if (_accumulatedTracks.isNotEmpty) return;
+    _partyWideResolveInFlight = true;
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+
+      final bestId = await MusicHistorySessionResolver.pickBestSessionId(
+        firestore: FirebaseFirestore.instance,
+        djId: user.uid,
+        partyId: partyId,
+      );
+      if (bestId != null && bestId != _currentSessionId) {
+        await ActivePartyService.applyMusicHistorySessionId(bestId);
+        if (!mounted) return;
+        _didPartyWideFallback = false;
+        _initializeTracksStream(partyId, bestId);
+        return;
+      }
+
+      final all = await _loadTracksForPartyId(partyId);
+      if (!mounted) return;
+      if (all.isEmpty) return;
+      _didPartyWideFallback = true;
+      _accumulatedTracks
+        ..clear()
+        ..addAll(all);
+      if (!_tracksController.isClosed) {
+        _tracksController.add(List<Map<String, dynamic>>.from(_accumulatedTracks));
+      }
+      setState(() {
+        _isInitialLoading = false;
+        _currentPage = 1;
+      });
+      debugLog(
+        'HistoryDjPage: Party-weite Fallback-Anzeige (${all.length} Tracks)',
+      );
+    } catch (e) {
+      debugLog('HistoryDjPage: Party-Resolve fehlgeschlagen: $e');
+    } finally {
+      _partyWideResolveInFlight = false;
+    }
+  }
+
   /// Initialisiert den Live-Stream auf music_history/{sessionId}/tracks.
   /// Session-ID kommt aus ActivePartyService; nur DocumentChangeType.added/removed werden verarbeitet.
   void _initializeTracksStream(String partyId, String? sessionId) {
@@ -233,10 +283,15 @@ class _HistoryDjPageState extends State<HistoryDjPage> {
       _accumulatedTracks.clear();
       _currentSessionId = null;
       _currentPartyId = partyId;
+      _didPartyWideFallback = false;
       if (!_tracksController.isClosed) _tracksController.add([]);
       setState(() {
         _currentPage = 1;
         _isInitialLoading = false;
+      });
+      // Keine Session-ID → trotzdem Party-weit suchen (Tracks können existieren).
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _resolvePartyTracksIfEmpty(partyId);
       });
       return;
     }
@@ -249,6 +304,7 @@ class _HistoryDjPageState extends State<HistoryDjPage> {
     _accumulatedTracks.clear();
     _currentPartyId = partyId;
     _currentSessionId = sessionId;
+    _didPartyWideFallback = false;
     setState(() {
       _currentPage = 1;
       _isInitialLoading = true;
@@ -296,6 +352,11 @@ class _HistoryDjPageState extends State<HistoryDjPage> {
           _isInitialLoading = false;
         });
       }
+      if (_accumulatedTracks.isEmpty && mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _resolvePartyTracksIfEmpty(partyId);
+        });
+      }
     }, onError: (e) {
       debugLog('ANALYSE [History-Error]: Firebase meldet folgenden Fehler: $e');
       if (e.toString().contains('index') || e.toString().contains('Index')) {
@@ -306,6 +367,9 @@ class _HistoryDjPageState extends State<HistoryDjPage> {
         _tracksController.add([]);
       }
       if (mounted) setState(() => _isInitialLoading = false);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _resolvePartyTracksIfEmpty(partyId);
+      });
     });
   }
 
