@@ -633,6 +633,8 @@ class AppLocalizations {
       translate('trial_expired_dialog_message');
   String get trial_expired_dialog_ok => translate('trial_expired_dialog_ok');
   String get paywall_start_trial_button => translate('paywall_start_trial_button');
+  /// Klartext unter dem 2-Tage-Pro-Button (kein Store-Abo / kein „Trial“-Marketing).
+  String get paywall_promo_access_hint => translate('paywall_promo_access_hint');
   String get pro_life_revoked => translate('pro_life_revoked');
   String get payment_source_store => translate('payment_source_store');
   String get payment_amount_credit => translate('payment_amount_credit');
