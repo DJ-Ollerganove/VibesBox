@@ -5,6 +5,7 @@ import '../config/app_config.dart';
 import '../models/playlist_model.dart';
 import '../services/active_party_service.dart';
 import '../services/duplicate_check_service.dart';
+import '../services/music_history_session_resolver.dart';
 import '../services/shazam_service.dart';
 import '../services/user_service.dart';
 import '../utils/history_last_track_dedup.dart';
@@ -266,80 +267,34 @@ class HistoryProvider {
       await _stopSession();
     }
 
-    // Find-or-Create: Ein Dokument pro Party – prüfe ob bereits ein music_history-Dokument mit dieser party_id existiert
-    try {
-      var existingSession = await _firestore
-          .collection('music_history')
-          .where('djId', isEqualTo: user.uid)
-          .where('party_id', isEqualTo: partyId)
-          .limit(1)
-          .get();
-
-      if (existingSession.docs.isEmpty) {
-        existingSession = await _firestore
-            .collection('music_history')
-            .where('djId', isEqualTo: user.uid)
-            .where('partyId', isEqualTo: partyId)
-            .limit(1)
-            .get();
-      }
-
-      if (existingSession.docs.isNotEmpty) {
-        // Verwende existierendes Dokument – alle Tracks der Party landen in derselben Session
-        _currentSessionId = existingSession.docs.first.id;
-        _currentPartyId = partyId;
-        _currentPartyName = partyName;
-        _isRecording = true;
-        debugLog('✅ HistoryProvider: Wiederverwendung existierender Session für Party $partyId: $_currentSessionId');
-        return;
-      }
-    } catch (e) {
-      debugLog('Fehler beim Prüfen existierender Session: $e');
+    if (partyId.isEmpty || partyId == 'manual') {
+      debugLog('❌ HistoryProvider: Kann Session nicht starten – ungültige partyId: "$partyId"');
+      return;
+    }
+    if (user.uid.isEmpty) {
+      debugLog('❌ HistoryProvider: Kann Session nicht starten – user.uid ist leer.');
+      return;
     }
 
-    // Kein Dokument für diese Party vorhanden – erstelle neues in Firestore (ein Dokument pro Party)
     try {
-      // Pfad-Kontrolle: partyId darf nicht leer sein
-      if (partyId.isEmpty || partyId == 'manual') {
-        debugLog('❌ HistoryProvider: Kann Session nicht starten – ungültige partyId: "$partyId"');
+      final sessionId = await MusicHistorySessionResolver.ensureSession(
+        firestore: _firestore,
+        djId: user.uid,
+        partyId: partyId,
+        partyName: partyName,
+      );
+      if (sessionId == null) {
+        debugLog('❌ HistoryProvider: ensureSession lieferte null für Party $partyId');
         return;
       }
-
-      // Auth-Check: User muss eingeloggt sein
-      if (user.uid.isEmpty) {
-        debugLog('❌ HistoryProvider: Kann Session nicht starten – user.uid ist leer.');
-        return;
-      }
-      
-      debugLog('✅ HistoryProvider: Starte Session für Party-ID (lange ID): $partyId');
-      
-      final sessionData = {
-        'djId': user.uid,
-        'party_id': partyId, // Einheitlich: lange Firestore-Dokument-ID – ein Dokument pro Party
-        'partyName': partyName,
-        'startTime': FieldValue.serverTimestamp(),
-        'endTime': null,
-        'isActive': true, // optional – Verknüpfung erfolgt über party_id
-      };
-      
-      debugLog('📝 HistoryProvider: Session-Daten: $sessionData');
-      
-      final sessionRef = await _firestore.collection('music_history').add(sessionData).catchError((e) {
-        debugLog('❌ FIRESTORE ERROR (Session create): $e');
-        debugLog('   → Exakter Fehlergrund: ${e.toString()}');
-        if (e.toString().toLowerCase().contains('permission') || e.toString().toLowerCase().contains('denied')) {
-          debugLog('   → PERMISSION_DENIED: Security Rules blockieren Erstellung in music_history (Top-Level)');
-          debugLog('   → Regel prüft: request.auth != null && request.resource.data.djId == request.auth.uid');
-        }
-        throw e;
-      });
-
-      _currentSessionId = sessionRef.id;
+      _currentSessionId = sessionId;
       _currentPartyId = partyId;
       _currentPartyName = partyName;
       _isRecording = true;
-      
-      debugLog('✅ HistoryProvider: Session erstellt - Session-ID: $_currentSessionId, Party-ID: $_currentPartyId');
+      await ActivePartyService.applyMusicHistorySessionId(sessionId);
+      debugLog(
+        '✅ HistoryProvider: Session für Party $partyId: $_currentSessionId',
+      );
     } catch (e) {
       debugLog('❌ Fehler beim Starten der Session: $e');
       debugLog('   Stack Trace: ${StackTrace.current}');
