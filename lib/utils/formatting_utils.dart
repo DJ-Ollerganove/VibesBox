@@ -135,12 +135,21 @@ class FormattingUtils {
     return intl.DateFormat.Hm(intlTag(context)).format(dateTime);
   }
 
-  /// Formatiert Startzeit für QR-Export (Datum + Uhrzeit nach [intl_locale] in languages.json).
-  static String formatStartTimeForExport(DateTime date, Locale locale) {
+  /// Formatiert Startzeit für QR/PDF-Export (nach [intl_locale] in languages.json).
+  /// [includeDate]/[includeTime]: einzeln abschaltbar; beide false → leerer String.
+  static String formatStartTimeForExport(
+    DateTime date,
+    Locale locale, {
+    bool includeDate = true,
+    bool includeTime = true,
+  }) {
+    if (!includeDate && !includeTime) return '';
     final tag = LanguageRegistry.intlTagFor(locale.languageCode);
     final datePart = intl.DateFormat.yMd(tag).format(date);
     final timePart = _formatTimeForTag(date, tag, locale.languageCode);
-    return '$datePart - $timePart';
+    if (includeDate && includeTime) return '$datePart - $timePart';
+    if (includeDate) return datePart;
+    return timePart;
   }
 
   /// Datum und Uhrzeit für PDF/QR-Bild gemäß Export-Sprache ([languageCode], z. B. `de`, `en`).
@@ -192,6 +201,13 @@ class FormattingUtils {
     final timePart = formatTime(dateTime, context);
     return '$datePart $timePart';
   }
+
+  /// Kompaktes Party-Ende (Datum + Uhrzeit) für DJ-VibesBox-Kopfzeile.
+  static String formatCompactPartyEndDateTime(
+    DateTime end,
+    BuildContext context,
+  ) =>
+      formatCompactDateTimeLine(end, context);
 
   /// Party-Zeitraum für Statistik-Kacheln (Start–Ende), nach App-Locale.
   static String formatCompactPartyPeriod(

@@ -1,8 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../l10n/app_localizations.dart';
 import '../../../utils/formatting_utils.dart';
+import '../../../utils/payment_store_display.dart';
 import '../../../utils/ui_constants.dart';
 
 /// Baut die Historie der Zahlungen/Abos. Block inkl. Überschrift nur sichtbar, wenn Einträge vorhanden.
@@ -62,7 +64,6 @@ class ProfilePaymentHistory extends StatelessWidget {
                 final timestamp = (data['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now();
                 final amount = (data['amountGross'] as num?)?.toDouble() ?? 0.0;
                 final type = data['type'] as String?;
-                final source = data['source'] as String?; // z.B. REVENUECAT, ADMIN_GIFT
 
                 String amountText;
                 if (type == 'gift') {
@@ -76,10 +77,7 @@ class ProfilePaymentHistory extends StatelessWidget {
                   ).format(amount);
                 }
 
-                String sourceDisplay = source ?? (localizations.unknown);
-                if (source == 'REVENUECAT') sourceDisplay = localizations.payment_source_store;
-                if (source == 'ADMIN_GIFT') sourceDisplay = localizations.vibesbox_pro_life;
-                if (source == 'ADMIN_REVOKE') sourceDisplay = localizations.pro_life_revoked;
+                final storeDisplay = resolvePaymentStoreDisplay(data, localizations);
 
                 final dateTimeText = FormattingUtils.formatDateTimeYmdHmWithSuffix(
                   timestamp,
@@ -99,24 +97,44 @@ class ProfilePaymentHistory extends StatelessWidget {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            dateTimeText,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 15,
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              dateTimeText,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            sourceDisplay,
-                            style: const TextStyle(color: Colors.white54, fontSize: 12),
-                          ),
-                        ],
+                            const SizedBox(height: 4),
+                            Row(
+                              children: [
+                                if (storeDisplay.icon != null) ...[
+                                  FaIcon(
+                                    storeDisplay.icon,
+                                    size: 14,
+                                    color: storeDisplay.iconColor ?? Colors.white54,
+                                  ),
+                                  const SizedBox(width: 6),
+                                ],
+                                Flexible(
+                                  child: Text(
+                                    storeDisplay.label,
+                                    style: const TextStyle(
+                                      color: Colors.white54,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
+                      const SizedBox(width: 8),
                       Text(
                         amountText,
                         style: TextStyle(

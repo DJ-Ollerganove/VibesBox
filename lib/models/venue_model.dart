@@ -83,4 +83,21 @@ class VenueModel {
     }
     return null;
   }
+
+  VenueModel copyWithFloors(List<VenueFloor> newFloors) {
+    return VenueModel(
+      id: id,
+      name: name,
+      address: address,
+      latitude: latitude,
+      longitude: longitude,
+      timezoneId: timezoneId,
+      fixedPartyCode: fixedPartyCode,
+      placeId: placeId,
+      floors: newFloors,
+      createdBy: createdBy,
+      createdAt: createdAt,
+      updatedAt: updatedAt,
+    );
+  }
 }

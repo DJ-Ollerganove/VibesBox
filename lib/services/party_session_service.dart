@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'public_dj_profile_service.dart';
 
 import '../utils/party_code_utils.dart';
+import '../utils/party_grace_period_helper.dart';
 import '../utils/pre_wish_helper.dart';
 import '../widgets/party_check_in_feedback_widget.dart';
 import '../utils/debug_log.dart';
@@ -15,6 +16,7 @@ import '../models/guest_floor_option.dart';
 import '../utils/floor_key_utils.dart';
 import '../utils/venue_party_fields.dart';
 import 'guest_floor_session_service.dart';
+import 'guest_join_code_resolver.dart';
 
 /// Zentrale Session für Gast-Party-Beitritt.
 /// **Alles-drin-Prinzip:** Beim Login (validateAndJoin) werden Party, DJ und (nur bei
@@ -31,6 +33,8 @@ class PartySessionService {
 
   PartyCheckInFeedback? _pendingPartyEndedFeedback;
   GuestFloorRedirectState? _pendingFloorRedirect;
+  /// QR-/Deep-Link-Check-In: Feedback anzeigen, wenn die Wunschbox als Nächstes öffnet.
+  PartyCheckInFeedback? _pendingDeepLinkCheckInFeedback;
 
   /// Nach beendeter Floor-Party: andere Räume noch aktiv → Floor-Picker (Phase 4 UI).
   GuestFloorRedirectState? consumePendingFloorRedirect() {
@@ -43,6 +47,16 @@ class PartySessionService {
   PartyCheckInFeedback? consumePendingPartyEndedFeedback() {
     final pending = _pendingPartyEndedFeedback;
     _pendingPartyEndedFeedback = null;
+    return pending;
+  }
+
+  void setPendingDeepLinkCheckInFeedback(PartyCheckInFeedback feedback) {
+    _pendingDeepLinkCheckInFeedback = feedback;
+  }
+
+  PartyCheckInFeedback? consumePendingDeepLinkCheckInFeedback() {
+    final pending = _pendingDeepLinkCheckInFeedback;
+    _pendingDeepLinkCheckInFeedback = null;
     return pending;
   }
 
@@ -303,21 +317,41 @@ class PartySessionService {
     }
 
     try {
-      final options =
-          await GuestFloorSessionService.instance.listJoinableFloorOptions(digits);
+      final floorService = GuestFloorSessionService.instance;
+      final docs = await floorService.queryPartiesByJoinCode(digits);
+      final now = DateTime.now();
+      final floorOptions = await floorService.listJoinableFloorOptions(digits);
 
-      if (options.isEmpty) {
-        return const PartyCheckInFeedback(type: PartyCheckInFeedbackType.wrongCode);
+      final resolved = GuestJoinCodeResolver.resolve(
+        allDocs: docs,
+        now: now,
+        isGuestJoinable: floorService.isPartyGuestJoinable,
+        floorOptionsForSelection: floorOptions,
+      );
+
+      switch (resolved.action) {
+        case GuestJoinResolveAction.notFound:
+          return const PartyCheckInFeedback(
+            type: PartyCheckInFeedbackType.wrongCode,
+          );
+        case GuestJoinResolveAction.ambiguous:
+          return const PartyCheckInFeedback(
+            type: PartyCheckInFeedbackType.ambiguousCode,
+          );
+        case GuestJoinResolveAction.selectFloor:
+          return PartyCheckInFeedback(
+            type: PartyCheckInFeedbackType.selectFloor,
+            otherFloorOptions: resolved.floorOptions ?? floorOptions,
+          );
+        case GuestJoinResolveAction.join:
+          final doc = resolved.partyDoc;
+          if (doc == null) {
+            return const PartyCheckInFeedback(
+              type: PartyCheckInFeedbackType.wrongCode,
+            );
+          }
+          return joinPartyById(doc.id, joinCode: digits);
       }
-
-      if (options.length > 1) {
-        return PartyCheckInFeedback(
-          type: PartyCheckInFeedbackType.selectFloor,
-          otherFloorOptions: options,
-        );
-      }
-
-      return joinPartyById(options.first.partyId, joinCode: digits);
     } catch (e) {
       debugLog('PartySessionService validateAndJoin Fehler (evtl. Permission Denied): $e');
       return const PartyCheckInFeedback(type: PartyCheckInFeedbackType.wrongCode);
@@ -413,6 +447,7 @@ class PartySessionService {
     _floorKey = null;
     _floorLabel = null;
     _pendingFloorRedirect = null;
+    _pendingDeepLinkCheckInFeedback = null;
 
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -641,9 +676,63 @@ class PartySessionService {
     }
   }
 
+  Future<int> _loadOwnerGraceMinutes(String? ownerUid) async {
+    if (ownerUid == null || ownerUid.trim().isEmpty) return 30;
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(ownerUid.trim())
+          .get();
+      final raw = doc.data()?['grace_period_minutes'];
+      if (raw is int) return raw;
+      if (raw is num) return raw.toInt();
+    } catch (_) {}
+    return 30;
+  }
+
+  Future<bool> _storedPartyStillMatchesJoinCode(String partyId) async {
+    final code = _shortCode;
+    if (code == null || code.length != PartyCodeUtils.codeLength) {
+      return true;
+    }
+    try {
+      final docs =
+          await GuestFloorSessionService.instance.queryPartiesByJoinCode(code);
+      return docs.any((doc) => doc.id == partyId);
+    } catch (e) {
+      debugLog('PartySessionService: Join-Code-Abgleich fehlgeschlagen – Session bleibt: $e');
+      return true;
+    }
+  }
+
+  Future<bool> _shouldRetainGuestSession(
+    Map<String, dynamic> partyData,
+    DateTime now,
+  ) async {
+    if (partyData['lifecycle_status'] == 'standby') return true;
+    if (PreWishHelper.isPreWishWindowOpen(partyData, now)) return true;
+
+    final ownerUid =
+        partyData['created_by'] as String? ?? partyData['djId'] as String?;
+    final grace = await _loadOwnerGraceMinutes(ownerUid);
+    final endDate = PartyGracePeriodHelper.partyEndDate(partyData);
+    if (endDate != null &&
+        PartyGracePeriodHelper.shouldShowOpenWishes(
+          now: now,
+          endDate: endDate,
+          graceMinutes: grace,
+          wishesManuallyHidden:
+              PartyGracePeriodHelper.wishesManuallyHidden(partyData),
+        )) {
+      return true;
+    }
+
+    return GuestFloorSessionService.instance.isPartyGuestJoinable(partyData, now);
+  }
+
   /// Hydratiert die Session nach App-Neustart.
-  /// Prüft ob Party noch aktiv ist. NUR bei expliziter Party-Ende → clearSession().
-  /// Bei Fehlern/Netzwerk/Doc nicht gefunden: Session BEHALTEN (Daten aus Prefs).
+  /// Prüft ob Party noch aktiv ist. Bei Ende / fehlendem Dokument → clearSession().
+  /// Bei Fehlern/Netzwerk: Session BEHALTEN (Offline-Gast).
   Future<bool> hydrateIfNeeded() async {
     await loadFromPrefs();
 
@@ -656,9 +745,13 @@ class PartySessionService {
           .doc(partyId)
           .get();
 
-      // Doc nicht gefunden oder leer: Session BEHALTEN (Netzwerkfehler etc.)
+      // Doc fehlt (gelöscht / ungültige ID): Session nicht behalten.
       if (!partyDoc.exists || partyDoc.data() == null) {
-        return hasSession;
+        debugLog(
+          'PartySessionService: Party $partyId fehlt in Firestore – Session gelöscht',
+        );
+        await clearSession();
+        return false;
       }
 
       final partyData = partyDoc.data()!;
@@ -666,7 +759,6 @@ class PartySessionService {
       final finishedAt = partyData['finished_at'];
       final status = partyData['status'] as String?;
 
-      // NUR bei expliziter Party-Ende → clearSession
       if (lifecycleStatus == 'finished' ||
           finishedAt != null ||
           status == 'beendet' ||
@@ -676,16 +768,19 @@ class PartySessionService {
       }
 
       final now = DateTime.now();
-      final endTs = partyData['end_date'] as Timestamp?;
-      final endPosix = partyData['end_time_posix'];
-      DateTime? endDate;
-      if (endTs != null) {
-        endDate = endTs.toDate();
-      } else if (endPosix is int) {
-        endDate = DateTime.fromMillisecondsSinceEpoch(endPosix * 1000);
-      }
-      if (endDate != null && now.isAfter(endDate)) {
+      if (!await _shouldRetainGuestSession(partyData, now)) {
+        debugLog(
+          'PartySessionService: Party $partyId nicht mehr gültig – Session gelöscht',
+        );
         await _clearSessionAfterPartyEnded(partyData, partyId: partyId);
+        return false;
+      }
+
+      if (!await _storedPartyStillMatchesJoinCode(partyId)) {
+        debugLog(
+          'PartySessionService: Party $partyId passt nicht mehr zum Join-Code – Session gelöscht',
+        );
+        await clearSession();
         return false;
       }
 
@@ -716,12 +811,16 @@ class PartySessionService {
       // Unvollständige Session: komplette Hydrierung aus Party-Dokument
       final feedback = await _validateAndSaveFromPartyDoc(partyDoc);
       if (feedback != null) {
-        // Fehler (z.B. Party nicht gestartet): Session BEHALTEN, nicht clearen
+        if (feedback.type == PartyCheckInFeedbackType.partyEnded ||
+            feedback.type == PartyCheckInFeedbackType.invalidOrInactive) {
+          await _clearSessionAfterPartyEnded(partyData, partyId: partyId);
+          return false;
+        }
         return hasSession;
       }
       return true;
     } catch (e) {
-      // Bei Exception: Session BEHALTEN (Netzwerk etc.)
+      debugLog('PartySessionService hydrateIfNeeded: $e – Session bleibt (Offline)');
       return hasSession;
     }
   }

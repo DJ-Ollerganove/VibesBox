@@ -6,6 +6,7 @@ import 'package:string_similarity/string_similarity.dart';
 import '../utils/text_utils.dart';
 import '../utils/debug_log.dart';
 import '../utils/wish_paths.dart';
+import 'app_diagnostic_log_service.dart';
 
 /// Treffer in der offenen Wunschliste (entspricht PWA `findSimilarWish`, Firestore-Zweig).
 class SimilarPendingWishMatch {
@@ -24,6 +25,28 @@ class DuplicateCheckService {
 
   static double? _cachedThreshold;
   static List<String>? _cachedIgnoredKeywords;
+
+  static void _logDupHit({
+    required String source,
+    required String partyId,
+    required String queryTitle,
+    required String queryArtist,
+    required String matchTitle,
+    required String matchArtist,
+    required double similarity,
+    required double threshold,
+    String? docId,
+    String? sessionId,
+  }) {
+    final msg =
+        'HIT source=$source party=$partyId thr=${threshold.toStringAsFixed(2)} '
+        'sim=${(similarity * 100).toStringAsFixed(1)}% '
+        'query="$queryTitle" / "$queryArtist" '
+        'match="$matchTitle" / "$matchArtist" '
+        'doc=${docId ?? "-"} session=${sessionId ?? "-"}';
+    debugLog('DUP $msg');
+    diagLog('DUP', msg);
+  }
 
   /// Lädt party_settings/current und cached duplicate_threshold + ignored_keywords (einmal pro App-Lauf).
   static Future<void> ensurePartySettingsLoaded() async {
@@ -193,6 +216,18 @@ class DuplicateCheckService {
             );
 
             if (avgSimilarity >= threshold) {
+              _logDupHit(
+                source: 'music_history',
+                partyId: partyId,
+                queryTitle: title,
+                queryArtist: artist,
+                matchTitle: rawTrackTitle,
+                matchArtist: rawTrackArtist,
+                similarity: avgSimilarity,
+                threshold: threshold,
+                docId: trackDoc.id,
+                sessionId: sessionDoc.id,
+              );
               debugLog('✅ Song bereits in History gefunden (Ähnlichkeit: ${(avgSimilarity * 100).toStringAsFixed(1)}%)');
               return true;
             }
@@ -235,6 +270,17 @@ class DuplicateCheckService {
           );
 
           if (avgSimilarity >= threshold) {
+            _logDupHit(
+              source: 'played_wish',
+              partyId: partyId,
+              queryTitle: title,
+              queryArtist: artist,
+              matchTitle: rawWishTitle,
+              matchArtist: rawWishArtist,
+              similarity: avgSimilarity,
+              threshold: threshold,
+              docId: wishDoc.id,
+            );
             debugLog('✅ Song bereits als gespielter Wunsch gefunden (Ähnlichkeit: ${(avgSimilarity * 100).toStringAsFixed(1)}%)');
             return true;
           }
@@ -316,6 +362,19 @@ class DuplicateCheckService {
           }
           final existingSpotifyId = data['spotify_id'] as String?;
           if (existingSpotifyId != null && existingSpotifyId == sid) {
+            final rawT = (data['title'] ?? data['song'] ?? '').toString();
+            final rawA = (data['artist'] ?? '').toString();
+            _logDupHit(
+              source: 'open_wish_spotify',
+              partyId: partyId,
+              queryTitle: title,
+              queryArtist: artist,
+              matchTitle: rawT,
+              matchArtist: rawA,
+              similarity: 1.0,
+              threshold: threshold,
+              docId: doc.id,
+            );
             return SimilarPendingWishMatch(documentId: doc.id, data: data);
           }
         }
@@ -376,6 +435,20 @@ class DuplicateCheckService {
           bestSimilarity = combinedSimilarity;
           bestMatch = SimilarPendingWishMatch(documentId: doc.id, data: data);
         }
+      }
+      if (bestMatch != null) {
+        final d = bestMatch.data;
+        _logDupHit(
+          source: 'open_wish',
+          partyId: partyId,
+          queryTitle: title,
+          queryArtist: artist,
+          matchTitle: (d['title'] ?? d['song'] ?? '').toString(),
+          matchArtist: (d['artist'] ?? '').toString(),
+          similarity: bestSimilarity,
+          threshold: threshold,
+          docId: bestMatch.documentId,
+        );
       }
       return bestMatch;
     } catch (e) {

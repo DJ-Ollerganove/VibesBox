@@ -7,7 +7,11 @@ enum PartyWizardStepKind {
   endTime,
   wishLimits,
   preWishes,
-  /// Öffentlich: Location + Floor am Ende (nach Datum/Limits).
+  /// Öffentlich: Floor-Auswahl (nach Location).
+  floor,
+  /// Öffentlich: Einmal- vs. Fest-Party-Code.
+  partyCode,
+  /// Legacy: Location + Floor kombiniert (nur Bearbeitungsdialog).
   locationWithFloor,
 }
 
@@ -15,11 +19,13 @@ List<PartyWizardStepKind> partyWizardStepsForType(String partyType) {
   if (partyType == 'public') {
     return const [
       PartyWizardStepKind.eventType,
-      PartyWizardStepKind.partyName,
       PartyWizardStepKind.startTime,
       PartyWizardStepKind.endTime,
+      PartyWizardStepKind.location,
+      PartyWizardStepKind.floor,
       PartyWizardStepKind.wishLimits,
-      PartyWizardStepKind.locationWithFloor,
+      PartyWizardStepKind.partyName,
+      PartyWizardStepKind.preWishes,
     ];
   }
   return const [

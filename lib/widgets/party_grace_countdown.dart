@@ -1,18 +1,21 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'dart:async';
 
 import '../l10n/app_localizations.dart';
 import '../utils/ui_constants.dart';
 
-/// Countdown bis zum Ende der Nachlaufzeit (Wünsche ausblenden).
-/// >60 s: minütliche Anzeige; ≤60 s: Sekunden-Countdown.
+/// Countdown bis zum Ende der Nachlaufzeit.
+/// Optional: orangefarbener Link „Nachlaufzeit beenden“ am Zeilenende.
 class PartyGraceCountdown extends StatefulWidget {
   const PartyGraceCountdown({
     super.key,
     required this.graceEndsAt,
+    this.onEndGracePeriod,
   });
 
   final DateTime graceEndsAt;
+  final VoidCallback? onEndGracePeriod;
 
   @override
   State<PartyGraceCountdown> createState() => _PartyGraceCountdownState();
@@ -20,10 +23,19 @@ class PartyGraceCountdown extends StatefulWidget {
 
 class _PartyGraceCountdownState extends State<PartyGraceCountdown> {
   Timer? _timer;
+  late final TapGestureRecognizer _linkRecognizer;
+
+  static const _baseStyle = TextStyle(
+    fontSize: 14,
+    fontWeight: FontWeight.w600,
+    color: UIConstants.appOrange,
+    height: 1.35,
+  );
 
   @override
   void initState() {
     super.initState();
+    _linkRecognizer = TapGestureRecognizer()..onTap = _handleLinkTap;
     _scheduleTimer();
   }
 
@@ -33,6 +45,10 @@ class _PartyGraceCountdownState extends State<PartyGraceCountdown> {
     if (oldWidget.graceEndsAt != widget.graceEndsAt) {
       _scheduleTimer();
     }
+  }
+
+  void _handleLinkTap() {
+    widget.onEndGracePeriod?.call();
   }
 
   void _scheduleTimer() {
@@ -55,6 +71,7 @@ class _PartyGraceCountdownState extends State<PartyGraceCountdown> {
   @override
   void dispose() {
     _timer?.cancel();
+    _linkRecognizer.dispose();
     super.dispose();
   }
 
@@ -92,13 +109,34 @@ class _PartyGraceCountdownState extends State<PartyGraceCountdown> {
       return const SizedBox.shrink();
     }
 
-    return Text(
-      _formatRemaining(context, now),
-      style: const TextStyle(
-        fontSize: 14,
-        fontWeight: FontWeight.w600,
-        color: UIConstants.appOrange,
+    final remainingText = _formatRemaining(context, now);
+    final onEnd = widget.onEndGracePeriod;
+
+    if (onEnd == null) {
+      return Text(remainingText, style: _baseStyle);
+    }
+
+    final l = AppLocalizations.of(context)!;
+    final isRtl = Directionality.of(context) == TextDirection.rtl;
+    final linkLabel = l.grace_period_hide_wishes_now;
+
+    return Text.rich(
+      TextSpan(
+        style: _baseStyle,
+        children: [
+          TextSpan(text: remainingText),
+          const TextSpan(text: ' – '),
+          TextSpan(
+            text: linkLabel,
+            style: _baseStyle.copyWith(
+              decoration: TextDecoration.underline,
+              decorationColor: UIConstants.appOrange,
+            ),
+            recognizer: _linkRecognizer,
+          ),
+        ],
       ),
+      textAlign: isRtl ? TextAlign.right : TextAlign.left,
     );
   }
 }

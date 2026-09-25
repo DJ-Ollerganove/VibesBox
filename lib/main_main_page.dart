@@ -28,6 +28,7 @@ class _MainPageState extends State<MainPage>
 
   User? _previousUser;
   StreamSubscription<User?>? _authSubscription;
+  Timer? _authLogoutDebounce;
   bool _lastRegistrationGuard = false;
   String? _lastRoleId;
   /// Session: erste gültige [role_id] nach Login — Änderung = sofortiger Logout.
@@ -58,10 +59,12 @@ class _MainPageState extends State<MainPage>
   StreamSubscription<String>? _recognitionNotificationTapSubscription;
 
   String? _currentViewRole; // Für Admin-Ansicht-Umschaltung
-  String? _appUpdateCheckScope;
+  String? _appUpdateCheckDoneUid;
   bool _appUpdateCheckRunning = false;
   bool _announcementCheckDone =
       false; // Einmal pro Session: globale Ankündigung prüfen
+  /// Admin: New-User-Popup-Listener gestartet für diese UID (Admin- und DJ-Ansicht).
+  String? _adminNewUserPopupStartedUid;
   /// Timeout-Fallback: Nach 20 s ohne Profil-Antwort Fehlermeldung + Retry
   bool _profileLoadTimeoutReached = false;
   Timer? _profileLoadTimeoutTimer;
@@ -149,6 +152,7 @@ class _MainPageState extends State<MainPage>
       try {
         // Party-Stream und Prefs zuerst fertig — sonst feuert Autostart auf dem iPad oft zu früh.
         await ActivePartyService.initialize();
+        await VibesBoxSyncService.instance.initialize();
         await PartyAutostartService().initialize();
       } catch (e) {
         debugLog('❌ PartyAutostartService.initialize: $e');
@@ -170,13 +174,17 @@ class _MainPageState extends State<MainPage>
     debugLog('🔐 MainPage: UserService.forceRefresh() aufgerufen');
     SubscriptionSyncService.logIn(user.uid);
     SubscriptionSyncService.syncSubscriptionStatus(user.uid);
-    AppUpdateService.logUserAppVersion();
-    debugLog('🔐 MainPage: AppUpdateService.logUserAppVersion() aufgerufen');
+    unawaited(
+      AppUpdateService.ensureSessionDeviceTelemetry(reason: 'cold_start'),
+    );
+    debugLog('🔐 MainPage: AppUpdateService.ensureSessionDeviceTelemetry()');
     if (!kDebugMode) {
       AppUpdateService.debugFetchAndPrintStoreVersion();
     }
     unawaited(_maybeRunPartyDataCleanupForAdmin());
     syncFloorSwapIncomingListener();
+    syncDjSongBlacklistGuard();
+    SavedTracksService.startWatchingForCurrentUser();
   }
 
   /// Einmaliges [PartyCleanupService] nur mit Admin + geladenem Profil (parties-Collection).
@@ -277,7 +285,7 @@ class _MainPageState extends State<MainPage>
       }
 
       if (signOutOnFailure) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(AppLocalizations.of(context)!.admin_check_failed_snackbar),
             backgroundColor: Colors.red,
@@ -293,7 +301,7 @@ class _MainPageState extends State<MainPage>
       debugLog('Admin-Biometrie fehlgeschlagen: $e');
       if (!mounted) return false;
       if (signOutOnFailure) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(AppLocalizations.of(context)!.admin_check_failed_snackbar),
             backgroundColor: Colors.red,
@@ -610,12 +618,17 @@ class _MainPageState extends State<MainPage>
     final user = FirebaseAuth.instance.currentUser;
     debugLog('✅ App ist im Vordergrund (deferred resume)');
     if (user != null) {
-      unawaited(AppUpdateService.logUserAppVersion());
+      unawaited(() async {
+        // Fehlgeschlagenen Session-Write nachholen; danach Soft-Update (last_seen / Versionswechsel).
+        await AppUpdateService.ensureSessionDeviceTelemetry(reason: 'resume');
+        await AppUpdateService.logUserAppVersion();
+      }());
     }
     unawaited(_tryConsumeVerifyDeepLinkOnResume());
     unawaited(ActivePartyService.refreshPartyTruthOnResume());
     unawaited(PartyAutostartService().reconcileAfterResume());
     unawaited(ShazamService().syncForegroundAfterAppResumed());
+    unawaited(VibesBoxSyncService.instance.flushAfterResume());
     _syncDjWishNotificationGate();
     final role = _currentRoleName ?? _cachedShellRoleName;
     if (user != null && role == 'Gast') {
@@ -637,6 +650,22 @@ class _MainPageState extends State<MainPage>
     NavigationService().setTabIndex(1);
   }
 
+  Future<void> _performAppSignOut() async {
+    // Vor signOut: Push-Token dieses Geräts vom alten DJ lösen.
+    await DjWishFcmService.instance.clearDeviceTokenFromCurrentUserIfOwned();
+    await SubscriptionSyncService.logOut();
+    ProFeatureGuard.invalidateCache();
+    await SavedLoginEmailStore.clear();
+    await PartySessionService.instance.clearSession();
+    await ActivePartyService.resetForLogout();
+    await FirebaseAuth.instance.signOut();
+    UserService().stopUserStream();
+    UserService().clearCache();
+    NavigationService().resetToHome();
+    unawaited(NavigationService().clearAdminViewRole());
+    if (mounted) setState(() {});
+  }
+
   /// Einmaliger Hinweis nach Ablauf der 48h-Probezeit (DJ-Bereich).
   void _onTrialExpiryPromptNotifier() {
     final endMs = UserService().trialExpiryPromptNotifier.value;
@@ -648,7 +677,7 @@ class _MainPageState extends State<MainPage>
       final key = 'trial_expired_dlg_$endMs';
       if (prefs.getBool(key) == true) return;
 
-      final roleName = _currentRoleName;
+      final roleName = _currentRoleName ?? _cachedShellRoleName;
       final isDjArea =
           roleName == 'DJ' ||
           roleName == 'Admin' ||
@@ -1052,7 +1081,7 @@ class _MainPageState extends State<MainPage>
       final r = await AdminService.instance.massVerifyExistingUsers();
       if (mounted) Navigator.of(context).pop();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(
             l10n.mass_verify_snackbar_result(
@@ -1068,7 +1097,7 @@ class _MainPageState extends State<MainPage>
     } on FirebaseFunctionsException catch (e) {
       if (mounted) Navigator.of(context).pop();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text('${l10n.email_migration_failed} ${e.code} – ${e.message}'),
           backgroundColor: Colors.red,
@@ -1077,7 +1106,7 @@ class _MainPageState extends State<MainPage>
     } catch (e) {
       if (mounted) Navigator.of(context).pop();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text('${l10n.email_migration_failed} $e'),
           backgroundColor: Colors.red,
@@ -1160,6 +1189,9 @@ class _MainPageState extends State<MainPage>
     _currentViewRole = NavigationService().cachedAdminViewRole;
     WidgetsBinding.instance.addObserver(this);
     NavigationService().currentTabIndex.addListener(_onNavigationTabChanged);
+    VibesboxFullscreenService.instance.isFullscreen.addListener(
+      _onVibesboxFullscreenChanged,
+    );
     _previousUser = FirebaseAuth.instance.currentUser;
     unawaited(_hydrateShellCacheFromPrefs());
 
@@ -1204,16 +1236,36 @@ class _MainPageState extends State<MainPage>
             '🔐 MainPage: Registrierungs-Gate aktiv — überspringe Tab/Cold-Start bis Gate end()',
           );
           _previousUser = user;
+          NavigationService().rememberAuthUid(user.uid);
           return;
         }
         if (user != null) {
-          debugLog(
-            '🔐 MainPage: Account-Wechsel / Login – Tab auf Start, Cold-Start-Dienste',
-          );
+          _authLogoutDebounce?.cancel();
+          _authLogoutDebounce = null;
+          final restoringSameSession =
+              prev == null && user.uid == NavigationService().lastAuthUid;
+          NavigationService().rememberAuthUid(user.uid);
+          if (restoringSameSession) {
+            debugLog(
+              '🔐 MainPage: Session-Restore (gleiche UID) – Tab/Stack behalten',
+            );
+            _previousUser = user;
+            _runColdStartServicesForUser(user);
+            _kickPartyAutostart();
+          } else {
+            debugLog(
+              '🔐 MainPage: Account-Wechsel / Login – Tab auf Start, Cold-Start-Dienste',
+            );
+          VibesboxFullscreenService.instance.exit();
           NavigationService().setTabIndex(0);
           setState(() {
             _previousUser = user;
             _announcementCheckDone = false;
+            _adminNewUserPopupStartedUid = null;
+            _appUpdateCheckDoneUid = null;
+            AppUpdateService.resetSessionForLogout();
+            GlobalAnnouncementPopupService.resetSessionForLogout();
+            AdminNewUserPopupService.resetSessionForLogout();
             _profileLoadTimeoutReached = false;
             _cancelProfileLoadTimeout();
             _emailVerifiedFirestoreOverride = false;
@@ -1233,12 +1285,26 @@ class _MainPageState extends State<MainPage>
           _clearAdminOtpInput();
           _runColdStartServicesForUser(user);
           _kickPartyAutostart();
+          }
         } else {
+          debugLog('🔐 MainPage: Auth kurz null – Logout nur nach kurzer Bestätigung');
+          _authLogoutDebounce?.cancel();
+          _authLogoutDebounce = Timer(const Duration(milliseconds: 700), () {
+            if (!mounted) return;
+            final still = FirebaseAuth.instance.currentUser;
+            if (still != null) {
+              _previousUser = still;
+              NavigationService().rememberAuthUid(still.uid);
+              return;
+            }
           debugLog('🔐 MainPage: Logout – Dienste stoppen, Tab auf Start');
+          NavigationService().clearLastAuthUid();
+          VibesboxFullscreenService.instance.exit();
           SubscriptionSyncService.logOut();
           PartyAutostartService().dispose();
           unawaited(PartySessionService.instance.clearSession());
           unawaited(ActivePartyService.resetForLogout());
+          SavedTracksService.stopWatching();
           unawaited(_clearShellCache());
           NavigationService().resetToHome();
           unawaited(NavigationService().clearAdminViewRole());
@@ -1247,7 +1313,12 @@ class _MainPageState extends State<MainPage>
             _currentViewRole = null;
             _currentRoleName = null;
             _announcementCheckDone = false;
+            _adminNewUserPopupStartedUid = null;
+            _appUpdateCheckDoneUid = null;
             _appColdStartDoneUid = null;
+            AppUpdateService.resetSessionForLogout();
+            GlobalAnnouncementPopupService.resetSessionForLogout();
+            AdminNewUserPopupService.resetSessionForLogout();
             _currentWishesList = [];
             _profileLoadTimeoutReached = false;
             _cancelProfileLoadTimeout();
@@ -1273,7 +1344,10 @@ class _MainPageState extends State<MainPage>
           _clearAdminOtpInput();
           UserService().stopUserStream();
           UserService().clearCache();
+          unawaited(OpenWishesVisibilityService.resetForLogout());
           FloorSwapIncomingListener.instance.stop();
+          DjSongBlacklistGuard.instance.stop();
+          });
         }
       } else {
         _previousUser = user;
@@ -1288,12 +1362,12 @@ class _MainPageState extends State<MainPage>
       debugLog(
         '🔐 MainPage: Kaltstart mit Session (${previousUser.uid}) – Cold-Start-Dienste falls nötig',
       );
+      NavigationService().rememberAuthUid(previousUser.uid);
       _runColdStartServicesForUser(previousUser);
       _kickPartyAutostart();
-    } else {
-      // Beim App-Start ohne Session immer auf Landing/Home bleiben (kein direkter Login-Tab).
-      NavigationService().setTabIndex(0, force: true);
     }
+    // Kein setTabIndex(0) wenn currentUser noch null: Auth kann nach Prozess-Tod
+    // einen Tick später kommen. Tab bleibt aus Prefs. Echter Logout setzt Home.
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _syncDjWishNotificationGate();
@@ -1606,7 +1680,31 @@ class _MainPageState extends State<MainPage>
 
   // Verarbeitet einen Deep Link
   Future<void> _handleDeepLink(Uri uri) async {
+    // Passwort-Reset: immer Website (Formular), nie in der App.
+    if (AppLinksService.instance.isPasswordResetDeepLink(uri)) {
+      final opened =
+          await AppLinksService.instance.openPasswordResetInExternalBrowser(uri);
+      debugLog(
+        'Passwort-Reset Deep Link → Browser: $opened '
+        '(${AppLinksService.instance.passwordResetBrowserUri(uri)})',
+      );
+      return;
+    }
+
     if (await _tryHandleEmailVerificationDeepLink(uri)) return;
+
+    if (AppLinksService.instance.isDjB2bInviteDeepLink(uri)) {
+      await PendingReferralService.instance.ingestInviteUri(uri);
+      debugLog('DJ B2B Invite-Code aus Deep Link gespeichert: $uri');
+      // Bereits eingeloggt → sofort am User + Werber-Liste speichern.
+      if (FirebaseAuth.instance.currentUser != null) {
+        final result = await DjB2bService.instance.tryRedeemPendingReferral(
+          source: 'invite_link',
+        );
+        debugLog('DJ B2B Invite redeem nach Deep Link: $result');
+      }
+      return;
+    }
 
     debugLog('Deep Link erhalten: $uri');
 
@@ -1626,66 +1724,173 @@ class _MainPageState extends State<MainPage>
       return;
     }
 
+    await _handlePartyCodeFromQrOrDeepLink(partyCode);
+  }
+
+  /// Wartet kurz, bis Rolle nach Kaltstart/Login bekannt ist (sonst falscher Gast- vs. DJ-Pfad).
+  Future<void> _awaitShellIdentityForDeepLink() async {
+    if (FirebaseAuth.instance.currentUser == null) return;
+    for (var i = 0; i < 30; i++) {
+      if (!mounted) return;
+      final role = _currentRoleName ?? _cachedShellRoleName;
+      if (role != null && role.isNotEmpty) return;
+      if (UserService().currentUser.value != null) {
+        // role_id da, Labels ggf. einen Tick später
+        if (i >= 5) return;
+      }
+      await Future.delayed(const Duration(milliseconds: 80));
+    }
+  }
+
+  bool _isDjOrAdminShellWithoutGuestWishbox() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return false;
+    final userModel = UserService().currentUser.value;
+    final isRealAdmin = AppConfig.isAdminRole(userModel);
+    final viewRole = _currentViewRole ?? _cachedShellViewRole;
+    final roleName = _currentRoleName ?? _cachedShellRoleName;
+    final isAdminMode =
+        isRealAdmin && (viewRole == null || viewRole == 'Admin');
+    final isDJMode =
+        viewRole == 'DJ' ||
+        ((roleName == 'DJ' || roleName == 'Location') &&
+            viewRole != 'Admin');
+    return isAdminMode || isDJMode;
+  }
+
+  Future<void> _showDjQrNoGuestWishboxDialog(String partyCode) async {
+    if (!mounted) return;
+    final loc = AppLocalizations.of(context)!;
+    final action = await showDialog<String>(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: Colors.black.withValues(alpha: 0.7),
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 420),
+          decoration: BoxDecoration(
+            gradient: UIConstants.colorGreyGradient,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: UIConstants.colorRed, width: 2),
+          ),
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.info_outline,
+                color: UIConstants.colorRed,
+                size: 48,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                loc.dj_qr_no_guest_wishbox_title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: UIConstants.colorWhite,
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                loc.dj_qr_no_guest_wishbox_body,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: UIConstants.colorWhite,
+                  fontSize: 16,
+                ),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.of(ctx).pop('ok'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: UIConstants.colorOrange,
+                    foregroundColor: UIConstants.colorWhite,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  child: Text(loc.ok),
+                ),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                  onPressed: () => Navigator.of(ctx).pop('sign_out'),
+                  child: Text(
+                    loc.sign_out,
+                    style: const TextStyle(
+                      color: UIConstants.colorOrange,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted || action != 'sign_out') return;
+    await _performAppSignOut();
+    if (!mounted) return;
+    await PartySessionService.instance.persistPendingPartyCode(partyCode);
+    await _joinGuestPartyFromDeepLinkCode(partyCode);
+  }
+
+  /// Gast-Pfad: Code prüfen → Wunschbox oder Check-In-Feedback (Fehler / noch nicht gestartet / Floor).
+  Future<void> _joinGuestPartyFromDeepLinkCode(String partyCode) async {
     if (mounted) {
       setState(() => _partyDeepLinkLoading = true);
     }
-    await PartySessionService.instance.persistPendingPartyCode(partyCode);
-
-    final uid = FirebaseAuth.instance.currentUser;
-
-    // Nicht eingeloggt: Party-Code nur merken → Login mit vorbefülltem Feld
-    if (uid == null) {
-      if (mounted) {
-        setState(() {
-          _partyDeepLinkLoading = false;
-          _guestAuthPartyLinkNonce++;
-        });
-        NavigationService().setTabIndex(1, force: true);
-      }
-      return;
-    }
-
     try {
       final feedback =
           await PartySessionService.instance.validateAndJoinParty(partyCode);
       if (!mounted) return;
-
-      final userModel = UserService().currentUser.value;
-      final isRealAdmin = AppConfig.isAdminRole(userModel);
-      final isAdminMode =
-          isRealAdmin &&
-          (_currentViewRole == null || _currentViewRole == 'Admin');
-      final roleName = _currentRoleName;
-      final isDJMode =
-          _currentViewRole == 'DJ' ||
-          (uid != null &&
-              (roleName == 'DJ' || roleName == 'Location') &&
-              _currentViewRole != 'Admin');
-      final int partyTabIndex;
-      if (isAdminMode || isDJMode) {
-        partyTabIndex = 2;
-      } else {
-        partyTabIndex = 1;
+      if (feedback != null) {
+        PartySessionService.instance
+            .setPendingDeepLinkCheckInFeedback(feedback);
       }
-
-      if (feedback == null) {
-        setState(() {
-          _guestPartyJoinCount++;
-          _partyDeepLinkLoading = false;
-        });
-        _redirectGuestFromHistoryIfPreWishSession();
-        NavigationService().setTabIndex(partyTabIndex, force: true);
-      } else {
-        setState(() => _partyDeepLinkLoading = false);
-        NavigationService().setTabIndex(0, force: true);
-      }
+      setState(() {
+        _guestPartyJoinCount++;
+        _partyDeepLinkLoading = false;
+      });
+      _redirectGuestFromHistoryIfPreWishSession();
+      NavigationService().setTabIndex(_guestWishesTabIndex(), force: true);
     } catch (e, st) {
-      debugLog('Deep-Link validateAndJoinParty: $e\n$st');
+      debugLog('Deep-Link validateAndJoinParty (Gast): $e\n$st');
+      if (!mounted) return;
+      PartySessionService.instance.setPendingDeepLinkCheckInFeedback(
+        const PartyCheckInFeedback(type: PartyCheckInFeedbackType.wrongCode),
+      );
+      setState(() {
+        _guestPartyJoinCount++;
+        _partyDeepLinkLoading = false;
+      });
+      NavigationService().setTabIndex(_guestWishesTabIndex(), force: true);
+    }
+  }
+
+  Future<void> _handlePartyCodeFromQrOrDeepLink(String partyCode) async {
+    if (mounted) {
+      setState(() => _partyDeepLinkLoading = true);
+    }
+    await PartySessionService.instance.persistPendingPartyCode(partyCode);
+    await _awaitShellIdentityForDeepLink();
+    if (!mounted) return;
+
+    if (_isDjOrAdminShellWithoutGuestWishbox()) {
       if (mounted) {
         setState(() => _partyDeepLinkLoading = false);
-        NavigationService().setTabIndex(0, force: true);
       }
+      await _showDjQrNoGuestWishboxDialog(partyCode);
+      return;
     }
+
+    await _joinGuestPartyFromDeepLinkCode(partyCode);
   }
 
   // Prüft beim App-Start, ob ein Party-Code gespeichert wurde
@@ -1770,7 +1975,7 @@ class _MainPageState extends State<MainPage>
     }
   }
 
-  /// Einmal pro Session nach DJ-Login: nur Batterie-Optimierung (Notification-Rechte: DJ-Einstellungen).
+  /// Einmal pro Session nach DJ-Login: Batterie (Android) + iOS-Notification-Rechte wenn aktiv.
   Future<void> _requestDjPermissionsIfNeeded() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null || !mounted) return;
@@ -1781,6 +1986,14 @@ class _MainPageState extends State<MainPage>
 
     if (Platform.isAndroid) {
       await _checkBatteryOptimization();
+    }
+
+    if (Platform.isIOS) {
+      final um = UserService().currentUser.value;
+      if (um?.notifyNewWishes == true || um?.showStatusNotification == true) {
+        await ensureIosNotificationPermission();
+        unawaited(DjWishFcmService.instance.syncTokenForCurrentUserIfEligible());
+      }
     }
   }
 
@@ -1801,7 +2014,7 @@ class _MainPageState extends State<MainPage>
   bool _shouldShowGlobalAnnouncementPopup() {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return false;
-    final rn = _currentRoleName;
+    final rn = _currentRoleName ?? _cachedShellRoleName;
     if (rn == null || rn == 'Gast') return false;
     if (_currentViewRole == 'Gast') return false;
     final um = UserService().currentUser.value;
@@ -1922,7 +2135,7 @@ class _MainPageState extends State<MainPage>
       debugLog('Fehler beim Öffnen der Batterie-Optimierungs-Einstellungen: $e');
       if (mounted) {
         final loc = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(loc.battery_settings_open_failed),
             duration: const Duration(seconds: 5),
@@ -1963,11 +2176,15 @@ class _MainPageState extends State<MainPage>
 
   Future<void> _runAppUpdateCheck(BuildContext context) async {
     if (_appUpdateCheckRunning) return;
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    if (AppUpdateService.hasCompletedUpdateCheckForUid(uid)) return;
     _appUpdateCheckRunning = true;
     try {
       final r = await AppUpdateService.instance.checkForUpdate(
-        appRoleLabel: _currentRoleName,
+        appRoleLabel: _currentRoleName ?? _cachedShellRoleName,
       );
+      AppUpdateService.markUpdateCheckCompletedForUid(uid);
       if (!mounted) return;
       if (r.result == UpdateCheckResult.forceUpdate ||
           r.result == UpdateCheckResult.optionalUpdate) {
@@ -2007,9 +2224,13 @@ class _MainPageState extends State<MainPage>
       _onRegistrationFlowGuardChanged,
     );
     NavigationService().currentTabIndex.removeListener(_onNavigationTabChanged);
+    VibesboxFullscreenService.instance.isFullscreen.removeListener(
+      _onVibesboxFullscreenChanged,
+    );
     _profileLoadTimeoutTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _authSubscription?.cancel();
+    _authLogoutDebounce?.cancel();
     UserService().currentUser.removeListener(_onUserModelChanged);
     UserService().userDocSnapshotReadyNotifier.removeListener(
       _onRoleValidationBaselineChanged,
@@ -2032,10 +2253,36 @@ class _MainPageState extends State<MainPage>
     }
     _glowAnimationController.dispose();
     _pulseAnimationController.dispose();
+    AdminNewUserPopupService.resetSessionForLogout();
     super.dispose();
   }
 
+  void _onVibesboxFullscreenChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Widget _buildDjVibesBoxPage() {
+    return DjVibesBoxPage(
+      key: _djVibesBoxPageKey,
+      offenPageKey: _offenPageKey,
+      requests: _currentWishesList,
+      onPageOpened: _markWishesAsViewed,
+      isActive: _currentIndex == 2,
+    );
+  }
+
+  Widget _djVibesBoxIndexedStackChild() {
+    if (VibesboxFullscreenService.instance.isFullscreen.value) {
+      return const SizedBox.shrink();
+    }
+    return _buildDjVibesBoxPage();
+  }
+
   void _handleRootBackNavigation() {
+    if (VibesboxFullscreenService.instance.isFullscreen.value) {
+      VibesboxFullscreenService.instance.exit();
+      return;
+    }
     final scaffoldState = mainPageScaffoldKey.currentState;
     if (scaffoldState?.isEndDrawerOpen ?? false) {
       scaffoldState?.closeEndDrawer();
@@ -2059,14 +2306,15 @@ class _MainPageState extends State<MainPage>
     if (_lastBackPressedAt == null ||
         now.difference(_lastBackPressedAt!) > _exitBackPressWindow) {
       _lastBackPressedAt = now;
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(
-            content: Text(AppLocalizations.of(context)!.exit_press_back_again_snackbar),
-            duration: const Duration(seconds: 2),
-          ),
-        );
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      showVibesSnackBar(
+        context,
+        SnackBar(
+          content: Text(AppLocalizations.of(context)!.exit_press_back_again_snackbar),
+          duration: const Duration(seconds: 2),
+        ),
+        tag: 'ExitBack',
+      );
       return;
     }
 
@@ -2206,11 +2454,8 @@ class _MainPageState extends State<MainPage>
     final user = FirebaseAuth.instance.currentUser;
     final roleName = _currentRoleName ?? _cachedShellRoleName;
     final viewRole = _currentViewRole ?? _cachedShellViewRole;
-    final roleKey = user == null ? '' : (roleName ?? 'loading');
-    final checkScope =
-        user == null ? 'guest-loggedout' : 'auth-${user.uid}-$roleKey';
-    if (_appUpdateCheckScope != checkScope) {
-      _appUpdateCheckScope = checkScope;
+    if (user != null && _appUpdateCheckDoneUid != user.uid) {
+      _appUpdateCheckDoneUid = user.uid;
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => _runAppUpdateCheck(context),
       );
@@ -2260,6 +2505,10 @@ class _MainPageState extends State<MainPage>
         wantsAdminView &&
         (_adminBiometricCheckInProgress || _adminBiometricVerifiedUid != user.uid);
     if (blockAdminContent) {
+      if (_adminNewUserPopupStartedUid != null) {
+        _adminNewUserPopupStartedUid = null;
+        AdminNewUserPopupService.resetSessionForLogout();
+      }
       if (_adminUseAuthenticatorFallback && user != null) {
         return _buildAdminOtpCurtain(user);
       }
@@ -2284,6 +2533,20 @@ class _MainPageState extends State<MainPage>
         ),
         ),
       );
+    }
+
+    // Echter Admin: Popup bei neuen DJ-/Gast-Registrierungen (Admin- und DJ-Ansicht).
+    if (isRealAdmin && user != null && !blockAdminContent) {
+      if (_adminNewUserPopupStartedUid != user.uid) {
+        _adminNewUserPopupStartedUid = user.uid;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          unawaited(AdminNewUserPopupService.instance.ensureStarted(context));
+        });
+      }
+    } else if (_adminNewUserPopupStartedUid != null && !isRealAdmin) {
+      _adminNewUserPopupStartedUid = null;
+      AdminNewUserPopupService.resetSessionForLogout();
     }
 
     // Ereignisgesteuert: Solange Profil lädt (Dokument null) oder Rolle noch unklar → Ladeanzeige oder Timeout-UI
@@ -2423,15 +2686,12 @@ class _MainPageState extends State<MainPage>
                     requests: _currentWishesList,
                     onViewRoleChanged: _handleHomeViewRoleChanged,
                   ),
-                  PartyVerwaltungPage(key: _partyVerwaltungPageKey),
-                  DjVibesBoxPage(
-                    key: _djVibesBoxPageKey,
-                    offenPageKey: _offenPageKey,
-                    requests: _currentWishesList,
-                    onPageOpened: _markWishesAsViewed,
-                    isActive: _currentIndex == 2,
+                  PartyVerwaltungPage(key: _partyVerwaltungPageKey, currentViewRole: viewRole),
+                  _djVibesBoxIndexedStackChild(),
+                  GesperrtPage(
+                    key: _gesperrtPageKey,
+                    isActive: _currentIndex == 3,
                   ),
-                  GesperrtPage(key: _gesperrtPageKey),
                   HistoryPage(key: _historyPageKey),
                   const SpotifyPage(),
                   if (showMasterAdminTestTab) const TestPage(),
@@ -2440,6 +2700,7 @@ class _MainPageState extends State<MainPage>
                         _currentIndex == adminBenutzerVerwaltungTabIndex,
                   ),
                   const TodoPage(),
+                  const AdminToolPage(),
                   ImpressumPage(
                     onBack: () =>
                         NavigationService().setTabIndex(_previousTabIndex),
@@ -2460,16 +2721,14 @@ class _MainPageState extends State<MainPage>
                     requests: _currentWishesList,
                     onViewRoleChanged: _handleHomeViewRoleChanged,
                   ),
-                  PartyVerwaltungPage(key: _partyVerwaltungPageKey),
-                  DjVibesBoxPage(
-                    key: _djVibesBoxPageKey,
-                    offenPageKey: _offenPageKey,
-                    requests: _currentWishesList,
-                    onPageOpened: _markWishesAsViewed,
-                    isActive: _currentIndex == 2,
+                  PartyVerwaltungPage(key: _partyVerwaltungPageKey, currentViewRole: viewRole),
+                  _djVibesBoxIndexedStackChild(),
+                  GesperrtPage(
+                    key: _gesperrtPageKey,
+                    isActive: _currentIndex == 3,
                   ),
-                  GesperrtPage(key: _gesperrtPageKey),
                   HistoryPage(key: _historyPageKey),
+                  SavedTracksPage(isActive: _currentIndex == 5),
                   ProfilPage(key: _profilPageKey),
                   SettingsPage(key: _settingsPageKey),
                   SocialMediaPage(
@@ -2477,8 +2736,11 @@ class _MainPageState extends State<MainPage>
                       'dj_social_${user?.uid ?? 'none'}_${_guestPartyLeaveCount}',
                     ),
                   ),
+                  const DjB2bPage(),
                   const AboutPage(),
                   const QuickstartPage(),
+                  DjSetlistsLibraryPage(isActive: _currentIndex == 12),
+                  DjSongBlacklistPage(isActive: _currentIndex == 13),
                   ImpressumPage(
                     onBack: () =>
                         NavigationService().setTabIndex(_previousTabIndex),
@@ -2810,6 +3072,10 @@ class _MainPageState extends State<MainPage>
                     statusText = ' PRO';
                     statusColor = UIConstants.appGreen;
                     break;
+                  case ProFreeStatus.DJ_B2B:
+                    statusText = ' PRO · DJ B2B';
+                    statusColor = UIConstants.appGreen;
+                    break;
                   case ProFreeStatus.FREE:
                     statusText = ' FREE';
                     statusColor = Colors.red;
@@ -2993,6 +3259,22 @@ class _MainPageState extends State<MainPage>
             ),
             automaticallyImplyLeading: false,
             actions: [
+              if (!isDjArea) ...[
+                IconButton(
+                  icon: Icon(
+                    authUser == null ? Icons.login : Icons.logout,
+                    size: 24,
+                    color: UIConstants.appBarIconColor,
+                  ),
+                  tooltip: authUser == null
+                      ? AppLocalizations.of(context)!.or_login
+                      : AppLocalizations.of(context)!.signOut,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  onPressed: authUser == null
+                      ? _openGuestLogin
+                      : () => unawaited(_performAppSignOut()),
+                ),
+              ],
               Builder(
                 builder: (context) {
                   return IconButton(
@@ -3110,6 +3392,25 @@ class _MainPageState extends State<MainPage>
                   child: CircularProgressIndicator(
                     color: UIConstants.appOrange,
                   ),
+                ),
+              ),
+            ),
+          if ((isAdminMode || isDJMode) &&
+              VibesboxFullscreenService.instance.isFullscreen.value)
+            Positioned.fill(
+              child: Material(
+                color: Colors.transparent,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    ColoredBox(
+                      color: Colors.black.withValues(alpha: 0.08),
+                    ),
+                    ColoredBox(
+                      color: UIConstants.vibesboxFullscreenOverlay,
+                      child: _buildDjVibesBoxPage(),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -3290,18 +3591,23 @@ class _MainPageState extends State<MainPage>
         (roleName == 'Gast' &&
             _currentViewRole != 'Admin' &&
             _currentViewRole != 'DJ');
-    // DJ-Shell: kein Spotify-Filter in der Navigation — Indizes 5–8 = Profil … Über.
-    const djProfilIndex = 5;
-    const djSettingsIndex = 6;
-    const djSocialIndex = 7;
-    const djAboutIndex = 8;
-    const djQuickstartIndex = 9;
+    // DJ-Shell: kein Spotify-Filter in der Navigation — Indizes 5–10 = Profil … Quickstart.
+    const djSavedTracksIndex = 5;
+    const djProfilIndex = 6;
+    const djSettingsIndex = 7;
+    const djSocialIndex = 8;
+    const djB2bIndex = 9;
+    const djAboutIndex = 10;
+    const djQuickstartIndex = 11;
+    const djSetlistsIndex = 12;
+    const djBlacklistIndex = 13;
     // Admin-Shell: Spotify-Filter = 5, optional nur Master-UID: Test, dann Benutzer / To-do
     final showMasterAdminTestTab =
         AppConfig.isMasterAdminFirebaseUid(user?.uid);
     const adminTestIndex = 6;
     final adminUserIndex = showMasterAdminTestTab ? 7 : 6;
     final adminTodoIndex = showMasterAdminTestTab ? 8 : 7;
+    final adminToolIndex = showMasterAdminTestTab ? 9 : 8;
     final localizations = AppLocalizations.of(context)!;
     final isRtl = [
       'ar',
@@ -3351,6 +3657,10 @@ class _MainPageState extends State<MainPage>
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8),
                 ),
+                dense: true,
+                visualDensity: const VisualDensity(horizontal: 0, vertical: -4),
+                minVerticalPadding: 0,
+                minLeadingWidth: 28,
               ),
             ),
             child: ListView(
@@ -3377,11 +3687,11 @@ class _MainPageState extends State<MainPage>
                     children: [
                       Image.asset(
                         'assets/icon/vibesbox-logo.png',
-                        height: 72,
+                        height: 52,
                         fit: BoxFit.contain,
                         filterQuality: FilterQuality.high,
                         errorBuilder: (context, error, stackTrace) {
-                          return AppAssets.placeholder(height: 72);
+                          return AppAssets.placeholder(height: 52);
                         },
                       ),
                       const SizedBox(height: 2),
@@ -3544,13 +3854,13 @@ class _MainPageState extends State<MainPage>
                       },
                     ),
                   if (isDJMode)
-                    // Party-Steuerung: VibesBox, Gesperrt, History – optisch gruppiert (8px Padding, 1px gelb)
+                    // Party-Steuerung: VibesBox, Gesperrt, History – optisch gruppiert
                     Container(
                       margin: const EdgeInsets.symmetric(
                         horizontal: 8,
-                        vertical: 4,
+                        vertical: 0,
                       ),
-                      padding: const EdgeInsets.all(8),
+                      padding: const EdgeInsets.all(4),
                       decoration: BoxDecoration(
                         color: Colors.black26,
                         border: Border.all(
@@ -3692,6 +4002,117 @@ class _MainPageState extends State<MainPage>
                         ],
                       ),
                     ),
+                  if (isDJMode)
+                    ListTile(
+                      dense: true,
+                      visualDensity: VisualDensity.compact,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 0,
+                      ),
+                      leading: Icon(
+                        Icons.bookmark_outline,
+                        size: 20,
+                        color: _currentIndex == djSavedTracksIndex
+                            ? UIConstants.appOrange
+                            : Colors.white,
+                      ),
+                      title: Text(
+                        localizations.saved_tracks_page_title,
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.white,
+                          fontWeight: _currentIndex == djSavedTracksIndex
+                              ? FontWeight.bold
+                              : FontWeight.normal,
+                        ),
+                      ),
+                      selected: _currentIndex == djSavedTracksIndex,
+                      selectedTileColor:
+                          UIConstants.appOrange.withValues(alpha: 0.2),
+                      onTap: () {
+                        _onIndexChanged(djSavedTracksIndex);
+                        Navigator.pop(context);
+                      },
+                    ),
+                  if (isDJMode)
+                    ListTile(
+                      dense: true,
+                      visualDensity: VisualDensity.compact,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 0,
+                      ),
+                      leading: Icon(
+                        Icons.queue_music,
+                        size: 20,
+                        color: _currentIndex == djSetlistsIndex
+                            ? UIConstants.appOrange
+                            : Colors.white,
+                      ),
+                      title: Text(
+                        localizations.translate('dj_setlists_menu'),
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.white,
+                          fontWeight: _currentIndex == djSetlistsIndex
+                              ? FontWeight.bold
+                              : FontWeight.normal,
+                        ),
+                      ),
+                      selected: _currentIndex == djSetlistsIndex,
+                      selectedTileColor:
+                          UIConstants.appOrange.withValues(alpha: 0.2),
+                      onTap: () {
+                        _onIndexChanged(djSetlistsIndex);
+                        Navigator.pop(context);
+                      },
+                    ),
+                  if (isDJMode)
+                    ValueListenableBuilder<DjSongBlacklistPrefs>(
+                      valueListenable:
+                          DjSongBlacklistService.instance.prefsNotifier,
+                      builder: (context, blPrefs, _) {
+                        if (!blPrefs.enabled) {
+                          return const SizedBox.shrink();
+                        }
+                        return ListTile(
+                          dense: true,
+                          visualDensity: const VisualDensity(
+                            horizontal: 0,
+                            vertical: -4,
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 0,
+                          ),
+                          leading: Icon(
+                            Icons.playlist_remove,
+                            size: 18,
+                            color: _currentIndex == djBlacklistIndex
+                                ? UIConstants.appOrange
+                                : Colors.white,
+                          ),
+                          title: Text(
+                            localizations.translate('song_blacklist_title'),
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.white,
+                              fontWeight: _currentIndex == djBlacklistIndex
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                            ),
+                          ),
+                          selected: _currentIndex == djBlacklistIndex,
+                          selectedTileColor:
+                              UIConstants.appOrange.withValues(alpha: 0.2),
+                          onTap: () {
+                            _onIndexChanged(djBlacklistIndex);
+                            Navigator.pop(context);
+                          },
+                        );
+                      },
+                    ),
                   // Profil/Einstellungen nur im DJ-Modus (kein Spotify-Filter — nur im Admin-Bereich)
                   if (isDJMode) ...[
                     ListTile(
@@ -3790,6 +4211,38 @@ class _MainPageState extends State<MainPage>
                           UIConstants.appOrange.withValues(alpha: 0.2),
                       onTap: () {
                         _onIndexChanged(djSocialIndex);
+                        Navigator.pop(context);
+                      },
+                    ),
+                    ListTile(
+                      dense: true,
+                      visualDensity: VisualDensity.compact,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 0,
+                      ),
+                      leading: Icon(
+                        Icons.groups_outlined,
+                        size: 20,
+                        color: _currentIndex == djB2bIndex
+                            ? UIConstants.appOrange
+                            : Colors.white,
+                      ),
+                      title: Text(
+                        localizations.dj_b2b_open_page,
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.white,
+                          fontWeight: _currentIndex == djB2bIndex
+                              ? FontWeight.bold
+                              : FontWeight.normal,
+                        ),
+                      ),
+                      selected: _currentIndex == djB2bIndex,
+                      selectedTileColor:
+                          UIConstants.appOrange.withValues(alpha: 0.2),
+                      onTap: () {
+                        _onIndexChanged(djB2bIndex);
                         Navigator.pop(context);
                       },
                     ),
@@ -3986,6 +4439,38 @@ class _MainPageState extends State<MainPage>
                           UIConstants.appOrange.withValues(alpha: 0.2),
                       onTap: () {
                         _onIndexChanged(adminTodoIndex);
+                        Navigator.pop(context);
+                      },
+                    ),
+                    ListTile(
+                      dense: true,
+                      visualDensity: VisualDensity.compact,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 0,
+                      ),
+                      leading: Icon(
+                        Icons.display_settings,
+                        size: 20,
+                        color: _currentIndex == adminToolIndex
+                            ? UIConstants.appOrange
+                            : Colors.white,
+                      ),
+                      title: Text(
+                        localizations.vibesbox_sync_title,
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.white,
+                          fontWeight: _currentIndex == adminToolIndex
+                              ? FontWeight.bold
+                              : FontWeight.normal,
+                        ),
+                      ),
+                      selected: _currentIndex == adminToolIndex,
+                      selectedTileColor:
+                          UIConstants.appOrange.withValues(alpha: 0.2),
+                      onTap: () {
+                        _onIndexChanged(adminToolIndex);
                         Navigator.pop(context);
                       },
                     ),
@@ -4496,18 +4981,7 @@ class _MainPageState extends State<MainPage>
                     ),
                     onTap: () async {
                       Navigator.pop(context);
-                      await SubscriptionSyncService.logOut();
-                      ProFeatureGuard.invalidateCache();
-                      await SavedLoginEmailStore.clear();
-                      await PartySessionService.instance.clearSession();
-                      await ActivePartyService.resetForLogout();
-                      // Zuerst Auth beenden — sonst bleibt [_currentViewRole] „DJ“:
-                      // [_onUserModelChanged] macht bei user!=null && userModel==null ein frühes return.
-                      await FirebaseAuth.instance.signOut();
-                      UserService().stopUserStream();
-                      UserService().clearCache();
-                      NavigationService().resetToHome();
-                      unawaited(NavigationService().clearAdminViewRole());
+                      await _performAppSignOut();
                     },
                   ),
                 ],

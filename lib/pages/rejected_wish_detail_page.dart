@@ -3,10 +3,10 @@ import 'dart:ui' as ui;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../l10n/app_localizations.dart';
+import '../services/open_wishes_visibility_service.dart';
 import '../utils/formatting_utils.dart';
-import '../services/active_party_service.dart';
-import '../services/wish_management_service.dart';
 import '../utils/ui_constants.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 /// Bestätigungsdialog „Wunsch wieder öffnen?“ mit Gradient-Panel und orangem Rahmen.
 ///
@@ -32,8 +32,7 @@ class RejectedWishReopenConfirmDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     // Gleiche Button-Styles wie z. B. showConfirmDeleteGroupedDialog /
     // showConfirmUpdateGroupedStatusDialog in [WishManagementService].
-    final isRtl = ['ar', 'he', 'fa', 'ur']
-        .contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
 
     final confirmButton = ElevatedButton(
       onPressed: () => Navigator.of(context).pop(true),
@@ -128,8 +127,7 @@ class RejectedWishGroupedDetailDialog {
     required List<String> docIds,
     required Future<void> Function() onRestoreConfirmed,
   }) async {
-    final isRtl = ['ar', 'he', 'fa', 'ur']
-        .contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
     final l = AppLocalizations.of(context);
     if (l == null) return;
 
@@ -163,6 +161,7 @@ class RejectedWishGroupedDetailDialog {
       final t = FormattingUtils.formatTime(rejectedDt, context);
       rejectedLine = l.wish_timeline_rejected(d, t);
     }
+    final wishPartyId = OpenWishesVisibilityService.resolveDjWishPartyId();
 
     if (!context.mounted) return;
     await showDialog<void>(
@@ -213,8 +212,7 @@ class RejectedWishGroupedDetailDialog {
                       textAlign: isRtl ? TextAlign.right : TextAlign.left,
                     ),
                   ],
-                  if (ActivePartyService.currentPartyId != null &&
-                      ActivePartyService.currentPartyId!.isNotEmpty) ...[
+                  if (wishPartyId != null && wishPartyId.isNotEmpty) ...[
                     const SizedBox(height: 16),
                     ElevatedButton.icon(
                       onPressed: () async {
@@ -235,21 +233,6 @@ class RejectedWishGroupedDetailDialog {
                         backgroundColor: UIConstants.frameOffen,
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    ElevatedButton.icon(
-                      onPressed: () {
-                        Navigator.pop(dialogContext);
-                        openDeleteFlow(context, docIds, displayText);
-                      },
-                      icon: const Icon(Icons.delete, color: Colors.white),
-                      label: Text(
-                        l.delete,
-                        style: const TextStyle(color: Colors.white),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: UIConstants.frameNoParty,
-                      ),
-                    ),
                   ],
                 ],
               ),
@@ -267,22 +250,5 @@ class RejectedWishGroupedDetailDialog {
         ),
       ),
     );
-  }
-
-  /// Lösch-Dialog nach Schließen des Gruppen-Details (gleiche Logik wie zuvor in [AbgelehntPage]).
-  static void openDeleteFlow(
-    BuildContext context,
-    List<String> docIds,
-    String displayText,
-  ) {
-    final partyId = ActivePartyService.currentPartyId;
-    if (partyId != null && partyId.isNotEmpty) {
-      WishManagementService.showConfirmDeleteGroupedDialog(
-        context,
-        docIds,
-        displayText,
-        partyId,
-      );
-    }
   }
 }

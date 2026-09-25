@@ -7,10 +7,11 @@ import '../../services/party_session_service.dart';
 import '../../utils/ui_constants.dart';
 import '../../models/playlist_model.dart';
 import '../../services/history_pagination_service.dart';
-import '../../services/guest_results_per_page_service.dart';
+import '../../services/results_per_page_service.dart';
 import '../../utils/footer_helper.dart';
 import '../../widgets/scroll_indicator_overlay.dart';
 import 'widgets/song_tile.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 /// Guest-Ansicht für die Musik-History.
 /// Gäste können keine Party starten – daher keine Start-Party-Hinweise.
@@ -23,7 +24,7 @@ class HistoryGuestPage extends StatefulWidget {
 
 class _HistoryGuestPageState extends State<HistoryGuestPage> {
   int _currentPage = 1;
-  int _resultsPerPage = GuestResultsPerPageService.defaultResultsPerPage;
+  int _resultsPerPage = ResultsPerPageService.defaultResultsPerPage;
   final List<StreamSubscription<QuerySnapshot<Map<String, dynamic>>>> _trackSubscriptions = [];
   final StreamController<List<TrackEntry>> _tracksController = StreamController<List<TrackEntry>>.broadcast();
   List<QueryDocumentSnapshot<Map<String, dynamic>>>? _currentSessionDocs;
@@ -41,26 +42,23 @@ class _HistoryGuestPageState extends State<HistoryGuestPage> {
   void initState() {
     super.initState();
     unawaited(_resolveGuestSession());
-    GuestResultsPerPageService.load().then((v) {
-      if (mounted) setState(() => _resultsPerPage = v);
-    });
   }
 
   Future<void> _resolveGuestSession() async {
     final s = await _loadSession();
     if (!mounted) return;
+    var perPage = ResultsPerPageService.defaultResultsPerPage;
+    final djId = s.djId?.trim() ?? '';
+    if (djId.isNotEmpty) {
+      perPage = await ResultsPerPageService.loadForDjId(djId);
+    }
+    if (!mounted) return;
     setState(() {
       _guestSessionResolved = true;
       _guestPartyId = s.partyId;
       _guestDjId = s.djId;
+      _resultsPerPage = perPage;
     });
-  }
-
-  /// Gleiche Semantik wie bisher: Party + DJ aus Session (Check-in).
-  bool _guestInPartySession() {
-    final p = _guestPartyId?.trim() ?? '';
-    final d = _guestDjId?.trim() ?? '';
-    return p.isNotEmpty && p != 'manual' && d.isNotEmpty;
   }
 
   /// Navigiert zur vorherigen Seite
@@ -84,7 +82,7 @@ class _HistoryGuestPageState extends State<HistoryGuestPage> {
   /// Baut die Paginierungs-Navigation auf
   Widget _buildPaginationButtons(int currentPage, int totalPages, BuildContext context) {
     final l = AppLocalizations.of(context)!;
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
 
     if (totalPages <= 1) {
       return const SizedBox.shrink();
@@ -248,7 +246,7 @@ class _HistoryGuestPageState extends State<HistoryGuestPage> {
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
 
     return Scaffold(
       body: SafeArea(
@@ -364,53 +362,14 @@ class _HistoryGuestPageState extends State<HistoryGuestPage> {
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: isRtl
-                      ? CrossAxisAlignment.end
-                      : CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      l.history,
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.bold,
-                            color: UIConstants.appBarForegroundColor,
-                          ),
-                      textAlign: isRtl ? TextAlign.right : TextAlign.left,
-                      textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
-                    ),
-                    const SizedBox(height: 4),
-                    StreamBuilder<List<TrackEntry>>(
-                      stream: _tracksController.stream,
-                      initialData: const <TrackEntry>[],
-                      builder: (context, tracksSnapshot) {
-                        if (!_guestSessionResolved) {
-                          return const SizedBox(height: 18);
-                        }
-                        final hasEntries =
-                            (tracksSnapshot.data?.isNotEmpty ?? false);
-                        final inParty = _guestInPartySession();
-                        final String subtitle;
-                        if (!inParty) {
-                          subtitle = l.history_no_party_info;
-                        } else if (hasEntries) {
-                          subtitle = l.history_subtitle_active;
-                        } else {
-                          subtitle = l.history_empty_party_active_hint;
-                        }
-                        return Text(
-                          subtitle,
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 14.5,
-                            height: 1.35,
-                          ),
-                          textAlign: isRtl ? TextAlign.right : TextAlign.left,
-                          textDirection:
-                              isRtl ? TextDirection.rtl : TextDirection.ltr,
-                        );
-                      },
-                    ),
-                  ],
+                child: Text(
+                  l.history,
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: UIConstants.appBarForegroundColor,
+                      ),
+                  textAlign: isRtl ? TextAlign.right : TextAlign.left,
+                  textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
                 ),
               ),
             ],

@@ -2,7 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 /// DJ-Einstellung: Ergebnisse pro Seite unter users/{uid}/settings/results_per_page.
-/// Gilt für DJ-App und PWA-Gäste. Fallback beim Laden: party_settings/current, dann 20.
+/// Gilt für DJ-App und PWA-/Gast-App-History. Fallback: party_settings/current, dann 20.
 class ResultsPerPageService {
   static const int minResultsPerPage = 10;
   static const int maxResultsPerPage = 150;
@@ -29,27 +29,31 @@ class ResultsPerPageService {
     if (_cached != null) return _cached!;
 
     final uid = FirebaseAuth.instance.currentUser?.uid;
-
     if (uid == null || uid.isEmpty) {
       _cached = defaultResultsPerPage;
       return _cached!;
     }
 
-    try {
-      final userSettingsRef = FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .collection('settings')
-          .doc('results_per_page');
+    _cached = await loadForDjId(uid);
+    return _cached!;
+  }
 
-      final userDoc = await userSettingsRef.get();
+  /// DJ-Einstellung für Gäste (PWA + Gast-App History).
+  static Future<int> loadForDjId(String djId) async {
+    final id = djId.trim();
+    if (id.isEmpty) return defaultResultsPerPage;
+
+    try {
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(id)
+          .collection('settings')
+          .doc('results_per_page')
+          .get();
+
       if (userDoc.exists) {
-        final data = userDoc.data();
-        final v = _parseResultsPerPage(data?['results_per_page']);
-        if (v != null) {
-          _cached = v;
-          return _cached!;
-        }
+        final v = _parseResultsPerPage(userDoc.data()?['results_per_page']);
+        if (v != null) return v;
       }
 
       final globalDoc = await FirebaseFirestore.instance
@@ -58,19 +62,14 @@ class ResultsPerPageService {
           .get();
 
       if (globalDoc.exists) {
-        final data = globalDoc.data();
-        final v = _parseResultsPerPage(data?['results_per_page']);
-        if (v != null) {
-          _cached = v;
-          return _cached!;
-        }
+        final v = _parseResultsPerPage(globalDoc.data()?['results_per_page']);
+        if (v != null) return v;
       }
     } catch (_) {
       // Bei Fehlern: Standardwert
     }
 
-    _cached = defaultResultsPerPage;
-    return _cached!;
+    return defaultResultsPerPage;
   }
 
   static Future<void> save(int value) async {

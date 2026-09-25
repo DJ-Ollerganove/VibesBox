@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../services/user_self_settings_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
@@ -10,7 +11,10 @@ import '../models/user_model.dart';
 import '../utils/ui_constants.dart';
 import '../l10n/app_localizations.dart';
 import '../utils/debug_log.dart';
+import '../services/dj_pro_session_service.dart';
 import 'music_recognition_info_dialog.dart';
+import 'settings_info_icon_button.dart';
+import '../app_scaffold_messenger.dart';
 
 /// Widget für Audio-Einstellungen (Mikrofon-Empfindlichkeit, Schwellenwert, etc.)
 /// Wiederverwendbare Karte für Dashboard-Integration
@@ -126,7 +130,7 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
   void _onSubscriptionTierChanged() {
     if (!mounted) return;
     final wasFree = _profileIsFree == true;
-    final next = UserService().currentUser.value?.isFree ?? true;
+    final next = DjProSessionService.instance.isFreeDj;
     setState(() => _profileIsFree = next);
     if (wasFree && !next) {
       unawaited(_shazamService.loadScanInterval());
@@ -145,6 +149,10 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
       unawaited(_persistFreeScanIntervalOnly());
     }
     super.dispose();
+  }
+
+  Future<void> _writeUserSetting(Map<String, dynamic> fields) async {
+    await UserSelfSettingsService.instance.write(fields);
   }
 
   /// Lädt die Audio-Einstellungen aus Firestore
@@ -175,8 +183,7 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
 
       if (userDoc.exists) {
         final data = userDoc.data();
-        final model = UserModel.fromFirestore(userDoc);
-        _profileIsFree = model.isFree;
+        _profileIsFree = DjProSessionService.instance.isFreeDj;
 
         // Lade Scan-Intervall (Firestore liefert oft int; Cloud Console / Legacy auch num/double)
         final rawInterval = data?['shazam_scan_interval_seconds'];
@@ -219,7 +226,7 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
             );
           } else if (smartThreshold != localSmart) {
             // Lokale Nutzereinstellung nicht überschreiben; stattdessen Firestore nachziehen.
-            await FirebaseFirestore.instance.collection('users').doc(user.uid).update({
+            await _writeUserSetting({
               'smart_threshold_enabled': localSmart!,
             });
           }
@@ -236,7 +243,7 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
             );
           } else if (autoStart != localAutoStart) {
             // Lokale Nutzereinstellung nicht überschreiben; stattdessen Firestore nachziehen.
-            await FirebaseFirestore.instance.collection('users').doc(user.uid).update({
+            await _writeUserSetting({
               'auto_start_recognition': localAutoStart!,
             });
           }
@@ -263,7 +270,7 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
           }
         }
       } else {
-        _profileIsFree = UserService().currentUser.value?.isFree ?? true;
+        _profileIsFree = DjProSessionService.instance.isFreeDj;
       }
       await _shazamService.setShowStatusNotificationEnabled(
         statusNotifForService,
@@ -283,7 +290,7 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
     } catch (e) {
       debugLog('Fehler beim Laden der Audio-Einstellungen: $e');
     } finally {
-      _profileIsFree ??= UserService().currentUser.value?.isFree ?? true;
+      _profileIsFree ??= DjProSessionService.instance.isFreeDj;
       if (mounted) setState(() => _isLoading = false);
     }
   }
@@ -293,7 +300,7 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
     try {
-      await FirebaseFirestore.instance.collection('users').doc(user.uid).update({
+      await _writeUserSetting({
         'shazam_scan_interval_seconds': _kFreeScanIntervalSeconds,
         'smart_threshold_enabled': _kFreeSmartThresholdEnabled,
       });
@@ -322,7 +329,7 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
       if (mounted) {
         final l = AppLocalizations.of(context)!;
         ScaffoldMessenger.of(context).clearSnackBars();
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Row(
               children: [
@@ -345,7 +352,7 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
     } catch (e) {
       if (mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${l.error_saving} $e'),
             backgroundColor: Colors.red,
@@ -369,7 +376,7 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
         await _shazamService.saveMicSensitivityWithRestart(sensitivity);
       } catch (e2) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text('${l.error_saving} $e2'),
               backgroundColor: Colors.red,
@@ -412,7 +419,7 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
       if (mounted) {
         final l = AppLocalizations.of(context)!;
         ScaffoldMessenger.of(context).clearSnackBars();
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Row(
               children: [
@@ -434,7 +441,7 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
     } catch (e) {
       if (mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${l.error_saving} $e'),
             backgroundColor: Colors.red,
@@ -464,12 +471,7 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
     if (user == null) return;
     
     try {
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .update({
-        'recognition_threshold': threshold,
-      });
+      await _writeUserSetting({'recognition_threshold': threshold});
       // Keine Snackbar bei automatischen Updates
     } catch (e) {
       debugLog('Fehler beim Speichern des Schwellenwerts (automatisch): $e');
@@ -482,17 +484,12 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
     if (user == null) return;
     
     try {
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .update({
-        'recognition_threshold': threshold,
-      });
+      await _writeUserSetting({'recognition_threshold': threshold});
       
       if (mounted) {
         final l = AppLocalizations.of(context)!;
         ScaffoldMessenger.of(context).clearSnackBars();
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Row(
               children: [
@@ -514,7 +511,7 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
     } catch (e) {
       if (mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${l.error_saving} $e'),
             backgroundColor: Colors.red,
@@ -528,24 +525,18 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
   Future<bool> _saveSmartThresholdEnabled(bool enabled) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return false;
-
     try {
       await _saveLocalTogglePrefs(
         uid: user.uid,
         smartThresholdEnabled: enabled,
       );
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .update({
-        'smart_threshold_enabled': enabled,
-      });
+      await _writeUserSetting({'smart_threshold_enabled': enabled});
       await _shazamService.setSmartThresholdEnabled(enabled);
 
       if (mounted) {
         final l = AppLocalizations.of(context)!;
         ScaffoldMessenger.of(context).clearSnackBars();
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Row(
               children: [
@@ -571,7 +562,7 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
       debugLog('Fehler beim Speichern der Smart-Threshold Einstellung: $e');
       if (mounted) {
         final lErr = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${lErr.error_saving} $e'),
             backgroundColor: Colors.red,
@@ -586,22 +577,16 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
   Future<bool> _saveAutoStartRecognition(bool enabled) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return false;
-
     try {
       await _saveLocalTogglePrefs(
         uid: user.uid,
         autoStartRecognition: enabled,
       );
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .update({
-        'auto_start_recognition': enabled,
-      });
+      await _writeUserSetting({'auto_start_recognition': enabled});
 
       if (mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(enabled
                 ? (l.autostart_enabled_message)
@@ -616,7 +601,7 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
       debugLog('Fehler beim Speichern der Autostart-Einstellung: $e');
       if (mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${l.error_saving} $e'),
             backgroundColor: Colors.red,
@@ -630,7 +615,7 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
-    final isFree = _profileIsFree ?? UserService().currentUser.value?.isFree ?? false;
+    final isFree = _profileIsFree ?? DjProSessionService.instance.isFreeDj;
     /// Nur Intervall-Wahl sperren; Mikrofon/Schwellenwert bleiben für Free nutzbar.
     final intervalLocked = isFree;
     final effectiveScanInterval = intervalLocked
@@ -676,18 +661,14 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
                     textAlign: TextAlign.start,
                   ),
                 ),
-                IconButton(
-                  icon: Icon(Icons.info_outline, color: Theme.of(context).colorScheme.primary),
-                  iconSize: 20,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
+                SettingsInfoIconButton(
                   tooltip: l.audio_settings_info_tooltip,
                   onPressed: () => showMusicRecognitionInfoDialog(context),
                 ),
               ],
             ),
             const SizedBox(height: 16),
-            
+
             // Scan-Intervall Regler
             Row(
               mainAxisAlignment: MainAxisAlignment.start,

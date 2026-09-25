@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 
 import '../l10n/app_localizations.dart';
 import '../services/text_scale_service.dart';
+import 'settings_help_dialog.dart';
+import 'settings_info_icon_button.dart';
 
 /// Schriftgrößen-Karte (Slider) — gleiche Darstellung wie in den DJ-Einstellungen,
 /// wiederverwendbar z. B. für Gast-Einstellungen.
@@ -84,13 +86,33 @@ class _TextScaleSettingsSectionState extends State<TextScaleSettingsSection> {
               ? CrossAxisAlignment.end
               : CrossAxisAlignment.start,
           children: [
-            Text(
-              l.settings_text_scale_title,
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-              ),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    l.settings_text_scale_title,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                ),
+                SettingsInfoIconButton(
+                  tooltip: l.settings_help_tooltip,
+                  onPressed: () => showSettingsHelpFromL10n(
+                    context,
+                    titleKey: 'settings_text_scale_title',
+                    introKey: 'info_settings_text_scale_intro',
+                    bullets: const [
+                      (
+                        'info_settings_text_scale_slider',
+                        'info_settings_text_scale_slider_body',
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 4),
             Text(

@@ -53,6 +53,32 @@ class VenuePartyFields {
     return readVenueId(partyData) != null;
   }
 
+  /// Multi-Floor-Gast-UI nur bei öffentlichen Veranstaltungen mit globaler Venue.
+  static bool isPublicVenueParty(Map<String, dynamic> partyData) {
+    final type = partyData['party_type'] as String?;
+    if (type != 'public') return false;
+    return hasVenueFields(partyData);
+  }
+
+  /// Unterschiedliche `floor_key` unter öffentlichen Venue-Partys.
+  static Set<String> distinctPublicVenueFloorKeys(
+    Iterable<Map<String, dynamic>> parties,
+  ) {
+    final keys = <String>{};
+    for (final data in parties) {
+      if (!isPublicVenueParty(data)) continue;
+      keys.add(effectiveFloorKeyFromParty(data));
+    }
+    return keys;
+  }
+
+  /// Raum-Auswahl nur wenn wirklich mehr als ein Floor aktiv ist (nicht jede öffentliche Party).
+  static bool hasMultipleDistinctPublicFloors(
+    Iterable<Map<String, dynamic>> parties,
+  ) {
+    return distinctPublicVenueFloorKeys(parties).length > 1;
+  }
+
   static String effectiveFloorKeyFromParty(Map<String, dynamic> partyData) {
     return FloorKeyUtils.effectiveFloorKey(readFloorKey(partyData));
   }

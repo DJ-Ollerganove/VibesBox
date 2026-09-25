@@ -15,6 +15,8 @@ import '../l10n/app_localizations.dart';
 import '../l10n/locale_helper.dart';
 import '../utils/debug_log.dart';
 import '../utils/formatting_utils.dart';
+import '../utils/device_display_helper.dart';
+import '../app_scaffold_messenger.dart';
 
 /// Rollen-Filter für die Admin-Benutzerliste (IDs aus [AppConfig]).
 enum _BenutzerVerwaltungRoleFilter { admin, dj, guest }
@@ -40,6 +42,8 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
 
   _BenutzerVerwaltungRoleFilter _roleListFilter =
       _BenutzerVerwaltungRoleFilter.dj;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _syncInstallsSub;
+  Map<String, List<Map<String, dynamic>>> _syncInstallsByUser = {};
 
   /// Initialisiert den Users-Stream sicher:
   /// - Admin: komplette users-Collection
@@ -100,10 +104,88 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
           _currentUserIsAdmin = isAdmin;
           _initializeUsersStream(uid: user.uid, isAdmin: isAdmin);
         });
+        if (isAdmin) _listenSyncInstalls();
       }
     } catch (_) {
       if (mounted) setState(() => _currentUserIsAdmin = false);
     }
+  }
+
+  @override
+  void dispose() {
+    _syncInstallsSub?.cancel();
+    super.dispose();
+  }
+
+  void _listenSyncInstalls() {
+    _syncInstallsSub ??= FirebaseFirestore.instance
+        .collection('rb_tool_installs')
+        .limit(200)
+        .snapshots()
+        .listen((snap) {
+      final next = <String, List<Map<String, dynamic>>>{};
+      for (final doc in snap.docs) {
+        final data = doc.data();
+        final uid = (data['ownerUid'] ?? '').toString();
+        if (uid.isEmpty) continue;
+        next.putIfAbsent(uid, () => []).add(data);
+      }
+      for (final list in next.values) {
+        list.sort((a, b) => _syncSeenMillis(b).compareTo(_syncSeenMillis(a)));
+      }
+      if (mounted) setState(() => _syncInstallsByUser = next);
+    }, onError: (_) {});
+  }
+
+  int _syncSeenMillis(Map<String, dynamic> data) {
+    final seen = data['lastSeen'];
+    if (seen is Timestamp) return seen.millisecondsSinceEpoch;
+    return 0;
+  }
+
+  Widget _syncInstallLines(String userId, {bool onDark = false}) {
+    final installs = _syncInstallsByUser[userId];
+    if (installs == null || installs.isEmpty) return const SizedBox.shrink();
+    final color = onDark ? Colors.white70 : Colors.grey[600];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < installs.length; i++) ...[
+          if (i > 0) const SizedBox(height: 4),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                (installs[i]['platform'] ?? '').toString() == 'windows'
+                    ? Icons.desktop_windows
+                    : Icons.laptop_mac,
+                size: 18,
+                color: color,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  _syncInstallText(installs[i]),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: color,
+                      ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+
+  String _syncInstallText(Map<String, dynamic> data) {
+    final os = (data['os'] ?? '').toString().trim();
+    final version = (data['version'] ?? '').toString().trim();
+    final seen = data['lastSeen'];
+    final when = seen is Timestamp
+        ? _formatDateTimeShort(seen.toDate())
+        : '–';
+    return 'VibesBox Sync · ${os.isEmpty ? '–' : os} · $version · zuletzt $when';
   }
 
   // Lade alle Rollen-Namen in einen Cache
@@ -267,7 +349,7 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
           .doc(targetUid)
           .set(SecurityHelper.sanitizeMap(payload), SetOptions(merge: true));
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(
             currentlyLocked
@@ -280,7 +362,7 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
     } catch (e) {
       debugLog('Account-Sperre (Admin): $e');
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text('${l.error}: $e'),
           backgroundColor: Colors.red,
@@ -350,39 +432,119 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
     }
   }
 
-  /// Liefert die Geräte-Daten des Eintrags mit dem neuesten [last_seen], oder null wenn keine devices bzw. kein last_seen.
-  Map<String, dynamic>? _getNewestDevice(Map<String, dynamic>? devices) {
+  DateTime _deviceLastSeenDate(Map<String, dynamic> dev) {
+    final lastSeen = dev['last_seen'];
+    if (lastSeen is Timestamp) return lastSeen.toDate();
+    return DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  /// Build-Nummer aus „1.0.52 (52)“ oder Semver für Geräte-Vergleich.
+  int _parseAppVersionBuildNumber(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return -1;
+    final text = raw.trim();
+    final parenMatch = RegExp(r'\((\d+)\)').firstMatch(text);
+    if (parenMatch != null) {
+      return int.tryParse(parenMatch.group(1)!) ?? -1;
+    }
+    final semver = text.split(RegExp(r'[\s+]')).first.trim();
+    final parts = semver
+        .split('.')
+        .map((e) => int.tryParse(e.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0)
+        .toList();
+    if (parts.isEmpty) return -1;
+    final major = parts.isNotEmpty ? parts[0] : 0;
+    final minor = parts.length > 1 ? parts[1] : 0;
+    final patch = parts.length > 2 ? parts[2] : 0;
+    return major * 1000000 + minor * 1000 + patch;
+  }
+
+  /// Bevorzugt neuestes [last_seen] (aktuelles Gerät / letzte Aktivität).
+  Map<String, dynamic>? _getMostRecentlySeenDevice(Map<String, dynamic>? devices) {
     if (devices == null || devices.isEmpty) return null;
-    Map<String, dynamic>? newestData;
-    DateTime? newestDate;
+    Map<String, dynamic>? bestData;
+    DateTime bestSeen = DateTime.fromMillisecondsSinceEpoch(0);
     for (final e in devices.entries) {
       final dev = e.value is Map
           ? Map<String, dynamic>.from(e.value as Map)
           : null;
       if (dev == null) continue;
-      final lastSeen = dev['last_seen'];
-      final DateTime d = lastSeen is Timestamp
-          ? lastSeen.toDate()
-          : DateTime.fromMillisecondsSinceEpoch(0);
-      if (newestDate == null || d.isAfter(newestDate)) {
-        newestDate = d;
-        newestData = dev;
-      } else if (newestDate != null && d == newestDate) {
-        // Gleiches last_seen: höhere Build-Nummer in app_version bevorzugen (Summary-Zeile).
-        final a = _appVersionBuildRank(dev['app_version']);
-        final b = _appVersionBuildRank(newestData!['app_version']);
-        if (a > b) newestData = dev;
+      final seen = _deviceLastSeenDate(dev);
+      if (bestData == null || seen.isAfter(bestSeen)) {
+        bestSeen = seen;
+        bestData = dev;
       }
     }
-    return newestData;
+    return bestData;
   }
 
-  /// Extrahiert Klammer-Build aus "1.2.3 (31)" für Vergleich; sonst 0.
-  int _appVersionBuildRank(dynamic raw) {
-    final s = raw?.toString().trim() ?? '';
-    final m = RegExp(r'\((\d+)\)\s*$').firstMatch(s);
-    if (m != null) return int.tryParse(m.group(1)!) ?? 0;
-    return 0;
+  List<MapEntry<String, dynamic>> _deviceEntriesNewestFirst(
+    Map<String, dynamic> devices,
+  ) {
+    final entries = devices.entries.toList();
+    // Primär: zuletzt gesehen (aktuelles Gerät zuerst) — nicht nach Build-Nummer,
+    // sonst wirkt eine ältere Session mit höherer Versionszahl „aktueller“.
+    entries.sort((a, b) {
+      final devA = a.value is Map
+          ? Map<String, dynamic>.from(a.value as Map)
+          : <String, dynamic>{};
+      final devB = b.value is Map
+          ? Map<String, dynamic>.from(b.value as Map)
+          : <String, dynamic>{};
+      final seenCmp =
+          _deviceLastSeenDate(devB).compareTo(_deviceLastSeenDate(devA));
+      if (seenCmp != 0) return seenCmp;
+      return _parseAppVersionBuildNumber(
+        devB['app_version']?.toString(),
+      ).compareTo(
+        _parseAppVersionBuildNumber(devA['app_version']?.toString()),
+      );
+    });
+    return entries;
+  }
+
+  DateTime? _bestLastActivityForAdmin(
+    Map<String, dynamic> data,
+    Map<String, dynamic>? devices,
+  ) {
+    DateTime? best;
+    final lastLogin = data['lastLogin'];
+    if (lastLogin is Timestamp) {
+      best = lastLogin.toDate();
+    }
+    final topSeen = data['last_seen'];
+    if (topSeen is Timestamp) {
+      final t = topSeen.toDate();
+      if (best == null || t.isAfter(best)) best = t;
+    }
+    if (devices != null) {
+      for (final e in devices.values) {
+        final dev = e is Map ? Map<String, dynamic>.from(e as Map) : null;
+        if (dev == null) continue;
+        final seen = _deviceLastSeenDate(dev);
+        if (seen.millisecondsSinceEpoch == 0) continue;
+        if (best == null || seen.isAfter(best)) best = seen;
+      }
+    }
+    return best;
+  }
+
+  String _formatSystemLocaleForAdmin(AppLocalizations l, String? rawTag) {
+    if (rawTag == null || rawTag.trim().isEmpty) return '–';
+    final tag = rawTag.trim();
+    final code = LocaleHelper.mapToSupportedOrEnglish(tag);
+    final label = _languageLabelForAdminCode(l, code);
+    if (tag.toLowerCase().startsWith(code)) {
+      return '$tag ($label)';
+    }
+    return '$tag → $code ($label)';
+  }
+
+  String _displayDeviceModel(Map<String, dynamic> dev) {
+    return DeviceDisplayHelper.displayStoredModel(
+      platform: dev['platform']?.toString(),
+      storedModel: dev['device_model']?.toString(),
+      storedModelCode: dev['device_model_code']?.toString(),
+    );
   }
 
   /// Entfernt "Android" oder "iOS" aus der OS-Versionszeichenkette, liefert nur die Versionsnummer.
@@ -398,6 +560,117 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
     return withoutIos.isEmpty ? s : withoutIos;
   }
 
+  /// OS-Anzeige: „Android 14“ / „iOS 18.2“ (nicht nur die Zahl ohne Kontext).
+  String _formatOsForAdmin(Map<String, dynamic> dev) {
+    final platform = (dev['platform']?.toString() ?? '').trim().toLowerCase();
+    final raw = (dev['os_version']?.toString() ?? '').trim();
+    final ver = _osVersionOnly(raw);
+    if (platform == 'ios') {
+      if (ver == '–' || ver.isEmpty) return 'iOS';
+      if (RegExp(r'^iOS\b', caseSensitive: false).hasMatch(raw)) {
+        return raw.startsWith('iOS') ? raw : 'iOS $ver';
+      }
+      return 'iOS $ver';
+    }
+    if (platform == 'android') {
+      if (ver == '–' || ver.isEmpty) return 'Android';
+      if (RegExp(r'^Android\b', caseSensitive: false).hasMatch(raw)) {
+        return raw.startsWith('Android') ? raw : 'Android $ver';
+      }
+      return 'Android $ver';
+    }
+    if (ver != '–' && ver.isNotEmpty) return ver;
+    return '–';
+  }
+
+  String _formatCompactDeviceLine(AppLocalizations l, Map<String, dynamic> dev) {
+    final osLabel = _formatOsForAdmin(dev);
+    final appVer = dev['app_version']?.toString() ?? '–';
+    final deviceName = _displayDeviceModel(dev);
+    return '$deviceName · $osLabel · ${l.admin_user_app_prefix} $appVer';
+  }
+
+  IconData _platformIcon(String platform) {
+    final p = platform.toLowerCase();
+    if (p == 'ios') return Icons.apple;
+    if (p == 'android') return Icons.android;
+    return Icons.devices_other;
+  }
+
+  /// Fallback, wenn `devices` leer ist, aber Top-Level-Telemetrie existiert.
+  Map<String, dynamic>? _syntheticDeviceFromUserDoc(Map<String, dynamic> data) {
+    final ver = data['app_version']?.toString().trim();
+    if (ver == null || ver.isEmpty) return null;
+    return {
+      'app_version': ver,
+      'platform': data['platform']?.toString() ?? '',
+      'device_model': data['device_model']?.toString() ?? '',
+      'device_model_code': data['device_model_code']?.toString() ?? '',
+      'os_version': data['os_version']?.toString() ?? '',
+      'last_seen': data['last_seen'] ?? data['app_version_updated_at'],
+    };
+  }
+
+  Map<String, dynamic>? _effectiveDevicesForAdmin(
+    Map<String, dynamic> data,
+  ) {
+    final devices = _coerceUserDevicesMap(data['devices']);
+    if (devices != null && devices.isNotEmpty) return devices;
+    final synthetic = _syntheticDeviceFromUserDoc(data);
+    if (synthetic == null) return null;
+    return {'_top_level': synthetic};
+  }
+
+  /// Alle registrierten Geräte (kompakt) für die Listenkarte — neuestes zuerst.
+  Widget _buildAdminUserDevicesListPreview(
+    AppLocalizations l,
+    Map<String, dynamic>? devices,
+  ) {
+    if (devices == null || devices.isEmpty) {
+      return Text(
+        l.admin_user_no_device_registered,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Colors.grey[500],
+            ),
+      );
+    }
+    final entries = _deviceEntriesNewestFirst(devices);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < entries.length; i++) ...[
+          if (i > 0) const SizedBox(height: 4),
+          Builder(
+            builder: (context) {
+              final dev = entries[i].value is Map
+                  ? Map<String, dynamic>.from(entries[i].value as Map)
+                  : <String, dynamic>{};
+              final platform = (dev['platform']?.toString() ?? '').toLowerCase();
+              return Row(
+                children: [
+                  Icon(
+                    _platformIcon(platform),
+                    size: 18,
+                    color: Colors.grey[600],
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      _formatCompactDeviceLine(l, dev),
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Colors.grey[600],
+                          ),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ],
+      ],
+    );
+  }
+
   String _formatAdminDeviceFieldValue(dynamic v) {
     if (v == null) return '–';
     if (v is Timestamp) return _formatDateTime(v.toDate());
@@ -407,7 +680,9 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
 
   static const _adminDeviceKnownKeys = {
     'app_version',
+    'app_language',
     'device_model',
+    'device_model_code',
     'os_version',
     'platform',
     'system_locale_tag',
@@ -431,7 +706,7 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
     final lastSeenDate = lastSeen?.toDate();
     final isRecent = lastSeenDate != null &&
         DateTime.now().difference(lastSeenDate) < twentyFourHours;
-    final icon = platform == 'ios' ? Icons.apple : Icons.android;
+    final icon = _platformIcon(platform);
 
     final extraKeys = dev.keys
         .where((k) => !_adminDeviceKnownKeys.contains(k))
@@ -470,10 +745,18 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
         const SizedBox(height: 6),
         _detailRow(l.admin_device_map_key, storageKey),
         _detailRow(l.admin_device_platform, nz(dev['platform'])),
-        _detailRow(l.admin_device_model, nz(dev['device_model'])),
-        _detailRow(l.admin_device_os_version, nz(dev['os_version'])),
+        _detailRow(l.admin_device_model, _displayDeviceModel(dev)),
+        _detailRow(l.admin_device_os_version, _formatOsForAdmin(dev)),
         _detailRow(l.admin_device_app_version, nz(dev['app_version'])),
-        _detailRow(l.admin_device_system_locale, nz(dev['system_locale_tag'])),
+        if ((dev['app_language']?.toString().trim() ?? '').isNotEmpty)
+          _detailRow(
+            l.admin_user_app_language_label,
+            '${dev['app_language']} – ${_languageLabelForAdminCode(l, LocaleHelper.mapToSupportedOrEnglish(dev['app_language'].toString()))}',
+          ),
+        _detailRow(
+          l.admin_device_system_locale,
+          _formatSystemLocaleForAdmin(l, dev['system_locale_tag']?.toString()),
+        ),
         _detailRow(
           l.admin_device_last_seen,
           _formatAdminDeviceFieldValue(dev['last_seen']),
@@ -560,7 +843,7 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
     final label = _languageLabelForAdminCode(l, code);
     final inferredFromDevice = fromProfile == null || fromProfile.isEmpty;
     final suffix = inferredFromDevice
-        ? l.admin_user_app_language_from_device_suffix
+        ? ' ${l.admin_user_app_language_from_device_suffix}'
         : '';
     return '$code – $label$suffix';
   }
@@ -593,6 +876,18 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
         return l.albanian;
       case 'vi':
         return l.vietnamese;
+      case 'ja':
+        return l.japanese;
+      case 'el':
+        return l.greek;
+      case 'nl':
+        return l.dutch;
+      case 'pl':
+        return l.polish;
+      case 'cs':
+        return l.czech;
+      case 'th':
+        return l.thai;
       default:
         return code;
     }
@@ -606,7 +901,11 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
   }
 
   /// Öffnet den Benutzer-Detail-Dialog (VibesBox-Stil). Nutzt nur [data] – keine neuen Firestore-Abfragen.
-  void _showUserDetailDialog(BuildContext context, Map<String, dynamic> data) {
+  void _showUserDetailDialog(
+    BuildContext context,
+    String userId,
+    Map<String, dynamic> data,
+  ) {
     final l = AppLocalizations.of(context)!;
     final displayName = () {
       final s = data['displayName']?.toString().trim();
@@ -634,7 +933,7 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
               ? data['birthday'].toString()
               : '–');
 
-    final devices = _coerceUserDevicesMap(data['devices']);
+    final devices = _effectiveDevicesForAdmin(data);
     final createdAt = data['created_at'] as Timestamp?;
     final loginCount = data['loginCount'];
     final isPro = data['isPro'] == true;
@@ -649,21 +948,9 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
         : '–';
     final loginCountStr = loginCount != null ? loginCount.toString() : '–';
 
-    // Neuestes last_seen aus der Geräte-Map für „Letzter Login“
-    DateTime? latestLastSeen;
-    if (devices != null) {
-      for (final e in devices.values) {
-        final dev = e is Map ? Map<String, dynamic>.from(e as Map) : null;
-        final lastSeen = dev?['last_seen'];
-        if (lastSeen is Timestamp) {
-          final d = lastSeen.toDate();
-          if (latestLastSeen == null || d.isAfter(latestLastSeen))
-            latestLastSeen = d;
-        }
-      }
-    }
-    final lastLoginStr = latestLastSeen != null
-        ? _formatDateTimeShort(latestLastSeen)
+    final lastActivity = _bestLastActivityForAdmin(data, devices);
+    final lastLoginStr = lastActivity != null
+        ? _formatDateTimeShort(lastActivity)
         : '–';
 
     const inactiveIconColor = Color(0xFF525252);
@@ -718,6 +1005,18 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
                 _detailRow(l.profile_birthday, birthdayStr),
               ],
               const SizedBox(height: 16),
+              _sectionTitle('VibesBox Sync'),
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: _syncInstallsByUser[userId] == null ||
+                        _syncInstallsByUser[userId]!.isEmpty
+                    ? const Text(
+                        'Kein Sync-Tool',
+                        style: TextStyle(color: Colors.white54, fontSize: 14),
+                      )
+                    : _syncInstallLines(userId, onDark: true),
+              ),
+              const SizedBox(height: 16),
               // Geräte (Icon Android/iOS, nur OS-Versionsnummer, Aktivitäts-Punkt size 10)
               _sectionTitle(l.admin_user_section_devices),
               if (devices == null || devices.isEmpty)
@@ -729,7 +1028,7 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
                   ),
                 )
               else
-                ...devices.entries.toList().asMap().entries.map(
+                ..._deviceEntriesNewestFirst(devices).asMap().entries.map(
                   (ix) {
                     final i = ix.key;
                     final e = ix.value;
@@ -949,7 +1248,7 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
     if (availableRoles.isEmpty) {
       if (context.mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(l.snackbar_no_roles_available),
             backgroundColor: Colors.orange,
@@ -1030,7 +1329,7 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
       if (user == null) {
         if (mounted) {
           final l = AppLocalizations.of(context)!;
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(l.snackbar_must_sign_in_for_roles),
               backgroundColor: Colors.red,
@@ -1060,7 +1359,7 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
 
       if (mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(l.snackbar_role_updated_success),
             backgroundColor: Colors.green,
@@ -1071,7 +1370,7 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
       debugLog('❌ Fehler beim Aktualisieren der Rolle: $e');
       if (mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${l.snackbar_error_updating_todo} $e'),
             backgroundColor: Colors.red,
@@ -1175,7 +1474,7 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
 
         if (mounted) {
           final l = AppLocalizations.of(context)!;
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(l.snackbar_user_now_lifetime(displayName)),
               backgroundColor: Colors.green,
@@ -1213,7 +1512,7 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
 
         if (mounted) {
           final l = AppLocalizations.of(context)!;
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(l.snackbar_lifetime_revoked(displayName)),
               backgroundColor: Colors.orange,
@@ -1225,7 +1524,7 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
       debugLog('❌ Fehler beim Ändern des Lifetime-Status: $e');
       if (mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${l.error}: $e'),
             backgroundColor: Colors.red,
@@ -1244,7 +1543,7 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
     if (_currentUserIsAdmin != true) {
       if (context.mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(l.snackbar_admin_password_change_forbidden),
             backgroundColor: Colors.red,
@@ -1336,7 +1635,7 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
                             if (!dialogContext.mounted) return;
                             Navigator.pop(dialogContext);
                             if (!context.mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
+                            showVibesSnackBar(context, 
                               SnackBar(
                                 content: Text(
                                   l.admin_password_changed_success(displayName),
@@ -1348,7 +1647,7 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
                           } on FirebaseFunctionsException catch (e) {
                             setDialogState(() => isLoading = false);
                             if (!dialogContext.mounted) return;
-                            ScaffoldMessenger.of(dialogContext).showSnackBar(
+                            showVibesSnackBar(dialogContext, 
                               SnackBar(
                                 content: Text(
                                   e.message ??
@@ -1361,7 +1660,7 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
                           } catch (e) {
                             setDialogState(() => isLoading = false);
                             if (!dialogContext.mounted) return;
-                            ScaffoldMessenger.of(dialogContext).showSnackBar(
+                            showVibesSnackBar(dialogContext, 
                               SnackBar(
                                 content: Text('${l.error}: $e'),
                                 backgroundColor: Colors.red,
@@ -1534,7 +1833,7 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
                         ), // WICHTIG: Stabilisiert die Liste (Anti-Flackern)
                         margin: const EdgeInsets.only(bottom: 12),
                         child: InkWell(
-                          onTap: () => _showUserDetailDialog(context, data),
+                          onTap: () => _showUserDetailDialog(context, userDoc.id, data),
                           borderRadius: BorderRadius.circular(4),
                           child: Padding(
                             padding: const EdgeInsets.all(16),
@@ -1631,52 +1930,24 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
                                       ?.copyWith(color: Colors.grey[500]),
                                 ),
                                 const SizedBox(height: 6),
-                                // Aktuellstes Gerät (neuestes last_seen) oder Fallback
+                                // Alle Geräte dieses DJs (je Gerät ein Eintrag in users.devices)
                                 Builder(
                                   builder: (context) {
-                                    final devices = _coerceUserDevicesMap(
-                                      data['devices'],
+                                    final devices = _effectiveDevicesForAdmin(
+                                      data,
                                     );
-                                    final newest = _getNewestDevice(devices);
-                                    if (newest == null) {
-                                      return Text(
-                                        l.admin_user_no_device_registered,
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall
-                                            ?.copyWith(color: Colors.grey[500]),
-                                      );
-                                    }
-                                    final platform =
-                                        (newest['platform']?.toString() ?? '')
-                                            .toLowerCase();
-                                    final osVersionRaw =
-                                        newest['os_version']?.toString() ?? '–';
-                                    final osVersion = _osVersionOnly(
-                                      osVersionRaw,
-                                    );
-                                    final appVer =
-                                        newest['app_version']?.toString() ??
-                                        '–';
-                                    final icon = platform == 'ios'
-                                        ? Icons.apple
-                                        : Icons.android;
-                                    return Row(
+                                    return Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
-                                        Icon(
-                                          icon,
-                                          size: 18,
-                                          color: Colors.grey[600],
-                                        ),
-                                        const SizedBox(width: 6),
-                                        Text(
-                                          '$osVersion · ${l.admin_user_app_prefix} $appVer',
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .bodySmall
-                                              ?.copyWith(
-                                                color: Colors.grey[600],
-                                              ),
+                                        _syncInstallLines(userDoc.id),
+                                        if ((_syncInstallsByUser[userDoc.id] ??
+                                                const [])
+                                            .isNotEmpty)
+                                          const SizedBox(height: 6),
+                                        _buildAdminUserDevicesListPreview(
+                                          l,
+                                          devices,
                                         ),
                                       ],
                                     );

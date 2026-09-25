@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../l10n/app_localizations.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 /// Zentrale Konstante für Items pro Seite
 const int kItemsPerPage = 20;
@@ -24,7 +25,7 @@ class PaginationControl extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
 
     // Wenn nur eine Seite oder weniger, zeige keine Pagination
     if (totalPages <= 1) {

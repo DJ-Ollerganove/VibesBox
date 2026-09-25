@@ -1,10 +1,12 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../config/apple_review_test_dj.dart';
 import '../models/user_model.dart';
 import 'limit_service.dart';
 
 /// Service für die Synchronisation des Party-Status (active vs. standby) bei Free-DJs.
-/// Free: Nur die erste Party (nach start_date) im aktuellen 30-Tage-Zyklus bleibt active, Rest → standby.
+/// Free: Nur die ersten N Partys (nach start_date) im aktuellen 30-Tage-Zyklus bleiben active, Rest → standby.
+/// N = 1 normal, [AppleReviewTestDj.freePartiesPerPeriod] für den Review-Test-DJ.
 /// Block-Start: [UserModel.freePeriodStart] falls gesetzt, sonst wie [LimitService.effectiveFreeBillingAnchorDate] (1. des Monats von created_at).
 /// Pro: Alle standby-Partys werden auf active gesetzt.
 class PartyLimitService {
@@ -19,8 +21,12 @@ class PartyLimitService {
     return periodStart.add(Duration(days: n * _freePeriodDays));
   }
 
+  static int _activeSlotsFor(UserModel user) => AppleReviewTestDj.matchesUser(user)
+      ? AppleReviewTestDj.freePartiesPerPeriod
+      : 1;
+
   /// Synchronisiert die lifecycle_status aller Partys des DJs:
-  /// - Free: Erste Party (nach start_date) im aktuellen 30-Tage-Zyklus = active, alle anderen = standby.
+  /// - Free: Erste N Partys (nach start_date) im aktuellen 30-Tage-Zyklus = active, Rest = standby.
   /// - Pro: Alle Partys mit status standby → active.
   static Future<void> syncPartyStates(UserModel user) async {
     final ref = FirebaseFirestore.instance.collection('parties');
@@ -36,6 +42,7 @@ class PartyLimitService {
       final now = DateTime.now();
       final currentPeriodStart = _currentPeriodStart(periodStart, now);
       final periodEnd = currentPeriodStart.add(const Duration(days: _freePeriodDays));
+      final activeSlots = _activeSlotsFor(user);
 
       // Nur Partys, die nicht beendet sind und deren created_at im aktuellen Zyklus liegt
       final inPeriod = <QueryDocumentSnapshot>[];
@@ -59,10 +66,10 @@ class PartyLimitService {
         return startA.compareTo(startB);
       });
 
-      // Erste = active, alle anderen = standby
+      // Erste N = active, Rest = standby
       for (var i = 0; i < inPeriod.length; i++) {
         final doc = inPeriod[i];
-        final newStatus = i == 0 ? 'active' : 'standby';
+        final newStatus = i < activeSlots ? 'active' : 'standby';
         final current = (doc.data() as Map<String, dynamic>)['lifecycle_status'] as String?;
         if (current == newStatus) continue;
         await ref.doc(doc.id).update({'lifecycle_status': newStatus});
@@ -81,7 +88,7 @@ class PartyLimitService {
   }
 
   /// Zählt aktive Partys (nicht finished, nicht standby) des DJs im aktuellen 30-Tage-Zyklus.
-  /// Für Free-DJ: wenn >= 1, muss neue Party als standby gespeichert werden.
+  /// Für Free-DJ: wenn >= Kontingent, muss neue Party als standby gespeichert werden.
   static Future<int> countActivePartiesInCurrentPeriod(UserModel user) async {
     if (!user.isFree) return 0;
     final periodStart =
@@ -110,4 +117,7 @@ class PartyLimitService {
     }
     return count;
   }
+
+  /// Max. aktive Free-Partys im Zeitraum für diesen User.
+  static int freeActivePartyQuota(UserModel user) => _activeSlotsFor(user);
 }

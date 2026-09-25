@@ -8,6 +8,13 @@ class PartyGracePeriodHelper {
     final endTimestamp = data['end_date'];
     if (endTimestamp is Timestamp) return endTimestamp.toDate();
     if (endTimestamp is DateTime) return endTimestamp;
+    final endPosix = data['end_time_posix'];
+    if (endPosix is int) {
+      return DateTime.fromMillisecondsSinceEpoch(endPosix * 1000);
+    }
+    if (endPosix is num) {
+      return DateTime.fromMillisecondsSinceEpoch(endPosix.toInt() * 1000);
+    }
     return null;
   }
 

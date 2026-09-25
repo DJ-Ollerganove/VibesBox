@@ -8,6 +8,8 @@ import '../services/history_pagination_service.dart';
 import '../utils/string_utils.dart';
 import '../utils/wish_paths.dart';
 import '../services/active_party_service.dart';
+import 'app_scaffold_messenger.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 class GespieltPage extends StatefulWidget {
   final List<SongRequest> requests;
@@ -65,7 +67,7 @@ class _GespieltPageState extends State<GespieltPage> {
   /// Baut die Paginierungs-Buttons mit Grün/Schwarz Design (passend zu Gespielt-Songs)
   Widget _buildPaginationButtons(int currentPage, int totalPages, BuildContext context) {
     final l = AppLocalizations.of(context)!;
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
 
     if (totalPages <= 1) {
       return const SizedBox.shrink();
@@ -517,6 +519,7 @@ class _GespieltPageState extends State<GespieltPage> {
     
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
     final totalWishes = duplicateCount + 1; // +1 für den ersten Wunsch
+    final l = AppLocalizations.of(context)!;
     
     return Card(
       key: key,
@@ -589,7 +592,7 @@ class _GespieltPageState extends State<GespieltPage> {
                       border: Border.all(color: Colors.orange.shade300),
                     ),
                     child: Text(
-                      '${totalWishes}x gewünscht',
+                      l.wish_requested_count_times(totalWishes),
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.bold,
@@ -602,7 +605,7 @@ class _GespieltPageState extends State<GespieltPage> {
               const SizedBox(height: 6),
               // Strukturiertes Zeit-Layout (2 separate Zeilen)
               Text(
-                'Wunsch: ${_formatShortDate(created)} ${_formatTime(created)}',
+                '${l.requested_at} ${_formatShortDate(created)} ${_formatTime(created)}',
                 style: TextStyle(
                   color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
                   fontSize: 11,
@@ -611,7 +614,7 @@ class _GespieltPageState extends State<GespieltPage> {
               if (played != null) ...[
                 const SizedBox(height: 2),
                 Text(
-                  'Gespielt: ${_formatShortDate(played)} ${_formatTime(played)}${waitTimeMinutes != null ? ' ($waitTimeMinutes Min.)' : ''}',
+                  '${l.played_at_label} ${_formatShortDate(played)} ${_formatTime(played)}${waitTimeMinutes != null ? ' ${l.wish_wait_minutes_paren(waitTimeMinutes)}' : ''}',
                   style: TextStyle(
                     color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
                     fontSize: 11,
@@ -761,13 +764,13 @@ class _GespieltPageState extends State<GespieltPage> {
       }
       await batch.commit();
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(content: Text(loc.snackbar_wishes_updated(docIds.length))),
         );
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(content: Text(loc.snackbar_error_details(e)), backgroundColor: Colors.red),
         );
       }
@@ -814,13 +817,13 @@ class _GespieltPageState extends State<GespieltPage> {
         await batch.commit();
         await incrementDeletedCount();
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(content: Text(loc.snackbar_wishes_deleted(docIds.length))),
           );
         }
       } catch (e) {
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(content: Text(loc.snackbar_error_details(e)), backgroundColor: Colors.red),
           );
         }

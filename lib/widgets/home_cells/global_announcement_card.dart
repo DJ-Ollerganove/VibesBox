@@ -5,6 +5,7 @@ import 'package:translator/translator.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/announcement_languages_service.dart';
 import '../../helpers/security_helper.dart';
+import '../../app_scaffold_messenger.dart';
 
 /// Mappt App-Sprachcode auf Google-Translate-Code (z. B. zh -> zh-cn).
 String _toGoogleTranslateCode(String code) {
@@ -89,7 +90,7 @@ class _GlobalAnnouncementCardState extends State<GlobalAnnouncementCard> {
     if (subject.isEmpty && message.isEmpty) {
       if (mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(l.announcement_need_subject_or_message),
             backgroundColor: Colors.orange,
@@ -114,7 +115,7 @@ class _GlobalAnnouncementCardState extends State<GlobalAnnouncementCard> {
       if (!mounted) return;
       if (languages.isEmpty) {
         setState(() => _sending = false);
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(l.announcement_no_active_languages),
             backgroundColor: Colors.orange,
@@ -190,7 +191,7 @@ class _GlobalAnnouncementCardState extends State<GlobalAnnouncementCard> {
           };
         } catch (e) {
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
+            showVibesSnackBar(context, 
               SnackBar(
                 content: Text(l.announcement_translate_failed(code, e)),
                 backgroundColor: Colors.orange,
@@ -248,7 +249,7 @@ class _GlobalAnnouncementCardState extends State<GlobalAnnouncementCard> {
       if (isEdit) {
         widget.onEditFinished?.call();
       }
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(
             isEdit ? l.announcement_updated_success : l.announcement_saved_success,
@@ -259,7 +260,7 @@ class _GlobalAnnouncementCardState extends State<GlobalAnnouncementCard> {
     } catch (e) {
       if (mounted) {
         setState(() => _sending = false);
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(l.snackbar_error_details(e)),
             backgroundColor: Colors.red,

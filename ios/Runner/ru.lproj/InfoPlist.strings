@@ -1,10 +1,11 @@
-/* Локализация Info.plist – VibesBox */
-"NSLocalNetworkUsageDescription" = "Чтобы Flutter и Xcode могли подключаться к приложению (например, для горячей перезагрузки при разработке), VibesBox нужен доступ к устройствам в вашей локальной сети.";
+/* Info.plist localization – VibesBox */
+"NSLocalNetworkUsageDescription" = "VibesBox may use the local network so development tools can connect during testing, and for optional device features on the same Wi‑Fi.";
 "NSMicrophoneUsageDescription" = "VibesBox использует микрофон, чтобы анализировать воспроизводимую музыку и распознавать её.";
-"NSAppleMusicUsageDescription" = "VibesBox может обращаться к медиатеке для связи распознавания музыки с Apple Music.";
+"NSAppleMusicUsageDescription" = "VibesBox may access your media library to link music recognition with Apple Music features.";
 "NSCameraUsageDescription" = "VibesBox использует камеру для сканирования QR-кодов и съёмки фото.";
-"NSPhotoLibraryUsageDescription" = "Нужен доступ к фото, чтобы вы могли выбрать изображение профиля и использовать снимки с вечеринок.";
-"NSPhotoLibraryAddUsageDescription" = "Мы сохраняем изображения (QR-коды или фото с вечеринок) в вашу медиатеку, когда вы этого хотите.";
-"NSLocationWhenInUseUsageDescription" = "Мы используем ваше местоположение, чтобы отцентрировать карту на месте проведения вечеринки.";
-"NSCalendarsUsageDescription" = "Необходимо для экспорта дат вечеринок в ваш календарь.";
-"NSFaceIDUsageDescription" = "Face ID защищает настройки администратора — доступ к конфиденциальным параметрам только у вас.";
+"NSPhotoLibraryUsageDescription" = "VibesBox needs photo library access so you can choose a profile picture.";
+"NSPhotoLibraryAddUsageDescription" = "VibesBox saves images such as QR codes to your library when you choose to.";
+"NSLocationWhenInUseUsageDescription" = "Мы используем ваше местоположение, чтобы центрировать карту на локации вечеринки.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "Мы используем ваше местоположение, чтобы центрировать карту на локации вечеринки.";
+"NSCalendarsUsageDescription" = "Needed to export party dates to your calendar.";
+"NSFaceIDUsageDescription" = "Face ID protects admin settings so only you can access sensitive options.";

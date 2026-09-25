@@ -7,14 +7,14 @@ import '../utils/sanitize.dart';
 import 'recaptcha_enterprise_action_service.dart';
 import '../utils/debug_log.dart';
 
-/// Verifizierungs- und Passwort-Reset-Mails **ausschließlich** über Callable [sendAuthEmail].
+/// Verifizierungs- und Passwort-Reset-Mails bevorzugt über Callable [sendAuthEmail].
 /// Der Server versendet per **EmailJS** (Service-/Template-ID, Public Key, Private Key in Functions).
-/// Es wird **kein** [User.sendEmailVerification] und kein Google-SMTP aus der App genutzt.
 ///
 /// Inhalte kommen aus [AppLocalizations] (Sprache = UI zum Aufruf).
 ///
-/// Server: [sendAuthEmail] mit **enforceAppCheck: true** — nur Clients mit gültigem App-Check-Token
-/// (Release: Play Integrity / App Attest; Debug: Debug-Token in der Firebase Console).
+/// Fallback (wie Verifizierung): Wenn der Callable scheitert (z. B. App Check), nutzt die App
+/// [User.sendEmailVerification] bzw. [FirebaseAuth.sendPasswordResetEmail], damit Login/Reset
+/// nicht komplett blockiert sind.
 ///
 /// Hinweis: HTTPS Callable nutzt kein browser-CORS.
 class AuthEmailService {
@@ -22,8 +22,21 @@ class AuthEmailService {
 
   static const String _region = 'us-central1';
 
+  /// Continue-URL wie Cloud Function [AUTH_EMAIL_CONTINUE_URL].
+  static const String _authEmailContinueUrl =
+      'https://vibesbox.app/vb/verify.html?firebaseAuth=1';
+
   static FirebaseFunctions get _functions =>
       FirebaseFunctions.instanceFor(region: _region);
+
+  /// EmailJS-Template-Chrome (Intro, Header, Footer, Antworten-Button) aus App-l10n.
+  static Map<String, String> _authEmailUiLabels(AppLocalizations l) => {
+        'authMailIntro': l.auth_mail_intro,
+        'authMailHeader': l.auth_mail_header,
+        'registrationHeader': l.auth_registration_header,
+        'authMailFooter': l.auth_mail_footer_automated,
+        'labelReplyButton': l.label_reply_button,
+      };
 
   static Future<void> sendVerificationEmail({
     required AppLocalizations l,
@@ -75,6 +88,7 @@ class AuthEmailService {
         'bodyTemplate': bodyTemplate,
         'userName': userName.trim(),
         'locale': l.locale.languageCode,
+        ..._authEmailUiLabels(l),
         if (registrationRole != null && registrationRole.trim().isNotEmpty)
           'role': registrationRole.trim(),
       });
@@ -106,8 +120,8 @@ class AuthEmailService {
     required String email,
   }) async {
     debugLog('🚀 [PasswordReset] Starte Request zu Cloud Function...');
+    final trimmed = sanitizeEmail(email);
     try {
-      final trimmed = sanitizeEmail(email);
       final callable = _functions.httpsCallable('sendAuthEmail');
       var recaptchaToken =
           await RecaptchaEnterpriseActionService.getSubmitActionToken();
@@ -131,6 +145,7 @@ class AuthEmailService {
         'bodyTemplate': l.translate('auth_password_reset_body'),
         'userName': trimmed.split('@').first,
         'locale': l.locale.languageCode,
+        ..._authEmailUiLabels(l),
       });
       debugLog('✅ [PasswordReset] Server-Antwort (Callable data): ${result.data}');
     } catch (e, st) {
@@ -141,7 +156,30 @@ class AuthEmailService {
           '❌ [PasswordReset] code=${e.code} message=${e.message} details=${e.details}',
         );
       }
-      rethrow;
+      // Callable/App Check: Nutzer trotzdem Reset-Mail (Firebase Auth Template).
+      try {
+        await FirebaseAuth.instance.sendPasswordResetEmail(
+          email: trimmed,
+          actionCodeSettings: ActionCodeSettings(
+            url: _authEmailContinueUrl,
+            handleCodeInApp: false,
+          ),
+        );
+        debugLog('✅ [PasswordReset] sendPasswordResetEmail fallback OK');
+      } on FirebaseAuthException catch (e2, st2) {
+        // Server-Parität: unbekannte E-Mail nicht als Fehler zeigen (Enumeration).
+        if (e2.code == 'user-not-found') {
+          debugLog(
+            'ℹ️ [PasswordReset] Fallback user-not-found — still success UX',
+          );
+          return;
+        }
+        debugLog('❌ [PasswordReset] sendPasswordResetEmail fallback: $e2\n$st2');
+        rethrow;
+      } catch (e2, st2) {
+        debugLog('❌ [PasswordReset] sendPasswordResetEmail fallback: $e2\n$st2');
+        rethrow;
+      }
     }
   }
 }

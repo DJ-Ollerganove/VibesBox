@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../config/app_config.dart';
 import '../utils/debug_log.dart';
 import '../utils/wish_paths.dart';
+import 'guest_wish_stats_service.dart';
 
 /// Datenklasse für User-Statistiken
 class UserStatistics {
@@ -133,28 +134,89 @@ String? _roleIdFromUserData(Map<String, dynamic> data) {
 
 /// Service für das Laden von Wunsch-Statistiken
 class StatisticsService {
-  /// Lädt die Wünsche-Statistiken für einen normalen User
+  static const String _adminWishTotalsPath = 'admin_stats/wish_totals';
+
+  static AdminStatistics _adminStatisticsFromWishTotals(
+    Map<String, dynamic>? data,
+  ) {
+    if (data == null) {
+      return AdminStatistics(
+        totalWishes: 0,
+        pendingWishes: 0,
+        playedWishes: 0,
+        rejectedWishes: 0,
+        notPlayedWishes: 0,
+        unknownWishes: 0,
+        chartPending: 0,
+        chartPlayed: 0,
+        chartRejected: 0,
+        chartNotPlayed: 0,
+        chartUnknown: 0,
+      );
+    }
+
+    final played = (data['played'] as num?)?.toInt() ?? 0;
+    final rejected = (data['rejected'] as num?)?.toInt() ?? 0;
+    final notPlayed = (data['not_played'] as num?)?.toInt() ?? 0;
+    final deleted = (data['deleted'] as num?)?.toInt() ?? 0;
+    final pendingActive = (data['pending_active'] as num?)?.toInt() ?? 0;
+    final pendingInactive = (data['pending_inactive'] as num?)?.toInt() ?? 0;
+    final chartNotPlayed = notPlayed + pendingInactive;
+    final total =
+        played + rejected + chartNotPlayed + pendingActive + deleted;
+
+    return AdminStatistics(
+      totalWishes: total,
+      pendingWishes: pendingActive,
+      playedWishes: played,
+      rejectedWishes: rejected,
+      notPlayedWishes: chartNotPlayed,
+      unknownWishes: deleted,
+      chartPending: pendingActive,
+      chartPlayed: played,
+      chartRejected: rejected,
+      chartNotPlayed: chartNotPlayed,
+      chartUnknown: deleted,
+    );
+  }
+
+  static DocumentReference<Map<String, dynamic>> _adminWishTotalsRef() {
+    return FirebaseFirestore.instance.doc(_adminWishTotalsPath);
+  }
+  /// Lädt die Wünsche-Statistiken für einen normalen User (eingeloggter Gast).
+  /// Primär: persistenter Zähler `guestWishesSubmittedCount` im User-Dokument.
   static Future<UserStatistics> loadUserStatistics(User user) async {
     try {
-      // Lade alle Wünsche des Users (nach aktuellem Namen)
-      final currentName = user.displayName ?? user.email?.split('@').first ?? '';
-      final wishesQuery = await WishPaths.allWishesCollectionGroup()
-          .where('name', isEqualTo: currentName)
-          .get();
-
-      int total = 0;
+      final uid = user.uid;
+      final backfilled =
+          await GuestWishStatsService.instance.ensureBackfilled(uid);
+      int total = backfilled;
       int played = 0;
 
-      for (final doc in wishesQuery.docs) {
-        final data = doc.data() as Map<String, dynamic>;
-        total++;
-        if (data['status'] == 'played') {
-          played++;
+      if (total <= 0) {
+        total = await GuestWishStatsService.instance.readCount(uid);
+      }
+
+      // Gespielte Wünsche weiterhin live zählen (nur Anzeige-Hilfe, falls später genutzt).
+      try {
+        final wishesQuery = await WishPaths.allWishesCollectionGroup()
+            .where('user_id', isEqualTo: uid)
+            .get();
+        if (total <= 0) {
+          total = wishesQuery.docs.length;
         }
+        for (final doc in wishesQuery.docs) {
+          final data = doc.data();
+          if (data['status'] == 'played') {
+            played++;
+          }
+        }
+      } catch (e) {
+        debugLog('Fehler beim Zählen gespielter Wünsche: $e');
       }
 
       return UserStatistics(
-        totalWishes: total,
+        totalWishes: total < 0 ? 0 : total,
         playedWishes: played,
       );
     } catch (e) {
@@ -340,19 +402,14 @@ class StatisticsService {
     return _calculateAdminStatistics(docs, activePartyIds: activePartyIds);
   }
 
-  /// Stream für globale Admin-Statistiken (alle Wünsche über alle Partys).
-  /// Nutzt Partys-Snapshot als Trigger und lädt vollständig über alle Subcollections
-  /// (collectionGroup allein liefert ohne globale Admin-Rechte nur eigene DJ-Wünsche).
+  /// Stream für globale Admin-Statistiken (gecachte Zähler, kein Vollscan).
   static Stream<AdminStatistics> loadAdminStatisticsStream() {
-    return FirebaseFirestore.instance
-        .collection('parties')
-        .snapshots()
-        .asyncMap((_) async {
-      final docs = await _loadAllWishDocumentsForAdmin();
+    return _adminWishTotalsRef().snapshots().map((snap) {
+      final stats = _adminStatisticsFromWishTotals(snap.data());
       debugLog(
-        '📊 StatisticsService Stream: ${docs.length} Wünsche (global, Partys-Pfad)',
+        '📊 StatisticsService Stream (wish_totals): total=${stats.totalWishes}',
       );
-      return _calculateAdminStatisticsAsync(docs);
+      return stats;
     }).distinct((prev, next) {
       return prev.totalWishes == next.totalWishes &&
           prev.pendingWishes == next.pendingWishes &&
@@ -361,7 +418,7 @@ class StatisticsService {
           prev.notPlayedWishes == next.notPlayedWishes &&
           prev.unknownWishes == next.unknownWishes;
     }).handleError((e, st) {
-      debugLog('❌ StatisticsService Admin-Stream Fehler (global): $e');
+      debugLog('❌ StatisticsService Admin-Stream Fehler (wish_totals): $e');
     });
   }
 
@@ -419,25 +476,19 @@ class StatisticsService {
     }
   }
 
-  /// Lädt die globale Admin-Statistik EINMALIG (alle Wünsche aller DJs / Partys).
+  /// Lädt die globale Admin-Statistik EINMALIG (gecachte Zähler).
   static Future<AdminStatistics> loadAdminStatistics() async {
     try {
-      debugLog('🔍 StatisticsService: loadAdminStatistics()');
-      final docs = await _loadAllWishDocumentsForAdmin();
-      final stats = await _calculateAdminStatisticsAsync(docs);
+      debugLog('🔍 StatisticsService: loadAdminStatistics() (wish_totals)');
+      final snap = await _adminWishTotalsRef().get();
+      final stats = _adminStatisticsFromWishTotals(snap.data());
       debugLog(
-        '=== Admin-Statistik (${docs.length} Wünsche) total=${stats.totalWishes} ===',
+        '=== Admin-Statistik (wish_totals) total=${stats.totalWishes} ===',
       );
       return stats;
     } catch (e, stackTrace) {
       debugLog('❌ StatisticsService: loadAdminStatistics: $e');
       debugLog('$stackTrace');
-      try {
-        final fallback = await _loadAllWishDocumentsViaParties();
-        if (fallback.isNotEmpty) {
-          return _calculateAdminStatisticsAsync(fallback);
-        }
-      } catch (_) {}
       return AdminStatistics(
         totalWishes: 0,
         pendingWishes: 0,

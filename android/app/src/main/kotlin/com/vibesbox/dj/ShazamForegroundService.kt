@@ -18,17 +18,40 @@ import androidx.core.content.ContextCompat
 
 class ShazamForegroundService : Service() {
 
-    /** Ab Android 14 (API 34): [startForeground] muss den FGS-Typ „Mikrofon“ angeben (Manifest: foregroundServiceType). */
-    private fun startForegroundWithMicType(notification: Notification) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+    /**
+     * Android 14+: [startForeground] braucht einen FGS-Typ.
+     * Mikrofon nur wenn wirklich gescannt wird — sonst dataSync (VibesBox Sync).
+     * Mikrofon-FGS ohne Aufnahme killt auf Android 15 den Prozess (schwarzer Screen beim Aufwachen).
+     */
+    private fun startForegroundTyped(notification: Notification, useMicrophone: Boolean): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                val type = if (useMicrophone) {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                } else {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                }
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    type,
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            true
+        } catch (se: SecurityException) {
+            Log.e(
+                "ShazamForegroundService",
+                "startForeground(type mic=$useMicrophone) blockiert: ${se.message}",
+                se,
             )
-        } else {
-            @Suppress("DEPRECATION")
-            startForeground(NOTIFICATION_ID, notification)
+            try {
+                stopSelf()
+            } catch (_: Exception) {
+            }
+            false
         }
     }
 
@@ -44,8 +67,9 @@ class ShazamForegroundService : Service() {
         private const val EXTRA_CONTENT_TEXT = "content_text"
         private const val EXTRA_NAV_TARGET = "nav_target"
         private const val NAV_TARGET_HISTORY = "history"
+        const val EXTRA_USE_MICROPHONE = "use_microphone"
         @Volatile private var currentNotificationTitle: String = "VibesBox Musikerkennung"
-        @Volatile private var currentListeningText: String = "Höre gerade zu..."
+        @Volatile private var currentListeningText: String = ""
         
         fun createNotificationChannel(context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -179,16 +203,24 @@ class ShazamForegroundService : Service() {
         // Keine isolierten Threads ohne ClassLoader-Zugriff
         
         createNotificationChannel(this)
-        
+
         // Android 12+ / 14: Nach startForegroundService() MUSS startForeground() zeitnah erfolgen.
-        // Ohne startForeground() → ForegroundServiceDidNotStartInTimeException (Crash).
-        // Immer zuerst Platzhalter-Notification anzeigen, dann bei fehlender Berechtigung wieder beenden.
-        startForegroundWithMicType(createNotification(null, null))
-        if (!hasMicrophonePermission()) {
-            Log.w(
-                "ShazamForegroundService",
-                "Mikrofon-Berechtigung fehlt – beende Vordergrunddienst (startForeground wurde bereits gesetzt)"
-            )
+        // dataSync zuerst: kein Mikrofon-FGS ohne Aufnahme (Android 15 Prozess-Tod).
+        if (!startForegroundTyped(createNotification(null, null), useMicrophone = false)) {
+            return
+        }
+    }
+
+    private var useMicrophone: Boolean = false
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.hasExtra(EXTRA_USE_MICROPHONE) == true) {
+            useMicrophone = intent.getBooleanExtra(EXTRA_USE_MICROPHONE, false)
+        }
+
+        if (intent?.action == ACTION_STOP) {
+            val notificationManager = getSystemService(NotificationManager::class.java)
+            removeNotificationCompletely(notificationManager)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 stopForeground(Service.STOP_FOREGROUND_REMOVE)
             } else {
@@ -196,11 +228,10 @@ class ShazamForegroundService : Service() {
                 stopForeground(true)
             }
             stopSelf()
+            return START_NOT_STICKY
         }
-    }
-    
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (!hasMicrophonePermission()) {
+
+        if (useMicrophone && !hasMicrophonePermission()) {
             Log.w("ShazamForegroundService", "Mikrofon-Berechtigung fehlt – stoppe Service")
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 stopForeground(Service.STOP_FOREGROUND_REMOVE)
@@ -211,7 +242,7 @@ class ShazamForegroundService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        
+
         if (intent?.action == ACTION_UPDATE_NOTIFICATION) {
             val notificationTitle = intent.getStringExtra(EXTRA_NOTIFICATION_TITLE)
             val contentText = intent.getStringExtra(EXTRA_CONTENT_TEXT)
@@ -229,40 +260,43 @@ class ShazamForegroundService : Service() {
             if (!notificationTitle.isNullOrBlank()) {
                 currentNotificationTitle = notificationTitle
             }
-            if (!notificationListening.isNullOrBlank()) {
-                currentListeningText = notificationListening
+            if (useMicrophone) {
+                if (!notificationListening.isNullOrBlank()) {
+                    currentListeningText = notificationListening
+                }
+            } else {
+                currentListeningText = notificationListening ?: ""
             }
             val notificationManager = getSystemService(NotificationManager::class.java)
             if (visible) {
-                val notification = createNotification(currentListeningText, null)
+                val notification = createNotification(
+                    if (useMicrophone) currentListeningText else notificationListening,
+                    null,
+                )
                 notificationManager.notify(NOTIFICATION_ID, notification)
             } else {
                 removeNotificationCompletely(notificationManager)
             }
-        } else if (intent?.action == ACTION_STOP) {
-            val notificationManager = getSystemService(NotificationManager::class.java)
-            removeNotificationCompletely(notificationManager)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                stopForeground(Service.STOP_FOREGROUND_REMOVE)
-            } else {
-                @Suppress("DEPRECATION")
-                stopForeground(true)
-            }
-            stopSelf()
-            return START_NOT_STICKY
         } else {
             val startTitle = intent?.getStringExtra(EXTRA_NOTIFICATION_TITLE)
             val startListening = intent?.getStringExtra(EXTRA_NOTIFICATION_LISTENING)
             if (!startTitle.isNullOrBlank()) {
                 currentNotificationTitle = startTitle
             }
-            if (!startListening.isNullOrBlank()) {
-                currentListeningText = startListening
+            if (useMicrophone) {
+                if (!startListening.isNullOrBlank()) {
+                    currentListeningText = startListening
+                }
+            } else {
+                currentListeningText = startListening ?: ""
             }
-            // Sicherstellen: weiterhin als Foreground (nach Prozess-Neustart o. ä.)
-            startForegroundWithMicType(createNotification(null, null))
+            if (!startForegroundTyped(createNotification(null, null), useMicrophone)) {
+                return START_NOT_STICKY
+            }
         }
-        return START_STICKY // Service soll neu starten, wenn er vom System beendet wird
+        // Nicht STICKY: nach Prozess-Tod startet Android den dataSync-FGS sonst
+        // neu und killt die App nach ~10s (ForegroundServiceDidNotStopInTimeException).
+        return START_NOT_STICKY
     }
     
     override fun onBind(intent: Intent?): IBinder? {
@@ -270,7 +304,11 @@ class ShazamForegroundService : Service() {
     }
     
     private fun createNotification(contentText: String?, navigationTarget: String?): Notification {
-        val text = if (!contentText.isNullOrBlank()) contentText else currentListeningText
+        val text = when {
+            !contentText.isNullOrBlank() -> contentText
+            !useMicrophone -> ""
+            else -> currentListeningText
+        }
         val tapIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             if (navigationTarget == NAV_TARGET_HISTORY) {

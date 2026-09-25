@@ -23,6 +23,9 @@ import '../services/wish_management_service.dart';
 import '../utils/debug_log.dart';
 import '../utils/string_utils.dart';
 import '../utils/wish_party_filter.dart';
+import '../utils/free_list_pro_promo.dart';
+import '../app_scaffold_messenger.dart';
+import '../services/dj_song_blacklist_service.dart';
 
 /// DJ-Übersicht: abgelehnte Wünsche (ehemals [AbgelehntPage]).
 class RejectedWishesPage extends StatefulWidget {
@@ -40,7 +43,8 @@ class RejectedWishesPage extends StatefulWidget {
   State<RejectedWishesPage> createState() => _RejectedWishesPageState();
 }
 
-class _RejectedWishesPageState extends State<RejectedWishesPage> {
+class _RejectedWishesPageState extends State<RejectedWishesPage>
+    with AutomaticKeepAliveClientMixin {
   int _currentPage = 1;
   int _resultsPerPage = ResultsPerPageService.defaultResultsPerPage;
   final ScrollController _scrollController =
@@ -57,6 +61,9 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
     }
     return _cachedRejectedWishesStream!;
   }
+
+  @override
+  bool get wantKeepAlive => true;
 
 
   @override
@@ -188,20 +195,36 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     return StickyPaginationLayout(
       currentPage: _currentPage > 0 ? _currentPage : 1,
       totalPages: 1,
       onPrevious: null,
       onNext: null,
       child: DjWishPartyScope(
-        builder: (context, effectivePartyId) {
+        builder: (context, effectivePartyId, visibility) {
           return StreamBuilder<QuerySnapshot>(
-            stream: _rejectedWishesStreamForParty(effectivePartyId),
-            builder: (context, snapshot) => _buildWishesListWithPartyId(
-              context,
-              snapshot,
-              effectivePartyId,
-            ),
+            stream: FirebaseFirestore.instance
+                .collection('blocked_guests')
+                .where('party_id', isEqualTo: effectivePartyId)
+                .snapshots(),
+            builder: (context, blockedSnap) {
+              final blockedClientIds = <String>{};
+              for (final doc in blockedSnap.data?.docs ?? const []) {
+                final data = doc.data() as Map<String, dynamic>;
+                final cid = (data['client_id'] ?? '').toString().trim();
+                if (cid.isNotEmpty) blockedClientIds.add(cid);
+              }
+              return StreamBuilder<QuerySnapshot>(
+                stream: _rejectedWishesStreamForParty(effectivePartyId),
+                builder: (context, snapshot) => _buildWishesListWithPartyId(
+                  context,
+                  snapshot,
+                  effectivePartyId,
+                  blockedClientIds: blockedClientIds,
+                ),
+              );
+            },
           );
         },
       ),
@@ -211,8 +234,9 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
   Widget _buildWishesListWithPartyId(
     BuildContext context,
     AsyncSnapshot<QuerySnapshot> snapshot,
-    String partyId,
-  ) {
+    String partyId, {
+    Set<String> blockedClientIds = const {},
+  }) {
     if (snapshot.connectionState == ConnectionState.waiting &&
         !snapshot.hasData) {
       return SingleChildScrollView(
@@ -343,6 +367,7 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
       final docIds = groupedDocIds[groupKey] ?? [];
 
       String? rejectionReason;
+      var autoRejectedByBlacklist = false;
       for (final docId in docIds) {
         try {
           final foundDoc = partyFilteredDocs.firstWhere((d) => d.id == docId);
@@ -352,6 +377,10 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
             rejectionReason = rr;
             break;
           }
+          if (rr == 'song_blacklist' ||
+              docData['auto_rejected_by_blacklist'] == true) {
+            autoRejectedByBlacklist = true;
+          }
         } catch (e) {
           continue;
         }
@@ -359,6 +388,10 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
 
       if (rejectionReason != null) {
         data['rejection_reason'] = rejectionReason;
+      }
+      if (autoRejectedByBlacklist) {
+        data['auto_rejected_by_blacklist'] = true;
+        data['rejection_reason'] = data['rejection_reason'] ?? 'song_blacklist';
       }
     }
 
@@ -407,24 +440,28 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
                 final len = paginatedGroupedList.length;
                 final isFree =
                     UserService().sessionProStatus.value?.isActive != true;
-                return isFree ? len + (len / 5).floor() : len;
+                return FreeListProPromo.itemCount(len, isFree: isFree);
               }(),
               separatorBuilder: (_, i) {
+                final len = paginatedGroupedList.length;
                 final isFree =
                     UserService().sessionProStatus.value?.isActive != true;
                 if (!isFree) return const SizedBox(height: 8);
-                if (i % 6 != 5 && (i + 1) % 6 != 5) {
-                  return const SizedBox(height: 8);
+                if (FreeListProPromo.isPromoIndex(i, len, isFree: true) ||
+                    FreeListProPromo.isPromoIndex(i + 1, len, isFree: true)) {
+                  return const SizedBox.shrink();
                 }
-                return const SizedBox.shrink();
+                return const SizedBox(height: 8);
               },
               itemBuilder: (context, index) {
+                final len = paginatedGroupedList.length;
                 final isFree =
                     UserService().sessionProStatus.value?.isActive != true;
-                if (isFree && index % 6 == 5) {
+                if (FreeListProPromo.isPromoIndex(index, len, isFree: isFree)) {
                   return const ProPromotionBanner();
                 }
-                final dataIndex = isFree ? index - (index ~/ 6) : index;
+                final dataIndex =
+                    FreeListProPromo.dataIndex(index, len, isFree: isFree);
                 final groupedItem = paginatedGroupedList[dataIndex];
                 final groupKey = groupedItem['key'] as String;
                 final data = groupedItem['data'] as Map<String, dynamic>;
@@ -446,13 +483,25 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
                     : (titleDisp.isNotEmpty ? titleDisp : artistDisp);
 
                 final rejectionReason = data['rejection_reason'] as String?;
-                final isUserBlocked = rejectionReason == 'user_blocked';
+                final autoRejectedByBlock =
+                    data['auto_rejected_by_block'] == true ||
+                    (firstRequest?.autoRejectedByBlock == true);
+                final autoRejectedByBlacklist =
+                    data['auto_rejected_by_blacklist'] == true ||
+                    rejectionReason == 'song_blacklist';
                 final clientId =
                     firstRequest?.clientId ?? data['client_id'] as String?;
+                final isUserBlocked =
+                    rejectionReason == 'user_blocked' ||
+                    autoRejectedByBlock ||
+                    (clientId != null &&
+                        clientId.isNotEmpty &&
+                        blockedClientIds.contains(clientId));
 
                 final enhancedData = Map<String, dynamic>.from(data);
                 if (isUserBlocked) {
                   enhancedData['rejection_reason'] = 'user_blocked';
+                  enhancedData['auto_rejected_by_block'] = true;
                   enhancedData['client_id'] = clientId;
                 }
 
@@ -478,49 +527,31 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
                           number: number,
                           isNew: false,
                           detailDialogBorderColor: UIConstants.frameAbgelehnt,
-                          onRestore: (detailContext) async {
-                            if (ActivePartyService.currentPartyId != null &&
-                                ActivePartyService.currentPartyId!.isNotEmpty) {
-                              await _restoreGroupedWishes(
-                                detailContext,
-                                context,
-                                docIds,
-                                displayText,
-                              );
-                            } else {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(l.error_no_party_id_found),
-                                  backgroundColor: UIConstants.frameNoParty,
-                                ),
-                              );
-                            }
-                          },
-                          onDelete: (ctx, ids) {
-                            final title = unescapeHtml((data['title'] ?? '') as String);
-                            final artist = unescapeHtml((data['artist'] ?? '') as String);
-                            final delDisplayText =
-                                title.isNotEmpty && artist.isNotEmpty
-                                ? '$title - $artist'
-                                : (title.isNotEmpty ? title : artist);
-                            if (ActivePartyService.currentPartyId != null &&
-                                ActivePartyService.currentPartyId!.isNotEmpty) {
-                              WishManagementService.showConfirmDeleteGroupedDialog(
-                                ctx,
-                                ids,
-                                delDisplayText,
-                                ActivePartyService.currentPartyId!,
-                              );
-                            } else {
-                              final loc = AppLocalizations.of(ctx)!;
-                              ScaffoldMessenger.of(ctx).showSnackBar(
-                                SnackBar(
-                                  content: Text(loc.error_no_party_id_found),
-                                  backgroundColor: UIConstants.frameNoParty,
-                                ),
-                              );
-                            }
-                          },
+                          // Gesperrte Gäste: kein „Zurück zu Offen“ (auch nicht manuell abgelehnt, solange Sperre aktiv — Guard im Service).
+                          onRestore: isUserBlocked
+                              ? null
+                              : (detailContext) async {
+                                  if (partyId.isNotEmpty) {
+                                    await _restoreGroupedWishes(
+                                      detailContext,
+                                      context,
+                                      docIds,
+                                      displayText,
+                                      partyId,
+                                    );
+                                  } else {
+                                    showVibesSnackBar(
+                                      context,
+                                      SnackBar(
+                                        content:
+                                            Text(l.error_no_party_id_found),
+                                        backgroundColor:
+                                            UIConstants.frameNoParty,
+                                      ),
+                                    );
+                                  }
+                                },
+                          onDelete: null,
                         ),
                         if (isUserBlocked)
                           Positioned(
@@ -555,6 +586,40 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
                                 ],
                               ),
                             ),
+                          )
+                        else if (autoRejectedByBlacklist)
+                          Positioned(
+                            top: 8,
+                            right: 8,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: UIConstants.colorSongBlacklistChip,
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(
+                                    Icons.playlist_remove,
+                                    color: UIConstants.colorSongBlacklistOnChip,
+                                    size: 16,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    l.translate('song_blacklist_title'),
+                                    style: const TextStyle(
+                                      color: UIConstants.colorSongBlacklistOnChip,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
                       ],
                     );
@@ -578,22 +643,23 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
     BuildContext listContext,
     List<String> docIds,
     String displayText,
+    String partyId,
   ) async {
     final l = AppLocalizations.of(listContext)!;
     try {
-      if (ActivePartyService.currentPartyId != null &&
-          ActivePartyService.currentPartyId!.isNotEmpty) {
+      if (partyId.isNotEmpty) {
+        DjSongBlacklistService.instance.skipAutoRejectFor(docIds);
         await WishManagementService.updateGroupedStatus(
           docIds,
           'pending',
-          ActivePartyService.currentPartyId!,
+          partyId,
         );
         // 1) Bestätigungsdialog ist bereits zu; 2) Detail-Dialog schließen
         if (dialogContext.mounted) {
           Navigator.of(dialogContext).pop();
         }
         if (!listContext.mounted) return;
-        ScaffoldMessenger.of(listContext).showSnackBar(
+        showVibesSnackBar(listContext, 
           SnackBar(
             content: Text(
               l.wish_restored_count(docIds.length),
@@ -608,7 +674,7 @@ class _RejectedWishesPageState extends State<RejectedWishesPage> {
       }
     } catch (e) {
       if (listContext.mounted) {
-        ScaffoldMessenger.of(listContext).showSnackBar(
+        showVibesSnackBar(listContext, 
           SnackBar(
             content: Text(l.error_with_message(e.toString())),
             backgroundColor: UIConstants.frameNoParty,

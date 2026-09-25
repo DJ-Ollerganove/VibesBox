@@ -35,10 +35,9 @@ android {
         applicationId = "com.vibesbox.dj"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        // Mindestanforderung: Android 5.0 (API 21) für breite Kompatibilität
-        // Android 8.1 ist API 27, sollte also unterstützt werden
-        minSdk = flutter.minSdkVersion  // Explizit gesetzt für Android 5.0+
-        targetSdk = 35
+        // purchases_flutter 10.x / Play Billing Library 8.3+ erfordert API 23+
+        minSdk = maxOf(flutter.minSdkVersion, 23)
+        targetSdk = 36
         // Aus pubspec bzw. `flutter build --build-name` / `--build-number` (keine festen Werte!)
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -57,6 +56,8 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("release")
+            // Minify/R8 AUS: 1.1.68/69 mit Minify → Abstürze + kaputte Musikerkennung (Android).
+            // ShazamKit/Billing/Reflection — erst wieder an, wenn Keeps auf Gerät verifiziert.
             isMinifyEnabled = false
             isShrinkResources = false
         }
@@ -90,10 +91,8 @@ dependencies {
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.11.0")
     
-    // Google Play Billing Library
-    implementation("com.android.billingclient:billing:7.1.1")
-    implementation("com.android.billingclient:billing-ktx:7.1.1")
-    
-    // RevenueCat SDK
-    implementation("com.revenuecat.purchases:purchases:8.2.1")
+    // Google Play Billing Library 8+ (Play-Richtlinie; RevenueCat nutzt dieselbe Major)
+    implementation("com.android.billingclient:billing:8.3.0")
+    implementation("com.android.billingclient:billing-ktx:8.3.0")
+    // Native RevenueCat-SDK kommt über purchases_flutter (purchases-hybrid-common / Billing 8).
 }

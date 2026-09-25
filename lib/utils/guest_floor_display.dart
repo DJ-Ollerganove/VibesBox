@@ -1,4 +1,3 @@
-import '../constants/venue_constants.dart';
 import '../l10n/app_localizations.dart';
 import '../models/guest_floor_option.dart';
 import '../utils/floor_key_utils.dart';
@@ -33,5 +32,15 @@ class GuestFloorDisplay {
       partyData['floor_label'] as String?,
       VenuePartyFields.readFloorKey(partyData),
     );
+  }
+
+  /// Floor-Zeile für öffentliche Partys mit explizit gewähltem Floor (nicht Default).
+  static String? publicPartyFloorLineIfAny(
+    AppLocalizations l,
+    Map<String, dynamic> partyData,
+  ) {
+    if (partyData['party_type'] != 'public') return null;
+    if (VenuePartyFields.isDefaultFloorParty(partyData)) return null;
+    return labelFromPartyData(l, partyData);
   }
 }

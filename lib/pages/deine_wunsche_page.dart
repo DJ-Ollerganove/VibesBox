@@ -10,6 +10,7 @@ import '../utils/string_utils.dart';
 import '../utils/ui_constants.dart';
 import '../utils/wish_paths.dart';
 import '../utils/formatting_utils.dart';
+import '../app_scaffold_messenger.dart';
 
 // Hilfsfunktion zum Anzeigen von Firebase-Fehlern mit klickbaren Links
 Widget buildFirebaseErrorWidget(Object error) {
@@ -95,7 +96,7 @@ Widget buildFirebaseErrorWidget(Object error) {
                   onPressed: () async {
                     await Clipboard.setData(ClipboardData(text: cleanUrl));
                     if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
+                      showVibesSnackBar(context, 
                         SnackBar(
                           content: Text(l.url_copied_to_clipboard_snackbar),
                           backgroundColor: Colors.green,
@@ -125,7 +126,7 @@ Widget buildFirebaseErrorWidget(Object error) {
                         mode: LaunchMode.externalApplication,
                       );
                       if (!launched && context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
+                        showVibesSnackBar(context, 
                           SnackBar(
                             content: Text(l.url_launch_failed_snackbar),
                             duration: const Duration(seconds: 5),
@@ -134,7 +135,7 @@ Widget buildFirebaseErrorWidget(Object error) {
                       }
                     } catch (e) {
                       if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
+                        showVibesSnackBar(context, 
                           SnackBar(
                             content: Text(
                               l.url_open_error_with_detail_snackbar('$e'),
@@ -402,6 +403,7 @@ class _DeineWunschePageState extends State<DeineWunschePage> {
     required BuildContext context,
     required DocumentReference<Map<String, dynamic>> wishRef,
     required String initialGreeting,
+    required String guestName,
   }) async {
     final l = AppLocalizations.of(context)!;
     final greetingController = TextEditingController(text: initialGreeting);
@@ -492,13 +494,18 @@ class _DeineWunschePageState extends State<DeineWunschePage> {
                           maxLength: 160,
                         );
                         Navigator.of(ctx).pop();
+                        final update = <String, dynamic>{
+                          'greeting': greeting,
+                          'updated_at': FieldValue.serverTimestamp(),
+                        };
+                        final name = guestName.trim();
+                        if (name.isNotEmpty) {
+                          update['greetings'] = [
+                            {'name': name, 'greeting': greeting},
+                          ];
+                        }
                         wishRef
-                            .update(
-                              SecurityHelper.sanitizeMap({
-                                'greeting': greeting,
-                                'updated_at': FieldValue.serverTimestamp(),
-                              }),
-                            )
+                            .update(SecurityHelper.sanitizeMap(update))
                             .catchError((_) {});
                       },
                       style: FilledButton.styleFrom(
@@ -747,6 +754,10 @@ class _DeineWunschePageState extends State<DeineWunschePage> {
                           (data['artist'] ?? '').toString(),
                         );
                         final greeting = _extractGreeting(data);
+                        final guestName =
+                            (data['name'] ?? data['displayName'] ?? '')
+                                .toString()
+                                .trim();
                         final status = (data['status'] ?? 'pending') as String;
                         final isPreWish = data['is_pre_wish'] == true;
                         final ts = data['createdAt'];
@@ -793,7 +804,7 @@ class _DeineWunschePageState extends State<DeineWunschePage> {
                             try {
                               await doc.reference.delete();
                               if (!mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
+                              showVibesSnackBar(context, 
                                 SnackBar(
                                   content: Text(
                                     l10n.wish_deleted,
@@ -803,7 +814,7 @@ class _DeineWunschePageState extends State<DeineWunschePage> {
                               );
                             } catch (e) {
                               if (!mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
+                              showVibesSnackBar(context, 
                                 SnackBar(
                                   content: Text(
                                     '${l10n.error_deleting}: $e',
@@ -817,6 +828,7 @@ class _DeineWunschePageState extends State<DeineWunschePage> {
                             context: context,
                             wishRef: doc.reference,
                             initialGreeting: greeting,
+                            guestName: guestName,
                           ),
                         );
                       },
@@ -860,9 +872,10 @@ class _GuestWishCardCell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final normalized = status.toLowerCase();
-    final isOpen = normalized == 'pending';
+    final isOpen =
+        normalized == 'pending' || normalized == 'open' || normalized.isEmpty;
     final showDelete = isOpen;
-    final showEdit = isOpen && (isPreWish || greeting.trim().isNotEmpty);
+    final showEdit = isOpen;
     final titleColor = isOpen ? Colors.white : Colors.white70;
     final secondaryTextColor = isOpen
         ? Colors.white.withValues(alpha: 0.78)

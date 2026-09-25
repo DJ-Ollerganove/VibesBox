@@ -12,13 +12,15 @@ import 'profile/widgets/profile_edit_dialogs.dart';
 import 'profile/widgets/profile_image_section.dart';
 import 'profile/widgets/pro_status_card.dart';
 import '../utils/role_helper.dart';
-import '../services/referral_service.dart';
+import '../services/dj_b2b_service.dart';
 import '../widgets/custom_page_header.dart';
 import '../utils/ui_constants.dart';
 import '../utils/sanitize.dart' show sanitizeEmail;
 import '../helpers/security_helper.dart';
 import '../services/countries_service.dart';
+import '../services/user_self_settings_service.dart';
 import '../utils/debug_log.dart';
+import '../app_scaffold_messenger.dart';
 
 // Profil-Seite
 class ProfilPage extends StatefulWidget {
@@ -34,7 +36,6 @@ class _ProfilPageState extends State<ProfilPage> with WidgetsBindingObserver {
   String? _djLogoUrl;
   bool _justPurchased = false;
   bool _paywallOpen = false;
-  final ReferralService _referralService = ReferralService();
 
   late TextEditingController _djNameController;
   late TextEditingController _realNameController;
@@ -75,8 +76,12 @@ class _ProfilPageState extends State<ProfilPage> with WidgetsBindingObserver {
   Future<void> _ensureReferralCode() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
-      await _referralService.ensureReferralCodeExists(user.uid);
-      if (mounted) setState(() {}); // UI Update nach Code-Erstellung
+      try {
+        await DjB2bService.instance.ensureCode();
+      } catch (e) {
+        DjB2bService.logFunctionsError(e, 'ensureCode');
+      }
+      if (mounted) setState(() {});
     }
   }
 
@@ -502,14 +507,21 @@ class _ProfilPageState extends State<ProfilPage> with WidgetsBindingObserver {
                       ),
                     );
                     if (confirm == true && context.mounted) {
-                      await FirebaseFirestore.instance
-                          .collection('users')
-                          .doc(uid)
-                          .update(
-                            SecurityHelper.sanitizeMap({
-                              'useAlternativeEmail': false,
-                            }),
+                      try {
+                        await UserSelfSettingsService.instance.write({
+                          'useAlternativeEmail': false,
+                        }, userId: uid);
+                      } catch (e) {
+                        if (context.mounted) {
+                          showVibesSnackBar(
+                            context,
+                            SnackBar(
+                              content: Text('${loc.error}: $e'),
+                              backgroundColor: Colors.red,
+                            ),
                           );
+                        }
+                      }
                     }
                   }
                 },
@@ -575,17 +587,12 @@ class _ProfilPageState extends State<ProfilPage> with WidgetsBindingObserver {
     final loc = AppLocalizations.of(context)!;
     final trimmed = sanitizeEmail(result.trim());
     try {
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .update(
-            SecurityHelper.sanitizeMap({
-              'alternativeEmail': trimmed,
-              'useAlternativeEmail': true,
-            }),
-          );
+      await UserSelfSettingsService.instance.write({
+        'alternativeEmail': trimmed,
+        'useAlternativeEmail': true,
+      }, userId: uid);
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(
               loc.profile_alternative_email_saved,
@@ -597,7 +604,7 @@ class _ProfilPageState extends State<ProfilPage> with WidgetsBindingObserver {
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${loc.error}: $e'),
             backgroundColor: Colors.red,
@@ -651,152 +658,6 @@ class _ProfilPageState extends State<ProfilPage> with WidgetsBindingObserver {
         ),
       ),
     );
-  }
-
-  Future<void> _showRedeemCodeDialog(String uid) async {
-    final controller = TextEditingController();
-    try {
-      await showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (dialogContext) {
-          final dl = AppLocalizations.of(dialogContext)!;
-          return Stack(
-            children: [
-              Positioned.fill(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () {
-                    FocusScope.of(dialogContext).unfocus();
-                    FocusManager.instance.primaryFocus?.unfocus();
-                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                      if (dialogContext.mounted) {
-                        Navigator.of(dialogContext, rootNavigator: true).pop();
-                      }
-                    });
-                  },
-                  child: Container(color: Colors.black54),
-                ),
-              ),
-              Center(
-                child: AlertDialog(
-                  backgroundColor: const Color(0xFF1F2937),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    side: const BorderSide(
-                      color: UIConstants.appOrange,
-                      width: 1,
-                    ),
-                  ),
-                  title: Text(
-                    dl.referral_redeem_title,
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                  content: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        dl.referral_redeem_body,
-                        style: const TextStyle(color: Colors.white70),
-                      ),
-                      const SizedBox(height: 16),
-                      TextField(
-                        controller: controller,
-                        maxLength: 8,
-                        style: const TextStyle(color: Colors.white),
-                        decoration: InputDecoration(
-                          hintText: dl.referral_code_hint,
-                          hintStyle: const TextStyle(color: Colors.white30),
-                          enabledBorder: const OutlineInputBorder(
-                            borderSide: BorderSide(color: Colors.white30),
-                          ),
-                          focusedBorder: const OutlineInputBorder(
-                            borderSide: BorderSide(color: UIConstants.appOrange),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () {
-                        FocusScope.of(dialogContext).unfocus();
-                        FocusManager.instance.primaryFocus?.unfocus();
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          if (dialogContext.mounted) {
-                            Navigator.of(
-                              dialogContext,
-                              rootNavigator: true,
-                            ).pop();
-                          }
-                        });
-                      },
-                      child: Text(
-                        dl.cancel,
-                        style: const TextStyle(color: Colors.grey),
-                      ),
-                    ),
-                    ElevatedButton(
-                      onPressed: () async {
-                        final code = controller.text.trim();
-                        if (code.length != 8) {
-                          if (dialogContext.mounted) {
-                            ScaffoldMessenger.of(dialogContext).showSnackBar(
-                              SnackBar(
-                                content: Text(dl.referral_code_length),
-                              ),
-                            );
-                          }
-                          return;
-                        }
-                        FocusScope.of(dialogContext).unfocus();
-                        FocusManager.instance.primaryFocus?.unfocus();
-                        final parentCtx = context;
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          if (dialogContext.mounted) {
-                            Navigator.of(
-                              dialogContext,
-                              rootNavigator: true,
-                            ).pop();
-                          }
-                          _referralService.redeemCode(uid, code).then((success) {
-                            if (!parentCtx.mounted) return;
-                            final loc = AppLocalizations.of(parentCtx)!;
-                            if (success) {
-                              ScaffoldMessenger.of(parentCtx).showSnackBar(
-                                SnackBar(
-                                  content: Text(loc.referral_code_saved),
-                                  backgroundColor: Colors.green,
-                                ),
-                              );
-                              setState(() {});
-                            } else {
-                              ScaffoldMessenger.of(parentCtx).showSnackBar(
-                                SnackBar(
-                                  content: Text(loc.referral_code_invalid),
-                                  backgroundColor: Colors.red,
-                                ),
-                              );
-                            }
-                          });
-                        });
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: UIConstants.appOrange,
-                        foregroundColor: Colors.white,
-                      ),
-                      child: Text(dl.referral_redeem_action),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          );
-        },
-      );
-    } finally {
-      controller.dispose();
-    }
   }
 
   Widget _buildRoleLoadingView() {
@@ -1072,7 +933,7 @@ class _ProfilPageState extends State<ProfilPage> with WidgetsBindingObserver {
                     onProfileImageUpdated: (url) =>
                         setState(() => _profileImageUrl = url),
                   ),
-                  if (!isGuest) ...[
+                  if (!isGuest)
                     ProStatusCard(
                       uid: user.uid,
                       onPurchased: () {
@@ -1080,8 +941,6 @@ class _ProfilPageState extends State<ProfilPage> with WidgetsBindingObserver {
                         _showSuccessDialog();
                       },
                     ),
-                    const SizedBox(height: 24),
-                  ],
                   const SizedBox(height: 24),
                   Container(
                     decoration: BoxDecoration(
@@ -1338,7 +1197,7 @@ class _ProfilPageState extends State<ProfilPage> with WidgetsBindingObserver {
     );
     if (!hasPasswordProvider || user.email == null || user.email!.isEmpty) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(
               localizations.delete_account_requires_email,
@@ -1451,7 +1310,7 @@ class _ProfilPageState extends State<ProfilPage> with WidgetsBindingObserver {
             e.toString().contains('wrong-password')) {
           msg = localizations.wrong_password;
         }
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(content: Text(msg), backgroundColor: Colors.red),
         );
       }
@@ -1541,7 +1400,7 @@ class _ProfilPageState extends State<ProfilPage> with WidgetsBindingObserver {
     } catch (e) {
       if (mounted) {
         Navigator.of(context).pop(); // Lade-Overlay schließen
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(
               '${localizations.error_deleting_account} $e',
@@ -1597,19 +1456,17 @@ class _PersonalDataSectionState extends State<_PersonalDataSection> {
       final trimName = _realNameController.text.trim();
       final updateData = <String, dynamic>{
         'realName': trimName.isEmpty
-            ? FieldValue.delete()
+            ? null
             : SecurityHelper.sanitize(trimName, maxLength: 80),
-        'country': _selectedCountryCode ?? FieldValue.delete(),
+        'country': (_selectedCountryCode == null || _selectedCountryCode!.isEmpty)
+            ? null
+            : _selectedCountryCode,
         // birthDate bewusst nicht im Update – keine versehentlichen Änderungen
       };
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(widget.uid)
-          .update(SecurityHelper.sanitizeMap(updateData));
-      if (mounted) {
+      await UserSelfSettingsService.instance.write(updateData);      if (mounted) {
         UserService().forceRefresh();
         final loc = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(loc.name_changed),
             duration: const Duration(seconds: 2),
@@ -1619,7 +1476,7 @@ class _PersonalDataSectionState extends State<_PersonalDataSection> {
     } catch (e) {
       if (mounted) {
         final loc = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${loc.error}: $e'),
             backgroundColor: Colors.red,

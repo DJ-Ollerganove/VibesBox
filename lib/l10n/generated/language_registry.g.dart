@@ -25,6 +25,8 @@ abstract final class LanguageRegistry {
     'nl',
     'pl',
     'cs',
+    'th',
+    'ar',
   ];
 
   static const List<Locale> materialLocales = [
@@ -46,6 +48,12 @@ abstract final class LanguageRegistry {
     Locale('nl'),
     Locale('pl'),
     Locale('cs'),
+    Locale('th'),
+    Locale('ar'),
+  ];
+
+  /// Nur App-Admin — nicht im öffentlichen Sprachmenü.
+  static const List<String> adminOnlyLanguageCodes = [
   ];
 
   static const Map<String, String> intlLocaleByCode = {
@@ -67,6 +75,7 @@ abstract final class LanguageRegistry {
     'nl': 'nl-NL',
     'pl': 'pl-PL',
     'cs': 'cs-CZ',
+    'th': 'th-TH',
     'ar': 'ar',
   };
 
@@ -107,6 +116,7 @@ abstract final class LanguageRegistry {
     'nl': ' uur',
     'pl': '',
     'cs': '',
+    'th': '',
     'ar': '',
   };
 
@@ -134,11 +144,44 @@ abstract final class LanguageRegistry {
     'nl': 'colon_suffix',
     'pl': 'colon_suffix',
     'cs': 'colon_suffix',
+    'th': 'colon_suffix',
     'ar': 'intl_12',
   };
 
   static String timeStyleFor(String languageCode) {
     return timeStyleByCode[languageCode] ?? 'colon_suffix';
+  }
+
+  /// Schreibrichtung aus l10n/languages.json (text_direction: ltr | rtl).
+  static const Map<String, String> textDirectionByCode = {
+    'de': 'ltr',
+    'en': 'ltr',
+    'fr': 'ltr',
+    'ru': 'ltr',
+    'zh': 'ltr',
+    'es': 'ltr',
+    'tr': 'ltr',
+    'pt': 'ltr',
+    'it': 'ltr',
+    'uk': 'ltr',
+    'hi': 'ltr',
+    'sq': 'ltr',
+    'vi': 'ltr',
+    'ja': 'ltr',
+    'el': 'ltr',
+    'nl': 'ltr',
+    'pl': 'ltr',
+    'cs': 'ltr',
+    'th': 'ltr',
+    'ar': 'rtl',
+  };
+
+  static bool isRtl(String languageCode) {
+    return textDirectionByCode[languageCode] == 'rtl';
+  }
+
+  static TextDirection textDirectionFor(String languageCode) {
+    return isRtl(languageCode) ? TextDirection.rtl : TextDirection.ltr;
   }
 }
 

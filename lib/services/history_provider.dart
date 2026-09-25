@@ -1,15 +1,20 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import '../config/app_config.dart';
 import '../models/playlist_model.dart';
 import '../services/active_party_service.dart';
 import '../services/duplicate_check_service.dart';
+import '../services/open_wishes_visibility_service.dart';
 import '../services/shazam_service.dart';
 import '../services/user_service.dart';
 import '../utils/party_helper.dart';
 import '../utils/text_utils.dart';
 import '../utils/debug_log.dart';
+import 'app_diagnostic_log_service.dart';
+import 'music_history_secure_service.dart';
+import 'history_save_log_service.dart';
 
 /// Service für Musik-History-Management
 /// Lauscht passiv auf Musikerkennung und speichert erkannte Songs automatisch
@@ -19,22 +24,38 @@ class HistoryProvider {
   factory HistoryProvider() => _instance;
   HistoryProvider._internal();
 
+  /// Inkrementiert nach jedem erfolgreichen Track-Write — History-Tab lauscht darauf.
+  static final ValueNotifier<int> tracksRevision = ValueNotifier(0);
+
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final ShazamService _shazamService = ShazamService();
   
-  StreamSubscription<Map<String, dynamic>?>? _shazamSubscription;
-  StreamSubscription<ShazamScanStatus>? _statusSubscription;
   void Function()? _storedSessionPartyListener;
+  void Function()? _visibilityPartyListener;
   StreamSubscription<ActivePartyInfo?>? _activePartyInfoSubscription;
   StreamSubscription<QuerySnapshot>? _tracksSubscription;
   final StreamController<List<Map<String, dynamic>>> _tracksController = StreamController<List<Map<String, dynamic>>>.broadcast();
   final List<Map<String, dynamic>> _accumulatedTracksForStream = [];
   String? _lastTracksSessionId;
+
+  /// RAM-Deckel für den Live-History-Stream (Firestore/DB bleiben vollständig).
+  static const int _maxAccumulatedTracksInRam = 600;
+
+  void _trimAccumulatedTracksRam() {
+    if (_accumulatedTracksForStream.length <= _maxAccumulatedTracksInRam) {
+      return;
+    }
+    _accumulatedTracksForStream.removeRange(
+      _maxAccumulatedTracksInRam,
+      _accumulatedTracksForStream.length,
+    );
+  }
+
   String? _currentSessionId;
   String? _currentPartyId;
   String? _currentPartyName;
   bool _isRecording = false;
   bool _isProcessingTrack = false; // Lock um Race Conditions zu vermeiden
+  bool _recordSaveInFlight = false;
   /// Temporärer Session-Speicher: zuletzt **in die DB geschriebener** Song (normalisierter Schlüssel).
   /// Gleicher Song → kein erneuter Write; anderer Song → Write und Slot ersetzen. Kein Firestore-Read pro Treffer.
   String? _lastDbWriteScopeSessionId;
@@ -43,38 +64,13 @@ class HistoryProvider {
   // Caching entfernt: Threshold wird jetzt bei jedem Scan frisch aus der DB geladen
   bool get _isAdminMode => AppConfig.isAdminRole(UserService().currentUser.value);
 
-  bool _coreShazamListenersAttached = false;
+  bool _initialized = false;
   String? _partiesStreamBoundUid;
 
   /// Initialisiert den Provider und beginnt mit dem Monitoring.
   /// Kern-Listener (Shazam) nur einmal; Party-Stream pro Firebase-UID (erneut bei Account-Wechsel).
   void initialize() {
     final user = FirebaseAuth.instance.currentUser;
-
-    if (!_coreShazamListenersAttached) {
-      _coreShazamListenersAttached = true;
-      _statusSubscription = _shazamService.statusStream.listen((_) {
-        _checkAndUpdateSession();
-      });
-
-      _shazamSubscription = _shazamService.resultStream.listen((result) {
-        final err = result?['error'] as String?;
-        if (err == 'FREE_SCAN_COOLDOWN' ||
-            err == 'NEXT_SCAN_COUNTDOWN' ||
-            err == 'PRO_REQUIRED') {
-          return;
-        }
-        if (_shouldRecord()) {
-          _handleNewTrack(result);
-        } else if (_isSuccessfulSongPayload(result)) {
-          final title = result?['title'] as String? ?? '';
-          final artist = result?['artist'] as String? ?? '';
-          debugLog(
-            'Song erkannt: $title — $artist, wird aber nicht gespeichert (keine aktive Party)',
-          );
-        }
-      });
-    }
 
     if (_partiesStreamBoundUid != user?.uid) {
       _partiesStreamBoundUid = user?.uid;
@@ -85,15 +81,7 @@ class HistoryProvider {
       }
       if (user != null) {
         void syncFromStoredSession() {
-          final info = ActivePartyService.storedSessionNotifier.value;
-          final newId = info?.partyId;
-          final newName = info?.partyName;
-          if (_currentPartyId == newId && _currentPartyName == newName) {
-            return;
-          }
-          _currentPartyId = newId;
-          _currentPartyName = newName;
-          _checkAndUpdateSession();
+          unawaited(_checkAndUpdateSession());
         }
 
         _storedSessionPartyListener = syncFromStoredSession;
@@ -106,11 +94,23 @@ class HistoryProvider {
       }
     }
 
+    if (_visibilityPartyListener != null) {
+      OpenWishesVisibilityService.visibilityNotifier
+          .removeListener(_visibilityPartyListener!);
+    }
+    _visibilityPartyListener = () {
+      unawaited(_checkAndUpdateSession());
+    };
+    OpenWishesVisibilityService.visibilityNotifier
+        .addListener(_visibilityPartyListener!);
+
     _checkAndUpdateSession();
 
     if (!_tracksController.isClosed) {
       _tracksController.add([]);
     }
+
+    _initialized = true;
   }
   
   /// ✅ EFFIZIENZ: Startet History-Streams nur on-demand (z.B. beim Öffnen der History-Seite)
@@ -148,16 +148,75 @@ class HistoryProvider {
         _currentPartyId!.isNotEmpty;
   }
 
-  /// Erkennt gültigen Treffer für UI/Test-Modus-Log (ohne Error-Payload).
-  bool _isSuccessfulSongPayload(Map<String, dynamic>? result) {
-    if (result == null) return false;
-    final err = result['error'] as String?;
-    if (err != null && err.isNotEmpty) return false;
-    final title = (result['title'] as String? ?? '').trim();
-    final artist = (result['artist'] as String? ?? '').trim();
-    if (title.isEmpty || artist.isEmpty) return false;
-    if (title == '-' && artist == '-') return false;
-    return true;
+  /// Party-ID für Speichern: Hint → Visibility → Stored → Heartbeat → party_dj_check.
+  Future<String?> _resolvePartyIdForMusicHistory({String? hint}) async {
+    if (hint != null && hint.isNotEmpty && hint != 'manual') {
+      return hint;
+    }
+
+    final fromVisibility = OpenWishesVisibilityService.resolveDjWishPartyId();
+    if (fromVisibility != null &&
+        fromVisibility.isNotEmpty &&
+        fromVisibility != 'manual') {
+      return fromVisibility;
+    }
+
+    final stored = ActivePartyService.getStoredSession()?.partyId;
+    if (stored != null && stored.isNotEmpty && stored != 'manual') {
+      return stored;
+    }
+
+    final heartbeat = ActivePartyService.currentPartyId;
+    if (heartbeat != null &&
+        heartbeat.isNotEmpty &&
+        heartbeat != 'manual') {
+      return heartbeat;
+    }
+
+    final partyInfo = await party_dj_check();
+    final fromCheck = partyInfo['party_id'];
+    if (fromCheck != null &&
+        fromCheck.isNotEmpty &&
+        fromCheck != 'manual') {
+      return fromCheck;
+    }
+    return null;
+  }
+
+  /// Legt eine neue music_history-Session an (djId = auth.uid, schreibbar).
+  Future<String?> _createFreshSessionForParty(String partyId) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || partyId.isEmpty || partyId == 'manual') {
+      return null;
+    }
+
+    try {
+      final partyDoc =
+          await _firestore.collection('parties').doc(partyId).get();
+      if (!partyDoc.exists) {
+        diagLog('HISTORY', 'Session: Party-Dokument fehlt ($partyId)');
+        return null;
+      }
+      final partyName =
+          (partyDoc.data()?['party_name'] as String?) ?? 'Party';
+      final sessionRef = await _firestore.collection('music_history').add({
+        'djId': user.uid,
+        'party_id': partyId,
+        'partyName': partyName,
+        'startTime': FieldValue.serverTimestamp(),
+        'isActive': true,
+      });
+      _currentSessionId = sessionRef.id;
+      _currentPartyId = partyId;
+      _currentPartyName = partyName;
+      _isRecording = true;
+      diagLog('HISTORY', 'Session neu ${sessionRef.id} party=$partyId');
+      return sessionRef.id;
+    } catch (e) {
+      diagLog('HISTORY', 'Session create FEHLER: $e party=$partyId');
+      debugLog('History._createFreshSessionForParty: $e');
+      return null;
+    }
   }
 
   /// Prüft Party-Status und aktualisiert Session entsprechend
@@ -173,16 +232,16 @@ class HistoryProvider {
       return;
     }
 
-    // Prüfe aktive Party
-    final partyInfo = await party_dj_check();
-    final activePartyId = partyInfo['party_id']; // party_dj_check() gibt 'party_id' zurück
-    final isPartyActive = activePartyId != null && activePartyId != 'manual';
-    
-    // VALIDIERUNG: Stelle sicher, dass party_dj_check() die lange ID liefert
-    if (activePartyId != null && activePartyId != 'manual') {
-      debugLog('✅ HistoryProvider: Aktive Party-ID (lange ID) von party_dj_check(): $activePartyId');
+    final activePartyId = await _resolvePartyIdForMusicHistory();
+    final isPartyActive =
+        activePartyId != null && activePartyId.isNotEmpty;
+
+    if (isPartyActive) {
+      debugLog(
+        '✅ HistoryProvider: Aktive Party-ID für Session: $activePartyId',
+      );
     } else {
-      debugLog('⚠️ HistoryProvider: Keine aktive Party gefunden oder Party-ID ist "manual"');
+      debugLog('⚠️ HistoryProvider: Keine aktive Party für History-Session');
     }
 
     // Session ist an Party gebunden, nicht an Musikerkennung
@@ -225,51 +284,56 @@ class HistoryProvider {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    // Stoppe alte Session falls vorhanden
-    if (_currentSessionId != null && _currentSessionId != partyId) {
+    final effectiveDjId = ActivePartyService.effectiveDjIdForCurrentUser();
+    if (effectiveDjId.isEmpty) return;
+
+    if (_currentSessionId != null && _currentPartyId != partyId) {
       await _stopSession();
     }
 
-    // Find-or-Create: Ein Dokument pro Party – prüfe ob bereits ein music_history-Dokument mit dieser party_id existiert
     try {
       var existingSession = await _firestore
           .collection('music_history')
-          .where('djId', isEqualTo: user.uid)
           .where('party_id', isEqualTo: partyId)
-          .limit(1)
+          .limit(5)
           .get();
 
       if (existingSession.docs.isEmpty) {
         existingSession = await _firestore
             .collection('music_history')
-            .where('djId', isEqualTo: user.uid)
             .where('partyId', isEqualTo: partyId)
-            .limit(1)
+            .limit(5)
             .get();
       }
 
       if (existingSession.docs.isNotEmpty) {
-        // Verwende existierendes Dokument – alle Tracks der Party landen in derselben Session
-        _currentSessionId = existingSession.docs.first.id;
-        _currentPartyId = partyId;
-        _currentPartyName = partyName;
-        _isRecording = true;
-        debugLog('✅ HistoryProvider: Wiederverwendung existierender Session für Party $partyId: $_currentSessionId');
-        return;
+        final owned = existingSession.docs.where((doc) {
+          final dj = doc.data()['djId'] as String?;
+          // Nur eigene Session — sonst Track-Write (session.djId == auth.uid) scheitert.
+          return dj == user.uid;
+        }).toList();
+        if (owned.isNotEmpty) {
+          _currentSessionId = owned.first.id;
+          _currentPartyId = partyId;
+          _currentPartyName = partyName;
+          _isRecording = true;
+          debugLog(
+            '✅ HistoryProvider: Wiederverwendung Session $_currentSessionId für $partyId',
+          );
+          return;
+        }
       }
     } catch (e) {
       debugLog('Fehler beim Prüfen existierender Session: $e');
     }
 
-    // Kein Dokument für diese Party vorhanden – erstelle neues in Firestore (ein Dokument pro Party)
+    // Kein Dokument für diese Party — neu anlegen
     try {
-      // Pfad-Kontrolle: partyId darf nicht leer sein
       if (partyId.isEmpty || partyId == 'manual') {
         debugLog('❌ HistoryProvider: Kann Session nicht starten – ungültige partyId: "$partyId"');
         return;
       }
 
-      // Auth-Check: User muss eingeloggt sein
       if (user.uid.isEmpty) {
         debugLog('❌ HistoryProvider: Kann Session nicht starten – user.uid ist leer.');
         return;
@@ -279,11 +343,10 @@ class HistoryProvider {
       
       final sessionData = {
         'djId': user.uid,
-        'party_id': partyId, // Einheitlich: lange Firestore-Dokument-ID – ein Dokument pro Party
+        'party_id': partyId,
         'partyName': partyName,
         'startTime': FieldValue.serverTimestamp(),
-        'endTime': null,
-        'isActive': true, // optional – Verknüpfung erfolgt über party_id
+        'isActive': true,
       };
       
       debugLog('📝 HistoryProvider: Session-Daten: $sessionData');
@@ -361,43 +424,235 @@ class HistoryProvider {
     _currentPartyName = null;
   }
 
-  /// Behandelt einen neu erkannten Track
-  void _handleNewTrack(Map<String, dynamic>? result) {
-    if (!_shouldRecord() || result == null) return;
-
-    final title = result['title'] as String? ?? '';
-    final artist = result['artist'] as String? ?? '';
-    
-    // Nur speichern wenn Titel und Artist nicht leer sind
-    if (title.isNotEmpty && artist.isNotEmpty && title != '-' && artist != '-') {
-      final newTrack = TrackEntry(
-        title: title,
-        artist: artist,
-        timestamp: DateTime.now(),
-      );
-      
-      // Prüfe auf Duplikat
-      _checkAndAddTrack(newTrack);
+  /// Session für [partyId] sicherstellen (Schreiben erkannter Songs + History-Anzeige).
+  Future<void> ensureSessionForParty(String partyId) async {
+    if (!_initialized) {
+      initialize();
     }
+    if (partyId.isEmpty || partyId == 'manual') return;
+    if (_currentPartyId == partyId &&
+        _currentSessionId != null &&
+        _currentSessionId!.isNotEmpty) {
+      return;
+    }
+    try {
+      final partyDoc =
+          await _firestore.collection('parties').doc(partyId).get();
+      if (!partyDoc.exists) return;
+      final partyName =
+          (partyDoc.data()?['party_name'] as String?) ?? 'Unbenannte Party';
+      _currentPartyId = partyId;
+      _currentPartyName = partyName;
+      await _startSession(partyId, partyName);
+    } catch (e) {
+      debugLog('HistoryProvider.ensureSessionForParty: $e');
+    }
+  }
+
+  /// Öffentlicher Einstieg: erkannten Song in music_history/{session}/tracks speichern.
+  /// true = in der History (neu oder schon vorhanden), false = Write nicht gelungen.
+  Future<bool> recordRecognizedTrack({
+    required String title,
+    required String artist,
+    String? partyId,
+    double? bpm,
+    String? camelot,
+    String? key,
+    int? durationSec,
+    String? source,
+  }) async {
+    if (!_initialized) {
+      initialize();
+    }
+
+    final trimmedTitle = title.trim();
+    final trimmedArtist = artist.trim();
+    HistorySaveLogService.log(
+      'START',
+      'title=$trimmedTitle artist=$trimmedArtist hintParty=${partyId ?? "null"}',
+    );
+
+    if (ShazamService.formatRecognizedTrackLabel(trimmedTitle, trimmedArtist) ==
+        null) {
+      HistorySaveLogService.log('SKIP', 'Ungültiger Song-Payload');
+      return false;
+    }
+
+    if (_recordSaveInFlight) {
+      HistorySaveLogService.log('SKIP', 'Paralleler Write blockiert');
+      return false;
+    }
+    _recordSaveInFlight = true;
+
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      HistorySaveLogService.log(
+        'AUTH',
+        user == null ? 'NULL' : 'uid=${user.uid}',
+      );
+      if (user == null) {
+        return false;
+      }
+
+      final resolvedPartyId =
+          await _resolvePartyIdForMusicHistory(hint: partyId);
+      HistorySaveLogService.log(
+        'PARTY',
+        resolvedPartyId ?? 'NULL (keine Party gefunden)',
+      );
+      if (resolvedPartyId == null ||
+          resolvedPartyId.isEmpty ||
+          resolvedPartyId == 'manual') {
+        return false;
+      }
+
+      _currentPartyId = resolvedPartyId;
+
+      final saveTitle = trimmedTitle.isEmpty ? '-' : trimmedTitle;
+      final saveArtist = trimmedArtist.isEmpty ? '-' : trimmedArtist;
+
+      await DuplicateCheckService.ensurePartySettingsLoaded();
+      final ignored = DuplicateCheckService.getCachedIgnoredKeywords();
+      final normKey = _songNormKeyForSessionDedup(
+        TrackEntry(
+          title: saveTitle,
+          artist: saveArtist,
+          timestamp: DateTime.now(),
+        ),
+        ignored,
+      );
+
+      var sessionId = _currentSessionId;
+      if (sessionId == null ||
+          sessionId.isEmpty ||
+          _currentPartyId != resolvedPartyId) {
+        sessionId = await _ensureWritableSessionIdForParty(resolvedPartyId);
+      }
+      if (sessionId != null && sessionId.isNotEmpty) {
+        await _hydrateLastDbWrittenNormKey(sessionId);
+      }
+
+      if (normKey.isNotEmpty && _lastDbWrittenNormKey == normKey) {
+        HistorySaveLogService.log('SKIP', 'Gleicher Song wie zuletzt');
+        return true;
+      }
+
+      try {
+        final result = await MusicHistorySecureService.saveTrack(
+          partyId: resolvedPartyId,
+          title: saveTitle,
+          artist: saveArtist,
+          bpm: bpm,
+          camelot: camelot,
+          key: key,
+          durationSec: durationSec,
+          source: source,
+        );
+        _currentSessionId = result.sessionId;
+        _currentPartyId = resolvedPartyId;
+        _isRecording = true;
+        if (normKey.isNotEmpty) {
+          _lastDbWrittenNormKey = normKey;
+        }
+        await ActivePartyService.applyMusicHistorySessionId(
+          partyId: resolvedPartyId,
+          sessionId: result.sessionId,
+        );
+        tracksRevision.value++;
+        HistorySaveLogService.log(
+          'OK',
+          'Callable → session=${result.sessionId} track=${result.trackId}',
+        );
+        return true;
+      } catch (e) {
+        HistorySaveLogService.log(
+          'CALLABLE_FALLBACK',
+          'Client-Write versuchen: $e',
+        );
+      }
+
+      if (sessionId == null || sessionId.isEmpty) {
+        sessionId = await _ensureWritableSessionIdForParty(resolvedPartyId);
+      }
+      sessionId ??= await _createFreshSessionForParty(resolvedPartyId);
+      HistorySaveLogService.log('SESSION', sessionId ?? 'NULL');
+      if (sessionId == null || sessionId.isEmpty) {
+        return false;
+      }
+
+      final track = TrackEntry(
+        title: saveTitle,
+        artist: saveArtist,
+        timestamp: DateTime.now(),
+        bpm: bpm,
+        camelot: camelot,
+        key: key,
+        durationSec: durationSec,
+        source: source,
+      );
+      return await _checkAndAddTrack(
+        track,
+        sessionId: sessionId,
+        partyId: resolvedPartyId,
+      );
+    } finally {
+      _recordSaveInFlight = false;
+    }
+  }
+
+  /// Session mit djId == auth.uid (Firestore-Schreibrechte für tracks).
+  Future<String?> _ensureWritableSessionIdForParty(String partyId) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || partyId.isEmpty || partyId == 'manual') {
+      return null;
+    }
+
+    try {
+      for (final partyField in ['party_id', 'partyId']) {
+        var snapshot = await _firestore
+            .collection('music_history')
+            .where('djId', isEqualTo: user.uid)
+            .where(partyField, isEqualTo: partyId)
+            .limit(1)
+            .get();
+        if (snapshot.docs.isNotEmpty) {
+          final id = snapshot.docs.first.id;
+          _currentSessionId = id;
+          _currentPartyId = partyId;
+          _isRecording = true;
+          return id;
+        }
+      }
+    } catch (e) {
+      debugLog('History._ensureWritableSessionIdForParty lookup: $e');
+    }
+
+    await ensureSessionForParty(partyId);
+    return _currentSessionId ?? await _createFreshSessionForParty(partyId);
   }
 
   /// Schreibt nur, wenn der Treffer **nicht** dem zuletzt in die DB geschriebenen Song entspricht
   /// ([DuplicateCheckService]-Normalisierung wie bisher). Sonst nur Log — **kein** Firestore-Read pro Scan.
-  Future<void> _checkAndAddTrack(TrackEntry newTrack) async {
-    if (_currentSessionId == null) return;
+  Future<bool> _checkAndAddTrack(
+    TrackEntry newTrack, {
+    required String sessionId,
+    required String partyId,
+  }) async {
+    if (sessionId.isEmpty) return false;
 
     // Verhindere gleichzeitige Verarbeitung (Lock)
     if (_isProcessingTrack) {
       debugLog('Track wird bereits verarbeitet, überspringe: ${newTrack.title} - ${newTrack.artist}');
-      return;
+      return false;
     }
 
     _isProcessingTrack = true;
 
     try {
-      _syncLastDbWriteScope();
+      _syncLastDbWriteScopeForSession(sessionId);
       await DuplicateCheckService.ensurePartySettingsLoaded();
       final ignored = DuplicateCheckService.getCachedIgnoredKeywords();
+      await _hydrateLastDbWrittenNormKey(sessionId);
       final normKey = _songNormKeyForSessionDedup(newTrack, ignored);
 
       if (normKey.isNotEmpty && _lastDbWrittenNormKey == normKey) {
@@ -405,36 +660,80 @@ class HistoryProvider {
           'History: gleicher Song wie zuletzt in DB geschrieben — überspringe Write '
           '— „${newTrack.title}“ — „${newTrack.artist}“',
         );
-        return;
+        return true;
       }
 
-      final written = await addTrackToCurrentSession(newTrack);
+      final written = await addTrackToSession(
+        sessionId: sessionId,
+        partyId: partyId,
+        track: newTrack,
+      );
       if (written && normKey.isNotEmpty) {
         _lastDbWrittenNormKey = normKey;
       }
+      return written;
     } catch (e) {
       debugLog('Fehler bei History-Write-Vorbereitung: $e');
       await DuplicateCheckService.ensurePartySettingsLoaded();
       final ignored = DuplicateCheckService.getCachedIgnoredKeywords();
       final normKey = _songNormKeyForSessionDedup(newTrack, ignored);
       if (normKey.isNotEmpty && _lastDbWrittenNormKey == normKey) {
-        return;
+        return true;
       }
-      final written = await addTrackToCurrentSession(newTrack);
+      final written = await addTrackToSession(
+        sessionId: sessionId,
+        partyId: partyId,
+        track: newTrack,
+      );
       if (written && normKey.isNotEmpty) {
         _lastDbWrittenNormKey = normKey;
       }
+      return written;
     } finally {
       _isProcessingTrack = false;
     }
   }
 
-  void _syncLastDbWriteScope() {
-    final sid = _currentSessionId;
-    if (sid == null || sid.isEmpty) return;
-    if (_lastDbWriteScopeSessionId != sid) {
-      _lastDbWriteScopeSessionId = sid;
+  void _syncLastDbWriteScopeForSession(String sessionId) {
+    if (sessionId.isEmpty) return;
+    if (_lastDbWriteScopeSessionId != sessionId) {
+      _lastDbWriteScopeSessionId = sessionId;
       _lastDbWrittenNormKey = null;
+    }
+  }
+
+  /// Nach App-Neustart: letzten History-Track der Session laden, damit
+  /// derselbe Song nicht noch einmal geschrieben wird.
+  Future<void> _hydrateLastDbWrittenNormKey(String sessionId) async {
+    if (sessionId.isEmpty) return;
+    if (_lastDbWriteScopeSessionId == sessionId &&
+        _lastDbWrittenNormKey != null) {
+      return;
+    }
+    try {
+      final snap = await _firestore
+          .collection('music_history')
+          .doc(sessionId)
+          .collection('tracks')
+          .orderBy('timestamp', descending: true)
+          .limit(1)
+          .get();
+      _syncLastDbWriteScopeForSession(sessionId);
+      if (snap.docs.isEmpty) {
+        HistorySaveLogService.log('HYDRATE', 'session=$sessionId leer');
+        return;
+      }
+      await DuplicateCheckService.ensurePartySettingsLoaded();
+      final ignored = DuplicateCheckService.getCachedIgnoredKeywords();
+      final last = TrackEntry.fromFirestore(snap.docs.first.data());
+      final key = _songNormKeyForSessionDedup(last, ignored);
+      _lastDbWrittenNormKey = key.isEmpty ? null : key;
+      HistorySaveLogService.log(
+        'HYDRATE',
+        'session=$sessionId last="${last.title}" — "${last.artist}"',
+      );
+    } catch (e) {
+      debugLog('History._hydrateLastDbWrittenNormKey: $e');
     }
   }
 
@@ -445,78 +744,95 @@ class HistoryProvider {
     return '$nt\x1f$na';
   }
 
-  /// Fügt einen Track zur aktuellen Session hinzu
-  /// WICHTIG: Pfad ist music_history/{sessionId}/tracks (Top-Level-Collection, NICHT unter parties!)
-  /// Erfolgs-Log erst nach Server-Quittung; Pfad- und Auth-Validierung vor dem Schreiben
-  /// [true], wenn das Dokument in Firestore angelegt wurde.
-  Future<bool> addTrackToCurrentSession(TrackEntry track) async {
-    // Pfad-Kontrolle: Leere/null sessionId oder party_id verhindern Schreiben
-    if (_currentSessionId == null || _currentSessionId!.isEmpty) {
-      debugLog('❌ HistoryProvider: ABBRUCH – sessionId ist null oder leer. Pfad music_history/{sessionId}/tracks kann nicht gebaut werden.');
+  /// Fügt einen Track zur Session hinzu (explizite IDs — kein Race mit Session-Stop).
+  Future<bool> addTrackToSession({
+    required String sessionId,
+    required String partyId,
+    required TrackEntry track,
+    bool allowSessionRetry = true,
+  }) async {
+    if (sessionId.isEmpty) {
+      debugLog('❌ HistoryProvider: ABBRUCH – sessionId leer.');
       return false;
     }
-    if (_currentPartyId == null || _currentPartyId!.isEmpty || _currentPartyId == 'manual') {
-      debugLog('❌ HistoryProvider: ABBRUCH – party_id ungültig ($_currentPartyId). Schreiben ohne gültige Party verhindert.');
+    if (partyId.isEmpty || partyId == 'manual') {
+      debugLog('❌ HistoryProvider: ABBRUCH – party_id ungültig ($partyId).');
       return false;
     }
 
-    final path = 'music_history/$_currentSessionId/tracks';
+    final path = 'music_history/$sessionId/tracks';
     final user = FirebaseAuth.instance.currentUser;
-
-    // Berechtigungs-Check: Auth muss vorhanden sein (Firestore Rules prüfen djId == request.auth.uid)
     if (user == null || user.uid.isEmpty) {
-      debugLog('❌ HistoryProvider: ABBRUCH – Kein eingeloggter User Firestore blockiert Schreibzugriff.');
+      debugLog('❌ HistoryProvider: ABBRUCH – Kein eingeloggter User.');
       return false;
     }
 
     try {
-      final docRef = await _firestore
-          .collection('music_history')
-          .doc(_currentSessionId)
-          .collection('tracks')
-          .add(track.toFirestore())
-          .catchError((e, st) {
-        debugLog('❌ FIRESTORE ERROR (catchError): $e');
-        debugLog('   → Vollständige Fehlermeldung: ${e.toString()}');
-        if (e.toString().toLowerCase().contains('permission') || e.toString().toLowerCase().contains('denied')) {
-          debugLog('   → PERMISSION_DENIED: Security Rules blockieren Schreibzugriff auf $path');
-          debugLog('   → Regel prüft: request.auth.uid == session.djId. Auth/Session-Abgleich');
-        }
-        if (st != null) debugLog('   → Stack: $st');
-        throw e;
-      });
-
-      // Erfolgsmeldung erst nach Empfang der Referenz (Write wurde quittiert)
-      debugLog('✅ HistoryProvider: Track gespeichert (Write quittiert): ${track.title} - ${track.artist}');
-      debugLog('   → Pfad: $path | Document-ID: ${docRef.id} | Party: $_currentPartyId');
-
-      // Optional: Server-Verifikation (Prüfung, ob Dok auf Server angekommen ist)
-      try {
-        final serverDoc = await docRef.get(const GetOptions(source: Source.server));
-        if (serverDoc.exists) {
-          debugLog('   → SERVER BESTÄTIGT: Dokument auf Firestore-Server vorhanden.');
-        } else {
-          debugLog('   ⚠️ WARNUNG: Dokument nach Write auf Server nicht gefunden (evtl. Offline-Cache/Pending).');
-        }
-      } catch (verifyErr) {
-        debugLog('   ⚠️ Server-Verifikation fehlgeschlagen: $verifyErr');
+      Future<DocumentReference<Map<String, dynamic>>> write(bool extras) {
+        return _firestore
+            .collection('music_history')
+            .doc(sessionId)
+            .collection('tracks')
+            .add(track.toFirestore(includeMixMeta: extras));
       }
+
+      DocumentReference<Map<String, dynamic>> docRef;
+      try {
+        docRef = await write(true);
+      } catch (e) {
+        final msg = e.toString().toLowerCase();
+        if (msg.contains('permission') || msg.contains('denied')) {
+          docRef = await write(false);
+        } else {
+          rethrow;
+        }
+      }
+
+      debugLog('✅ HistoryProvider: Track gespeichert: ${track.title} - ${track.artist}');
+      debugLog('   → Pfad: $path | Document-ID: ${docRef.id} | Party: $partyId');
+      diagLog(
+        'HISTORY',
+        'Track OK: ${track.title} — ${track.artist} → $path',
+      );
+      tracksRevision.value++;
       return true;
     } catch (e, stackTrace) {
-      debugLog('❌ HistoryProvider: Fehler beim Speichern des Tracks: $e');
-      debugLog('   → Exakter Fehlergrund: ${e.toString()}');
-      if (e.toString().toLowerCase().contains('permission') || e.toString().toLowerCase().contains('denied')) {
-        debugLog('   → PERMISSION_DENIED: Cloud lehnt Zugriff ab. Prüfe Firestore Rules für music_history/{sessionId}/tracks.');
-        // Optional: role_id aus users/{uid} laden (Firestore Rules prüfen role_id NICHT für music_history)
-        try {
-          final userDoc = await _firestore.collection('users').doc(user.uid).get();
-          final roleId = userDoc.data()?['role_id'];
-          debugLog('   → Debug: users.role_id (Rules: auth.uid + djId)');
-        } catch (_) {}
+      final err = e.toString().toLowerCase();
+      if (allowSessionRetry &&
+          (err.contains('permission') || err.contains('denied'))) {
+        diagLog('HISTORY', 'Track PERMISSION_DENIED session=$sessionId — neue Session');
+        final freshSessionId = await _createFreshSessionForParty(partyId);
+        if (freshSessionId != null && freshSessionId != sessionId) {
+          return addTrackToSession(
+            sessionId: freshSessionId,
+            partyId: partyId,
+            track: track,
+            allowSessionRetry: false,
+          );
+        }
       }
+      debugLog('❌ HistoryProvider: Fehler beim Speichern: $e');
       debugLog('   → Stack: $stackTrace');
+      diagLog('HISTORY', 'Track FEHLER: $e party=$partyId session=$sessionId');
       return false;
     }
+  }
+
+  /// Fügt einen Track zur aktuellen Session hinzu
+  Future<bool> addTrackToCurrentSession(TrackEntry track) async {
+    if (_currentSessionId == null || _currentSessionId!.isEmpty) {
+      debugLog('❌ HistoryProvider: ABBRUCH – sessionId ist null oder leer.');
+      return false;
+    }
+    if (_currentPartyId == null || _currentPartyId!.isEmpty || _currentPartyId == 'manual') {
+      debugLog('❌ HistoryProvider: ABBRUCH – party_id ungültig ($_currentPartyId).');
+      return false;
+    }
+    return addTrackToSession(
+      sessionId: _currentSessionId!,
+      partyId: _currentPartyId!,
+      track: track,
+    );
   }
 
   /// Lädt die aktuelle aktive Party (nicht nur Session)
@@ -689,6 +1005,7 @@ class HistoryProvider {
           final tB = b['track'] as TrackEntry;
           return tB.timestamp.compareTo(tA.timestamp);
         });
+        _trimAccumulatedTracksRam();
         if (!_tracksController.isClosed) {
           _tracksController.add(List<Map<String, dynamic>>.from(_accumulatedTracksForStream));
         }
@@ -748,6 +1065,7 @@ class HistoryProvider {
           final tB = b['track'] as TrackEntry;
           return tB.timestamp.compareTo(tA.timestamp);
         });
+        _trimAccumulatedTracksRam();
         if (!_tracksController.isClosed) {
           _tracksController.add(List<Map<String, dynamic>>.from(_accumulatedTracksForStream));
         }
@@ -1112,18 +1430,19 @@ class HistoryProvider {
 
   /// Bereinigt Ressourcen
   void dispose() {
-    _shazamSubscription?.cancel();
-    _statusSubscription?.cancel();
     if (_storedSessionPartyListener != null) {
       ActivePartyService.storedSessionNotifier
           .removeListener(_storedSessionPartyListener!);
       _storedSessionPartyListener = null;
     }
+    if (_visibilityPartyListener != null) {
+      OpenWishesVisibilityService.visibilityNotifier
+          .removeListener(_visibilityPartyListener!);
+      _visibilityPartyListener = null;
+    }
     _activePartyInfoSubscription?.cancel();
     _tracksSubscription?.cancel();
     _tracksController.close();
-    _shazamSubscription = null;
-    _statusSubscription = null;
     _activePartyInfoSubscription = null;
     _tracksSubscription = null;
   }

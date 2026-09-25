@@ -18,9 +18,13 @@ function readRegistry() {
   return JSON.parse(fs.readFileSync(REGISTRY_PATH, 'utf8'));
 }
 
+function includeInPwaMenu(e) {
+  return e && e.code && e.appMenu !== false;
+}
+
 function writePwaMeta(registry) {
   const languages = registry.languages
-    .filter((e) => e.appMenu !== false)
+    .filter(includeInPwaMenu)
     .map(({ code, name, icon, langKey }) => ({ code, name, icon, langKey }));
   const meta = {
     sourceLanguage: registry.sourceLanguage || 'de',
@@ -51,6 +55,8 @@ function writeGeneratedJs(registry) {
     } else if (Object.prototype.hasOwnProperty.call(e, 'time_suffix')) {
       entry.time_suffix = '';
     }
+    if (e.text_direction === 'rtl') entry.text_direction = 'rtl';
+    else entry.text_direction = 'ltr';
     opts[e.code] = entry;
     if (e.appMenu !== false) {
       codes.push(e.code);
@@ -121,7 +127,7 @@ const GREETING_LANG_ALIASES = Object.freeze({
 });
 
 const _PREFIX_CANONICAL = [
-  'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi', 'ja', 'el', 'nl', 'pl', 'cs',
+  'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi', 'ja', 'el', 'nl', 'pl', 'cs', 'th', 'ar',
 ];
 
 /**
@@ -136,7 +142,6 @@ function normalizeGreetingLang(code) {
     .trim()
     .split(/[-_]/)[0];
   if (!raw) return 'en';
-  if (raw === 'ar' || raw.startsWith('ar')) return 'en';
   let canonical = GREETING_LANG_ALIASES[raw] || raw;
   for (const prefix of _PREFIX_CANONICAL) {
     if (canonical.startsWith(prefix) && _greetingLangSet.has(prefix)) {

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:async';
 import '../../l10n/app_localizations.dart';
+import '../../utils/debug_log.dart';
 import '../../utils/ui_constants.dart';
 import '../../utils/wish_paths.dart';
 import 'styled_home_card.dart';
@@ -158,11 +159,13 @@ class _TotalStatisticsCardState extends State<TotalStatisticsCard> {
     }
   }
 
-  /// Identifiziert die aktive Party (falls vorhanden) - SICHERHEIT: Nur für diesen DJ
+  /// Identifiziert die aktive Party (falls vorhanden) - SICHERHEIT: Nur für diesen DJ.
+  /// Nutzt dieselbe Zeit-/Lifecycle-Logik wie [_partyIsCurrentlyActive] — kein
+  /// „isActive=true“ allein, sonst bleiben abgelaufene Partys „aktiv“ und fallen
+  /// aus der Wunsch-Aggregation (Gesamtstatistik 0), während die Party-Anzahl sie zählt.
   Future<_ActivePartyInfo?> _identifyActiveParty() async {
-    final now = DateTime.now();
-    
     try {
+      final nowUnix = _nowUnixUtc();
       final partiesSnapshot = await FirebaseFirestore.instance
           .collection('parties')
           .where('created_by', isEqualTo: widget.effectiveDjId)
@@ -174,32 +177,23 @@ class _TotalStatisticsCardState extends State<TotalStatisticsCard> {
         if (partyCreatedBy != widget.effectiveDjId) {
           continue;
         }
-        
-        final isActiveStatus = partyData['isActive'] == true || partyData['status'] == 'active';
+
+        if (!_partyIsCurrentlyActive(partyData, nowUnix)) {
+          continue;
+        }
+
         final startTimestamp = partyData['start_date'] as Timestamp?;
         final endTimestamp = partyData['end_date'] as Timestamp?;
-        
-        bool isCurrentlyActive = false;
-        if (isActiveStatus) {
-          isCurrentlyActive = true;
-        } else if (startTimestamp != null && endTimestamp != null) {
-          final start = startTimestamp.toDate();
-          final end = endTimestamp.toDate();
-          isCurrentlyActive = now.compareTo(start) >= 0 && now.compareTo(end) < 0;
-        }
-        
-        if (isCurrentlyActive) {
-          return _ActivePartyInfo(
-            partyId: partyDoc.id,
-            startDate: startTimestamp?.toDate(),
-            endDate: endTimestamp?.toDate(),
-          );
-        }
+        return _ActivePartyInfo(
+          partyId: partyDoc.id,
+          startDate: startTimestamp?.toDate(),
+          endDate: endTimestamp?.toDate(),
+        );
       }
     } catch (e) {
-      // ✅ Logging entfernt zur Kontrolle
+      debugLog('TotalStatisticsCard _identifyActiveParty: $e');
     }
-    
+
     return null;
   }
 
@@ -229,10 +223,16 @@ class _TotalStatisticsCardState extends State<TotalStatisticsCard> {
         if (_partyIsCurrentlyActive(partyData, nowUnix)) continue;
         if (!_partyCountsAsFinished(partyData, nowUnix)) continue;
 
-        final wishesSnap = await WishPaths.partyWishes(partyId).get();
-        if (wishesSnap.docs.isNotEmpty) {
-          allWishDocs.addAll(wishesSnap.docs);
-          continue;
+        try {
+          final wishesSnap = await WishPaths.partyWishes(partyId).get();
+          if (wishesSnap.docs.isNotEmpty) {
+            allWishDocs.addAll(wishesSnap.docs);
+            continue;
+          }
+        } catch (e) {
+          debugLog(
+            'TotalStatisticsCard: wishes für Party $partyId fehlgeschlagen: $e',
+          );
         }
 
         final statistics = partyData['statistics'] as Map<String, dynamic>?;
@@ -290,7 +290,8 @@ class _TotalStatisticsCardState extends State<TotalStatisticsCard> {
         deleted: fromWishes.deleted,
         averageWaitTime: mergedWait,
       );
-    } catch (_) {
+    } catch (e) {
+      debugLog('TotalStatisticsCard _loadHistoricalStats: $e');
       return _HistoricalStats(
         total: 0,
         played: 0,

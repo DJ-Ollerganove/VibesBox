@@ -9,12 +9,17 @@ import 'package:image_picker/image_picker.dart';
 import 'package:image/image.dart' as img;
 import '../../../l10n/app_localizations.dart';
 import '../../../models/user_model.dart';
+import '../../../services/dj_logo_secure_service.dart';
+import '../../../services/party_secure_service.dart';
 import '../../../services/user_service.dart';
+import '../../../services/user_self_settings_service.dart';
+import '../../../utils/firebase_error_message.dart';
 import '../../../utils/network_image_url.dart';
 import '../../../utils/role_helper.dart';
 import '../../../utils/ui_constants.dart';
 import '../../../widgets/free_feature_locked.dart';
 import '../../../utils/debug_log.dart';
+import '../../../app_scaffold_messenger.dart';
 
 /// Sektion für Profilbild und/oder DJ-Logo: Pickern, Komprimieren, Hochladen, Löschen.
 /// URLs und Loading-State werden per Callback an die Elternseite gemeldet.
@@ -138,16 +143,15 @@ class _ProfileImageSectionState extends State<ProfileImageSection> {
           .orderBy('created_at', descending: true)
           .limit(1)
           .get();
-      if (partiesQuery.docs.isNotEmpty) {
-        final activePartyDoc = partiesQuery.docs.first;
-        final updateData = <String, dynamic>{};
-        if (logoUrl != null && logoUrl.isNotEmpty) {
-          updateData['dj_logo'] = logoUrl;
-        } else {
-          updateData['dj_logo'] = FieldValue.delete();
-        }
-        await activePartyDoc.reference.update(updateData);
-      }
+      if (partiesQuery.docs.isEmpty) return;
+      final partyId = partiesQuery.docs.first.id;
+      // Callable: umgeht Client-isSafePartyData / Legacy-Party-Felder.
+      await PartySecureService.instance.updateParty(
+        partyId: partyId,
+        patch: {
+          'dj_logo': (logoUrl != null && logoUrl.isNotEmpty) ? logoUrl : null,
+        },
+      );
     } catch (e) {
       debugLog('⚠️ Fehler beim Aktualisieren der aktiven Party: $e');
     }
@@ -181,10 +185,15 @@ class _ProfileImageSectionState extends State<ProfileImageSection> {
         return;
       }
 
-      final storageRef = FirebaseStorage.instance.ref().child('profile_images').child('${user.uid}.jpg');
+      final storageRef = FirebaseStorage.instance
+          .ref()
+          .child('profile_images')
+          .child(user.uid)
+          .child('avatar.jpg');
       await storageRef.putData(compressedBytes, SettableMetadata(contentType: 'image/jpeg', cacheControl: 'public, max-age=31536000'));
       final downloadUrl = await storageRef.getDownloadURL();
-      await FirebaseFirestore.instance.collection('users').doc(user.uid).set({'photoURL': downloadUrl}, SetOptions(merge: true));
+      // Callable: umgeht Legacy-Firestore-Regel-Konflikte auf users/{uid}
+      await UserSelfSettingsService.instance.write({'photoURL': downloadUrl});
 
       if (!mounted) return;
       setState(() => _isLoadingImage = false);
@@ -218,9 +227,21 @@ class _ProfileImageSectionState extends State<ProfileImageSection> {
     try {
       setState(() => _isLoadingImage = true);
       try {
-        await FirebaseStorage.instance.ref().child('profile_images').child('${user.uid}.jpg').delete();
+        await FirebaseStorage.instance
+            .ref()
+            .child('profile_images')
+            .child(user.uid)
+            .child('avatar.jpg')
+            .delete();
       } catch (_) {}
-      await FirebaseFirestore.instance.collection('users').doc(user.uid).update({'photoURL': FieldValue.delete()});
+      try {
+        await FirebaseStorage.instance
+            .ref()
+            .child('profile_images')
+            .child('${user.uid}.jpg')
+            .delete();
+      } catch (_) {}
+      await UserSelfSettingsService.instance.write({'photoURL': ''});
       if (!mounted) return;
       setState(() => _isLoadingImage = false);
       widget.onProfileImageUpdated(null);
@@ -269,10 +290,33 @@ class _ProfileImageSectionState extends State<ProfileImageSection> {
       final format = compressionResult.format;
       final fileExtension = format == 'png' ? 'png' : 'jpg';
       final contentType = format == 'png' ? 'image/png' : 'image/jpeg';
-      final storageRef = FirebaseStorage.instance.ref().child('dj_logos').child('${user.uid}.$fileExtension');
-      await storageRef.putData(compressionResult.bytes, SettableMetadata(contentType: contentType, cacheControl: 'public, max-age=31536000'));
-      final downloadUrl = await storageRef.getDownloadURL();
-      await FirebaseFirestore.instance.collection('users').doc(user.uid).set({'dj_logo_url': downloadUrl, 'djLogoUrl': downloadUrl}, SetOptions(merge: true));
+      // 1) Client flach (wie installierte Builds) 2) Callable-Fallback
+      String downloadUrl;
+      try {
+        final storageRef = FirebaseStorage.instance
+            .ref()
+            .child('dj_logos')
+            .child('${user.uid}.$fileExtension');
+        await storageRef.putData(
+          compressionResult.bytes,
+          SettableMetadata(
+            contentType: contentType,
+            cacheControl: 'public, max-age=31536000',
+          ),
+        );
+        downloadUrl = await storageRef.getDownloadURL();
+        await UserSelfSettingsService.instance.write({
+          'dj_logo_url': downloadUrl,
+          'djLogoUrl': downloadUrl,
+        });
+      } catch (clientErr) {
+        debugLog('DJ-Logo Client-Upload fehlgeschlagen, Callable: $clientErr');
+        downloadUrl = await DjLogoSecureService.instance.upload(
+          bytes: compressionResult.bytes,
+          contentType: contentType,
+          extension: fileExtension,
+        );
+      }
       await UserService().preloadDjLogo(downloadUrl);
       await _updateActivePartyLogo(downloadUrl);
       if (!mounted) return;
@@ -283,7 +327,12 @@ class _ProfileImageSectionState extends State<ProfileImageSection> {
       debugLog('Fehler beim Hochladen des DJ-Logos: $e');
       if (mounted) {
         setState(() => _isLoadingDjLogo = false);
-        _showSnack(context, '${AppLocalizations.of(context)!.error_uploading_logo} $e', isError: true);
+        final msg = formatFirebaseErrorDetail(e);
+        _showSnack(
+          context,
+          '${AppLocalizations.of(context)!.error_uploading_logo} $msg',
+          isError: true,
+        );
       }
     }
   }
@@ -293,14 +342,7 @@ class _ProfileImageSectionState extends State<ProfileImageSection> {
     if (user == null) return;
     try {
       setState(() => _isLoadingDjLogo = true);
-      try {
-        try { await FirebaseStorage.instance.ref().child('dj_logos').child('${user.uid}.jpg').delete(); } catch (_) {}
-        try { await FirebaseStorage.instance.ref().child('dj_logos').child('${user.uid}.png').delete(); } catch (_) {}
-      } catch (_) {}
-      await FirebaseFirestore.instance.collection('users').doc(user.uid).update({
-        'dj_logo_url': FieldValue.delete(),
-        'djLogoUrl': FieldValue.delete(),
-      });
+      await DjLogoSecureService.instance.delete();
       UserService().clearCache();
       await _updateActivePartyLogo(null);
       if (!mounted) return;
@@ -310,7 +352,11 @@ class _ProfileImageSectionState extends State<ProfileImageSection> {
     } catch (e) {
       if (mounted) {
         setState(() => _isLoadingDjLogo = false);
-        _showSnack(context, '${AppLocalizations.of(context)!.error_deleting_logo} $e', isError: true);
+        _showSnack(
+          context,
+          '${AppLocalizations.of(context)!.error_deleting_logo} ${formatFirebaseErrorDetail(e)}',
+          isError: true,
+        );
       }
     }
   }
@@ -356,7 +402,7 @@ class _ProfileImageSectionState extends State<ProfileImageSection> {
 
   void _showSnack(BuildContext context, String message, {bool isError = false}) {
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
+    showVibesSnackBar(context, 
       SnackBar(content: Text(message), backgroundColor: isError ? Colors.red : Colors.green),
     );
   }

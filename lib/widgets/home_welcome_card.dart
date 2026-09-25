@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../l10n/app_localizations.dart';
 import '../constants/app_assets.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 /// Große Welcome-Karte für die Startseite (Logo groß links, Text umfließt es).
 class HomeWelcomeCard extends StatelessWidget {
@@ -16,7 +17,7 @@ class HomeWelcomeCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
 
     final line1 = l.welcomeLine1;
     final line2 = l.welcomeLine2;

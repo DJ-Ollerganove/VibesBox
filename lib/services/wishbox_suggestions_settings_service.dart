@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../utils/debug_log.dart';
+import 'user_self_settings_service.dart';
 
 /// Wunschbox-Wortvorschläge (intern Spotify-API) — DJ-Einstellung + Gast-Spiegel.
 ///
@@ -60,8 +61,11 @@ class WishboxSuggestionsSettingsService {
       return;
     }
     final batch = FirebaseFirestore.instance.batch();
-    final userRef = FirebaseFirestore.instance.collection('users').doc(uid);
-    batch.set(userRef, {userField: enabled}, SetOptions(merge: true));
+    // users/{uid}: Callable (Legacy-sicher); guest_live weiter Client-Write
+    await UserSelfSettingsService.instance.write(
+      {userField: enabled},
+      userId: uid,
+    );
     batch.set(
       guestLiveRef(uid),
       {

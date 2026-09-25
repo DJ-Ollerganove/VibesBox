@@ -22,6 +22,9 @@ import 'widgets/pro_promotion_banner.dart';
 import 'widgets/sticky_pagination_layout.dart';
 import 'widgets/wish_card.dart';
 import 'services/user_service.dart';
+import 'utils/free_list_pro_promo.dart';
+import 'app_scaffold_messenger.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 /// DJ-Tab: Vorab-Wünsche, die noch nicht in „Offen“ freigegeben wurden.
 class VorabPage extends StatefulWidget {
@@ -51,7 +54,7 @@ class _VorabPageState extends State<VorabPage>
     if (_cachedStreamPartyId != partyId) {
       _cachedStreamPartyId = partyId;
       _cachedPreWishStream =
-          WishManagementService.getPreWishOverviewStream(partyId);
+          WishManagementService.watchPreWishOverview(partyId);
     }
     return _cachedPreWishStream!;
   }
@@ -107,8 +110,7 @@ class _VorabPageState extends State<VorabPage>
     BuildContext context,
   ) {
     final l = AppLocalizations.of(context)!;
-    final isRtl = ['ar', 'he', 'fa', 'ur']
-        .contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
 
     if (totalPages <= 1) return const SizedBox.shrink();
 
@@ -202,7 +204,7 @@ class _VorabPageState extends State<VorabPage>
       onNext: null,
       child: DjWishPartyScope(
         emptyKey: 'vorab-none',
-        builder: (context, partyId) {
+        builder: (context, partyId, visibility) {
           return StreamBuilder<QuerySnapshot>(
             stream: _preWishStreamForParty(partyId),
             builder: (context, snapshot) =>
@@ -336,15 +338,17 @@ class _VorabPageState extends State<VorabPage>
                 final len = paginatedGroupedList.length;
                 final isFree =
                     UserService().sessionProStatus.value?.isActive != true;
-                return isFree ? len + (len / 5).floor() : len;
+                return FreeListProPromo.itemCount(len, isFree: isFree);
               }(),
               itemBuilder: (context, index) {
+                final len = paginatedGroupedList.length;
                 final isFree =
                     UserService().sessionProStatus.value?.isActive != true;
-                if (isFree && index % 6 == 5) {
+                if (FreeListProPromo.isPromoIndex(index, len, isFree: isFree)) {
                   return const ProPromotionBanner();
                 }
-                final dataIndex = isFree ? index - (index ~/ 6) : index;
+                final dataIndex =
+                    FreeListProPromo.dataIndex(index, len, isFree: isFree);
                 final groupEntry = paginatedGroupedList[dataIndex];
                 final groupKey = groupEntry['key'] as String;
                 final data = groupEntry['data'] as Map<String, dynamic>;
@@ -395,7 +399,7 @@ class _VorabPageState extends State<VorabPage>
                       );
                     } catch (e) {
                       if (!ctx.mounted) return;
-                      ScaffoldMessenger.of(ctx).showSnackBar(
+                      showVibesSnackBar(ctx, 
                         SnackBar(
                           content: Text('${AppLocalizations.of(ctx)!.error}: $e'),
                           backgroundColor: UIConstants.frameNoParty,

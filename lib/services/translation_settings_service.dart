@@ -2,6 +2,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/debug_log.dart';
+import 'user_self_settings_service.dart';
 
 /// Service für die Verwaltung der Übersetzungs-Einstellung
 /// Speichert in Firebase und cached lokal in SharedPreferences
@@ -69,12 +70,10 @@ class TranslationSettingsService {
     
     try {
       // Speichere in Firebase
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .update({
-        _firebasePath: enabled,
-      });
+      await UserSelfSettingsService.instance.write(
+        {_firebasePath: enabled},
+        userId: uid,
+      );
       
       // Speichere auch in SharedPreferences für schnellen Zugriff
       final prefs = await SharedPreferences.getInstance();

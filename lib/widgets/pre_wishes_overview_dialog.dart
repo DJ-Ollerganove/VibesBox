@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
@@ -5,16 +7,23 @@ import '../l10n/app_localizations.dart';
 import '../models/song_request.dart';
 import '../services/active_party_service.dart';
 import '../services/history_pagination_service.dart';
+import '../services/party_secure_service.dart';
+import '../services/pre_wish_export_service.dart';
 import '../services/results_per_page_service.dart';
 import '../services/wish_management_service.dart';
+import '../utils/pre_wish_export_helper.dart';
 import '../utils/pre_wish_helper.dart';
 import '../utils/string_utils.dart';
 import '../utils/ui_constants.dart';
+import '../utils/debug_log.dart';
+import '../widgets/pre_wishes_paused_dj_banner.dart';
 import '../widgets/pre_wish_action_dialogs.dart';
+import '../widgets/pre_wish_export_format_dialog.dart';
 import '../utils/wish_grouping_helper.dart';
 import '../widgets/empty_list_message.dart';
 import '../widgets/wish_card.dart';
 import '../main.dart' show buildFirebaseErrorWidget;
+import '../app_scaffold_messenger.dart';
 
 /// Übersicht aller Vorab-Wünsche einer Party (Queue + freigegebene; Rahmen je nach Status).
 class PreWishesOverviewDialog extends StatefulWidget {
@@ -22,21 +31,25 @@ class PreWishesOverviewDialog extends StatefulWidget {
     super.key,
     required this.partyId,
     required this.partyName,
+    this.partyStartDate,
   });
 
   final String partyId;
   final String partyName;
+  final DateTime? partyStartDate;
 
   static Future<void> show(
     BuildContext context, {
     required String partyId,
     required String partyName,
+    DateTime? partyStartDate,
   }) {
     return showDialog<void>(
       context: context,
       builder: (ctx) => PreWishesOverviewDialog(
         partyId: partyId,
         partyName: partyName,
+        partyStartDate: partyStartDate,
       ),
     );
   }
@@ -50,11 +63,35 @@ class _PreWishesOverviewDialogState extends State<PreWishesOverviewDialog> {
   int _currentPage = 1;
   int _resultsPerPage = ResultsPerPageService.defaultResultsPerPage;
   final ScrollController _scrollController = ScrollController();
+  StreamSubscription<QuerySnapshot>? _overviewSub;
+  List<Map<String, dynamic>> _exportGroups = const [];
+  bool _canExport = false;
+  bool _exportInFlight = false;
+  bool _pauseToggleInFlight = false;
 
   @override
   void initState() {
     super.initState();
     _loadResultsPerPage();
+    _overviewSub =
+        WishManagementService.watchPreWishOverview(widget.partyId).listen(
+      (snapshot) {
+        final primary = _primaryPreWishes(snapshot.docs);
+        final grouped = _groupPreWishes(primary);
+        if (!mounted) return;
+        setState(() {
+          _exportGroups = grouped?.allGroups ?? const [];
+          _canExport = _exportGroups.isNotEmpty;
+        });
+      },
+      onError: (_) {
+        if (!mounted) return;
+        setState(() {
+          _exportGroups = const [];
+          _canExport = false;
+        });
+      },
+    );
   }
 
   Future<void> _loadResultsPerPage() async {
@@ -69,8 +106,168 @@ class _PreWishesOverviewDialogState extends State<PreWishesOverviewDialog> {
 
   @override
   void dispose() {
+    unawaited(_overviewSub?.cancel());
     _scrollController.dispose();
     super.dispose();
+  }
+
+  DateTime get _partyStartForExport =>
+      widget.partyStartDate ?? DateTime.now();
+
+  Future<void> _exportPreWishes() async {
+    if (!_canExport || _exportInFlight || _exportGroups.isEmpty) return;
+
+    final format = await PreWishExportFormatDialog.show(context);
+    if (format == null || !mounted) return;
+
+    setState(() => _exportInFlight = true);
+    try {
+      final l = AppLocalizations.of(context)!;
+      final songs = PreWishExportHelper.songsFromGrouped(
+        allGroups: _exportGroups,
+        l: l,
+      );
+      if (songs.isEmpty) return;
+
+      await PreWishExportService.shareExport(
+        context: context,
+        format: format,
+        partyName: widget.partyName,
+        partyStartDate: _partyStartForExport,
+        songs: songs,
+      );
+    } catch (e, st) {
+      debugLog('PreWishesOverviewDialog export: $e\n$st');
+      if (!mounted) return;
+      final l = AppLocalizations.of(context)!;
+      showVibesSnackBar(
+        context,
+        SnackBar(
+          content: Text(l.pre_wish_export_failed),
+          backgroundColor: UIConstants.frameNoParty,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _exportInFlight = false);
+    }
+  }
+
+  Widget _buildOverviewPausedBanner() {
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('parties')
+          .doc(widget.partyId)
+          .snapshots(),
+      builder: (context, partySnap) {
+        if (!PreWishHelper.arePreWishesPaused(partySnap.data?.data())) {
+          return const SizedBox.shrink();
+        }
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+          child: const PreWishesPausedDjBanner(),
+        );
+      },
+    );
+  }
+
+  bool _partyNotStartedYet(Map<String, dynamic>? data) {
+    final start = widget.partyStartDate ??
+        (data != null ? PreWishHelper.partyStartFromData(data) : null);
+    if (start == null) return false;
+    return DateTime.now().isBefore(start);
+  }
+
+  void _showPreWishesPauseConfirm(
+    BuildContext context,
+    bool currentlyPaused,
+  ) {
+    final l = AppLocalizations.of(context)!;
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: UIConstants.djShellPageBackground,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(
+              color: UIConstants.colorPreWish.withValues(alpha: 0.85),
+              width: 2,
+            ),
+          ),
+          title: Text(
+            currentlyPaused
+                ? l.pre_wishes_resume_confirm_title
+                : l.pre_wishes_pause_confirm_title,
+            style: const TextStyle(color: Colors.white),
+          ),
+          content: Text(
+            currentlyPaused
+                ? l.pre_wishes_resume_confirm_body
+                : l.pre_wishes_pause_confirm_body,
+            style: const TextStyle(color: Colors.white70, height: 1.4),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: Text(
+                l.cancel,
+                style: const TextStyle(color: Colors.white70),
+              ),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(dialogContext);
+                unawaited(_togglePreWishesPaused(currentlyPaused));
+              },
+              child: Text(
+                currentlyPaused ? l.pre_wishes_resume : l.pre_wishes_pause,
+                style: TextStyle(
+                  color: UIConstants.colorPreWish.withValues(alpha: 0.95),
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _togglePreWishesPaused(bool currentlyPaused) async {
+    if (_pauseToggleInFlight) return;
+    setState(() => _pauseToggleInFlight = true);
+    try {
+      await PartySecureService.instance.updateParty(
+        partyId: widget.partyId,
+        patch: {'pre_wishes_paused': !currentlyPaused},
+      );
+      if (!mounted) return;
+      final l = AppLocalizations.of(context)!;
+      showVibesSnackBar(
+        context,
+        SnackBar(
+          content: Text(
+            currentlyPaused
+                ? l.pre_wishes_resumed_success
+                : l.pre_wishes_paused_success,
+          ),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      final l = AppLocalizations.of(context)!;
+      showVibesSnackBar(
+        context,
+        SnackBar(
+          content: Text(l.snackbar_error_details('$e')),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _pauseToggleInFlight = false);
+    }
   }
 
   void _goToPreviousPage() {
@@ -300,6 +497,68 @@ class _PreWishesOverviewDialogState extends State<PreWishesOverviewDialog> {
                         ),
                       ),
                     ),
+                    if (_canExport)
+                      TextButton.icon(
+                        onPressed: _exportInFlight ? null : _exportPreWishes,
+                        icon: _exportInFlight
+                            ? SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: UIConstants.appGreen
+                                      .withValues(alpha: 0.9),
+                                ),
+                              )
+                            : Icon(
+                                Icons.upload_file,
+                                size: 18,
+                                color: UIConstants.appGreen
+                                    .withValues(alpha: 0.95),
+                              ),
+                        label: Text(
+                          l.pre_wish_export,
+                          style: TextStyle(
+                            color: UIConstants.appGreen
+                                .withValues(alpha: 0.95),
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12,
+                          ),
+                        ),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 4,
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ),
+                    StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                      stream: FirebaseFirestore.instance
+                          .collection('parties')
+                          .doc(widget.partyId)
+                          .snapshots(),
+                      builder: (context, partySnap) {
+                        final partyData = partySnap.data?.data();
+                        if (!_partyNotStartedYet(partyData)) {
+                          return const SizedBox.shrink();
+                        }
+                        final paused =
+                            partyData?['pre_wishes_paused'] == true;
+                        return IconButton(
+                          tooltip: paused
+                              ? l.pre_wishes_resume
+                              : l.pre_wishes_pause,
+                          onPressed: _pauseToggleInFlight
+                              ? null
+                              : () => _showPreWishesPauseConfirm(context, paused),
+                          icon: Icon(
+                            paused ? Icons.play_arrow : Icons.pause,
+                            color: UIConstants.colorPreWish.withValues(alpha: 0.95),
+                          ),
+                        );
+                      },
+                    ),
                     IconButton(
                       onPressed: () => Navigator.pop(context),
                       icon: const Icon(Icons.close, color: Colors.white70),
@@ -322,9 +581,10 @@ class _PreWishesOverviewDialogState extends State<PreWishesOverviewDialog> {
                     ),
                   ),
                 ),
+              _buildOverviewPausedBanner(),
               Expanded(
                 child: StreamBuilder<QuerySnapshot>(
-                  stream: WishManagementService.getPreWishOverviewStream(
+                  stream: WishManagementService.watchPreWishOverview(
                     widget.partyId,
                   ),
                   builder: (context, snapshot) {
@@ -461,8 +721,7 @@ class _PreWishesOverviewDialogState extends State<PreWishesOverviewDialog> {
                                           );
                                         } catch (e) {
                                           if (!ctx.mounted) return;
-                                          ScaffoldMessenger.of(ctx)
-                                              .showSnackBar(
+                                          showVibesSnackBar(ctx, 
                                             SnackBar(
                                               content: Text(
                                                 '${AppLocalizations.of(ctx)!.error}: $e',
@@ -491,7 +750,7 @@ class _PreWishesOverviewDialogState extends State<PreWishesOverviewDialog> {
                                     );
                                   } catch (e) {
                                     if (!ctx.mounted) return;
-                                    ScaffoldMessenger.of(ctx).showSnackBar(
+                                    showVibesSnackBar(ctx, 
                                       SnackBar(
                                         content: Text(
                                           '${AppLocalizations.of(ctx)!.error}: $e',

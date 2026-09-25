@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../l10n/app_localizations.dart';
 import '../utils/ui_constants.dart';
 import 'legal_page_scope.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 /// Dezenter Footer mit Links zu Impressum, Datenschutz und AGB.
 /// Für Gast-Seiten (Login, Home Guest). Links öffnen in-app (kein externer Browser).
@@ -15,8 +16,7 @@ class LegalFooterWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
-    final isRtl = ['ar', 'he', 'fa', 'ur']
-        .contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
 
     final imprintLabel = l.imprint;
     final privacyLabel = l.privacyPolicy;

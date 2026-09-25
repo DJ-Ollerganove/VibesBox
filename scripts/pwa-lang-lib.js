@@ -27,6 +27,7 @@ const AUTO_LANG_META = {
   ar: { name: 'Arabic', icon: 'ar', langKey: 'lang_arabic' },
   sq: { name: 'Albanian', icon: 'sq', langKey: 'lang_albanian' },
   vi: { name: 'Vietnamese', icon: 'vi', langKey: 'lang_vietnamese' },
+  th: { name: 'Thai', icon: 'th', langKey: 'lang_thai' },
 };
 
 function readMeta() {

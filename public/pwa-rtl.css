@@ -1,0 +1,134 @@
+/* RTL für Root-PWA, Wunschbox und gemeinsame Seiten.
+   html[dir=rtl] kehrt Flex-row bereits um — kein zusätzliches row-reverse (sonst wieder LTR). */
+html[dir="rtl"],
+html[dir="rtl"] body,
+body.pwa-rtl {
+  direction: rtl;
+}
+
+html[dir="rtl"] body {
+  font-family: 'Cairo', 'Noto Sans Arabic', Tahoma, Arial, sans-serif;
+}
+
+html[dir="rtl"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+html[dir="rtl"] textarea,
+html[dir="rtl"] select {
+  direction: rtl;
+  text-align: right;
+  unicode-bidi: plaintext;
+}
+
+html[dir="rtl"] input[type="email"],
+html[dir="rtl"] input[type="url"],
+html[dir="rtl"] input[type="tel"],
+html[dir="rtl"] input[type="number"],
+html[dir="rtl"] input[inputmode="numeric"],
+html[dir="rtl"] input[inputmode="decimal"],
+html[dir="rtl"] input[inputmode="tel"],
+html[dir="rtl"] #partyCodeInput,
+html[dir="rtl"] #contactEmail,
+html[dir="rtl"] #contactPhone,
+html[dir="rtl"] .code-input {
+  direction: ltr;
+  text-align: right;
+  unicode-bidi: isolate;
+}
+
+/* Erdkugel: LTR oben rechts → RTL oben links (neben Hamburger). */
+html[dir="rtl"] .header-lang-btn {
+  right: auto;
+  left: 8px;
+}
+
+html[dir="rtl"] .drawer-menu {
+  right: auto;
+  left: -100%;
+  border-left: none;
+  border-right: 2px solid var(--orange-primary, #ff8c00);
+  border-radius: 0 0 12px 0;
+  transition: left 0.3s ease;
+}
+
+html[dir="rtl"] .drawer-menu.active {
+  right: auto;
+  left: 10px;
+}
+
+@media (min-width: 601px) {
+  html[dir="rtl"] .drawer-menu.active {
+    left: calc(50% - 300px + 10px);
+    right: auto;
+  }
+}
+
+html[dir="rtl"] .drawer-menu-item:hover {
+  transform: translateX(-4px);
+}
+
+html[dir="rtl"] .back-btn {
+  direction: rtl;
+}
+
+html[dir="rtl"] .main-lang-dropdown,
+html[dir="rtl"] .nav-uber-dropdown {
+  right: auto;
+  left: 0;
+}
+
+html[dir="rtl"] .main-lang-option,
+html[dir="rtl"] .language-modal-option {
+  text-align: right;
+  justify-content: flex-start;
+}
+
+html[dir="rtl"] .main-lang-option .main-lang-name,
+html[dir="rtl"] .language-modal-option .language-name {
+  margin-left: 0;
+  margin-right: 10px;
+}
+
+html[dir="rtl"] .form-container,
+html[dir="rtl"] .legal-content,
+html[dir="rtl"] .info-card-style,
+html[dir="rtl"] .legal-modal-body,
+html[dir="rtl"] .legal-modal-header,
+html[dir="rtl"] .party-status-message,
+html[dir="rtl"] .cookie-content,
+html[dir="rtl"] .contact-form,
+html[dir="rtl"] label,
+html[dir="rtl"] .feature-card,
+html[dir="rtl"] .overlay-box,
+html[dir="rtl"] .overlay-box h3,
+html[dir="rtl"] .two-col-content {
+  text-align: right;
+}
+
+html[dir="rtl"] .suggestions-list,
+html[dir="rtl"] .suggestion-item {
+  text-align: right;
+}
+
+html[dir="rtl"] .header-branding,
+html[dir="rtl"] .header-vibesbox-text,
+html[dir="rtl"] .header-party-name,
+html[dir="rtl"] .header-dj-info,
+html[dir="rtl"] .header-party-info,
+html[dir="rtl"] .header-party-info-row,
+html[dir="rtl"] .form-group,
+html[dir="rtl"] .char-count,
+html[dir="rtl"] .wish-form,
+html[dir="rtl"] .contact-form label {
+  text-align: right;
+}
+
+html[dir="rtl"] .hero,
+html[dir="rtl"] .footer {
+  text-align: center;
+}
+
+@media (max-width: 600px) {
+  html[dir="rtl"] .header-lang-btn {
+    left: 6px;
+    right: auto;
+  }
+}

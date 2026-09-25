@@ -22,11 +22,12 @@
     { code: "pt", name: "Portuguese", icon: "pt", js_path: "/vb/lang/pt.js" },
     { code: "ru", name: "Russian", icon: "ru", js_path: "/vb/lang/ru.js" },
     { code: "es", name: "Spanish", icon: "es", js_path: "/vb/lang/es.js" },
+    { code: "th", name: "Thai", icon: "th", js_path: "/vb/lang/th.js" },
     { code: "tr", name: "Turkish", icon: "tr", js_path: "/vb/lang/tr.js" },
     { code: "uk", name: "Ukrainian", icon: "uk", js_path: "/vb/lang/uk.js" },
     { code: "vi", name: "Vietnamese", icon: "vi", js_path: "/vb/lang/vi.js" },
   ];
-  var _pwaLangExclude = ["ar"];
+  var _pwaLangExclude = [];
   window.pwaAvailableLanguages = window.DEFAULT_PWA_LANGUAGES.filter(function (e) {
     return e && e.code && _pwaLangExclude.indexOf(e.code) === -1;
   });
@@ -49,6 +50,7 @@
       "nl": "lang_dutch",
       "pl": "lang_polish",
       "cs": "lang_czech",
+      "th": "lang_thai",
       "ar": "lang_arabic"
   };
 })();

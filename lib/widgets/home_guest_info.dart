@@ -2,23 +2,26 @@ import 'package:flutter/material.dart';
 
 import '../l10n/app_localizations.dart';
 import '../utils/ui_constants.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 class HomeGuestInfo extends StatelessWidget {
   final Widget Function(BuildContext context, Widget child) cardBuilder;
   final VoidCallback? onLoginRequested;
   final VoidCallback? onRegisterRequested;
+  final bool showAuthButtons;
 
   const HomeGuestInfo({
     super.key,
     required this.cardBuilder,
     this.onLoginRequested,
     this.onRegisterRequested,
+    this.showAuthButtons = true,
   });
 
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
 
     Widget checkItem(String text) {
       return Padding(
@@ -110,6 +113,7 @@ class HomeGuestInfo extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 12),
+                  if (showAuthButtons)
                   Wrap(
                     alignment: WrapAlignment.center,
                     runAlignment: WrapAlignment.center,
@@ -212,6 +216,7 @@ class HomeGuestInfo extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 12),
+                if (showAuthButtons)
                 Wrap(
                   alignment: WrapAlignment.center,
                   runAlignment: WrapAlignment.center,
@@ -295,7 +300,7 @@ class HomeNavigationHint extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
     return cardBuilder(
       context,
       isRtl

@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../l10n/app_localizations.dart';
 import '../services/results_per_page_service.dart';
+import '../app_scaffold_messenger.dart';
+import 'settings_help_dialog.dart';
+import 'settings_info_icon_button.dart';
 
 /// DJ-Einstellung: Treffer pro Seite (Offen, Gespielt, Vorab-Liste, History, …).
 class ResultsPerPageSettingsSection extends StatefulWidget {
@@ -46,7 +49,7 @@ class _ResultsPerPageSettingsSectionState
       setState(() => _value = next);
       final l = AppLocalizations.of(context)!;
       final msg = l.settingsResultsPerPageSaved(next);
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(msg),
           behavior: SnackBarBehavior.floating,
@@ -54,7 +57,7 @@ class _ResultsPerPageSettingsSectionState
       );
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(AppLocalizations.of(context)!.error),
           backgroundColor: Colors.red.shade800,
@@ -81,13 +84,33 @@ class _ResultsPerPageSettingsSectionState
           crossAxisAlignment:
               isRtl ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
-            Text(
-              l.results_per_page,
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-              ),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    l.results_per_page,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                ),
+                SettingsInfoIconButton(
+                  tooltip: l.settings_help_tooltip,
+                  onPressed: () => showSettingsHelpFromL10n(
+                    context,
+                    titleKey: 'results_per_page',
+                    introKey: 'info_settings_results_intro',
+                    bullets: const [
+                      (
+                        'info_settings_results_count',
+                        'info_settings_results_count_body',
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 6),
             Text(

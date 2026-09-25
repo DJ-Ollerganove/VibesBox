@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../l10n/app_localizations.dart';
 import '../../utils/formatting_utils.dart';
 import '../../utils/ui_constants.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 /// Begrüßungs-Header für DJ-Ansicht:
 /// Zeile 1: "Guten Morgen [Name]" (tageszeitabhängig) + optional Bearbeiten-Icon rechts
@@ -21,7 +22,7 @@ class WelcomeHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
     final greeting = FormattingUtils.getGreeting(context);
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
     
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,

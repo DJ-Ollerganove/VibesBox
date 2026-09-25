@@ -1,0 +1,11 @@
+/* Info.plist localization – VibesBox */
+"NSLocalNetworkUsageDescription" = "VibesBox may use the local network so development tools can connect during testing, and for optional device features on the same Wi‑Fi.";
+"NSMicrophoneUsageDescription" = "VibesBox heeft microfoontoegang nodig om afgespeelde muziek te analyseren en te herkennen.";
+"NSAppleMusicUsageDescription" = "VibesBox may access your media library to link music recognition with Apple Music features.";
+"NSCameraUsageDescription" = "VibesBox gebruikt de camera om QR-codes te scannen en foto’s te maken.";
+"NSPhotoLibraryUsageDescription" = "VibesBox needs photo library access so you can choose a profile picture.";
+"NSPhotoLibraryAddUsageDescription" = "VibesBox saves images such as QR codes to your library when you choose to.";
+"NSLocationWhenInUseUsageDescription" = "We gebruiken je locatie om de kaart op de party-locatie te centreren.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "We gebruiken je locatie om de kaart op de party-locatie te centreren.";
+"NSCalendarsUsageDescription" = "Needed to export party dates to your calendar.";
+"NSFaceIDUsageDescription" = "Face ID protects admin settings so only you can access sensitive options.";

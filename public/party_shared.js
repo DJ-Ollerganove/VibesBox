@@ -16,8 +16,9 @@
   var STORAGE_KEY_FAIL_COUNT = 'party_shared_fail_count';
   var STORAGE_KEY_BLOCK_UNTIL = 'party_shared_block_until';
   /** Gesamtfrist inkl. ensureFirebase; Join-Queries laufen parallel (nicht nacheinander). */
-  var PARTY_CODE_CHECK_TIMEOUT_MS = 20000;
+  var PARTY_CODE_CHECK_TIMEOUT_MS = 8000;
   var MESSAGE_KEY_TIMEOUT = 'main_code_error_timeout';
+  var MESSAGE_KEY_AMBIGUOUS = 'party_code_ambiguous';
   /** Vorab-Wünsche schließen spätestens diese Stunden vor Partybeginn. */
   var PRE_WISH_CLOSE_HOURS = 6;
 
@@ -83,6 +84,7 @@
     nl: 'nl-NL',
     pl: 'pl-PL',
     cs: 'cs-CZ',
+    th: 'th-TH',
     ar: 'ar'
   };
 
@@ -145,6 +147,16 @@
   function partyTimeStyle(lang) {
     var o = partyLocaleOpt(lang);
     return (o.time_style && String(o.time_style)) || 'colon_suffix';
+  }
+
+  /** Schreibrichtung aus l10n/languages.json (text_direction: ltr | rtl). */
+  function partyTextDirection(lang) {
+    var o = partyLocaleOpt(lang);
+    return o.text_direction === 'rtl' ? 'rtl' : 'ltr';
+  }
+
+  function partyIsRtl(lang) {
+    return partyTextDirection(lang) === 'rtl';
   }
 
   /** Stunde/Minute (24h-Ziffern) in optionaler Zeitzone. */
@@ -281,7 +293,8 @@
     var snap = {};
     var strKeys = [
       'party_name', 'partyName', 'party_code', 'fixed_party_code', 'dj_name', 'display_name', 'name',
-      'created_by', 'timezone_id', 'lifecycle_status', 'status', 'dj_logo'
+      'created_by', 'timezone_id', 'lifecycle_status', 'status', 'dj_logo',
+      'party_type', 'venue_id', 'floor_key', 'floor_label'
     ];
     for (var i = 0; i < strKeys.length; i++) {
       var k = strKeys[i];
@@ -289,6 +302,7 @@
     }
     if (data.is_paused === true) snap.is_paused = true;
     if (data.allow_pre_wishes === true) snap.allow_pre_wishes = true;
+    if (data.pre_wishes_paused === true) snap.pre_wishes_paused = true;
     if (typeof data.start_time_posix === 'number') snap.start_time_posix = data.start_time_posix;
     if (typeof data.end_time_posix === 'number') snap.end_time_posix = data.end_time_posix;
     if (data.start_date && typeof data.start_date.toDate === 'function') {
@@ -471,7 +485,99 @@
     return now.getTime() <= vbPreWishDeadlineMs(start);
   }
 
+  function vbArePreWishesPaused(data) {
+    return !!(data && data.pre_wishes_paused === true);
+  }
+
+  function vbIsPreWishSubmissionOpen(data, nowDate) {
+    return vbIsPreWishWindowOpen(data, nowDate) && !vbArePreWishesPaused(data);
+  }
+
   var VB_DEFAULT_FLOOR_KEY = 'default';
+
+  /** Multi-Floor-Gast-UI nur bei öffentlichen Veranstaltungen mit venue_id. */
+  function vbIsPublicVenueParty(data) {
+    if (!data) return false;
+    if (data.party_type !== 'public') return false;
+    var venueId = data.venue_id;
+    return venueId != null && String(venueId).trim() !== '';
+  }
+
+  /** Unterschiedliche floor_key — Raum-Auswahl nur bei echtem Multi-Floor. */
+  function vbDistinctPublicVenueFloorKeysFromDocs(docs) {
+    var keys = Object.create(null);
+    if (!docs) return [];
+    for (var i = 0; i < docs.length; i++) {
+      var data = docs[i].data();
+      if (!vbIsPublicVenueParty(data)) continue;
+      var key = vbEffectiveFloorKey(data);
+      keys[key] = true;
+    }
+    return Object.keys(keys);
+  }
+
+  /** Multi-Floor nur bei ≥2 unterschiedlichen floor_key (≡ Flutter hasMultipleDistinctPublicFloors). */
+  function vbShouldOfferFloorSelection(joinableDocs) {
+    if (!joinableDocs || joinableDocs.length <= 1) return false;
+    return vbDistinctPublicVenueFloorKeysFromDocs(joinableDocs).length > 1;
+  }
+
+  /** Floor-Picker nur wenn Optionen wirklich verschiedene Floors haben (nie bei nur „default“). */
+  function vbFloorOptionsHaveMultipleDistinctKeys(floorOptions) {
+    if (!floorOptions || floorOptions.length <= 1) return false;
+    var keys = Object.create(null);
+    for (var i = 0; i < floorOptions.length; i++) {
+      var k = floorOptions[i].floor_key;
+      if (k == null || String(k).trim() === '') k = VB_DEFAULT_FLOOR_KEY;
+      else k = String(k).trim();
+      keys[k] = true;
+    }
+    return Object.keys(keys).length > 1;
+  }
+
+  /**
+   * Zentrale Join-Code-Auflösung (PWA ≡ Flutter GuestJoinCodeResolver).
+   * @returns {{action: string, doc?: object, floor_options?: Array, join_code?: string}}
+   */
+  function vbResolveJoinCodeLookup(allDocs, nowDate, normalizedJoinCode) {
+    if (!allDocs || allDocs.length === 0) return { action: 'not_found' };
+
+    var joinable = allDocs.filter(function (doc) {
+      return vbIsPartyGuestJoinable(doc.data(), nowDate);
+    });
+
+    if (joinable.length === 1) {
+      return { action: 'join', doc: joinable[0] };
+    }
+
+    if (joinable.length > 1 && vbShouldOfferFloorSelection(joinable)) {
+      var publicVenueJoinable = joinable.filter(function (doc) {
+        return vbIsPublicVenueParty(doc.data());
+      });
+      if (publicVenueJoinable.length > 1) {
+        var floorOptions = publicVenueJoinable.map(vbFloorOptionFromDoc);
+        floorOptions.sort(function (a, b) {
+          return String(a.floor_label || '').localeCompare(String(b.floor_label || ''));
+        });
+        if (vbFloorOptionsHaveMultipleDistinctKeys(floorOptions)) {
+          return {
+            action: 'select_floor',
+            floor_options: floorOptions,
+            join_code: normalizedJoinCode
+          };
+        }
+      }
+    }
+
+    if (joinable.length > 1) {
+      return { action: 'ambiguous' };
+    }
+
+    var pickPool = joinable.length > 0 ? joinable : allDocs;
+    var best = pickBestPartyDocForJoinCode(pickPool, nowDate);
+    if (!best) return { action: 'not_found' };
+    return { action: 'join', doc: best };
+  }
 
   function vbEffectiveFloorKey(data) {
     if (!data) return VB_DEFAULT_FLOOR_KEY;
@@ -533,12 +639,14 @@
 
   function vbFloorOptionFromDoc(doc) {
     var data = doc.data();
+    var djIdRaw = data.created_by != null ? data.created_by : data.dj_code;
     return {
       party_id: doc.id,
       floor_key: vbEffectiveFloorKey(data),
       floor_label: vbRawFloorLabel(data),
       party_name: data.party_name || data.partyName || null,
-      dj_name: 'DJ'
+      dj_name: 'DJ',
+      created_by: djIdRaw != null ? String(djIdRaw).trim() : ''
     };
   }
 
@@ -738,28 +846,25 @@
       return collectJoinCodePartyDocs(normalized).then(function (allDocs) {
         if (!allDocs || allDocs.length === 0) return rateLimitFail();
         var nowDate = new Date();
-        var joinable = allDocs.filter(function (doc) {
-          return vbIsPartyGuestJoinable(doc.data(), nowDate);
-        });
-        if (joinable.length > 1) {
+        var resolved = vbResolveJoinCodeLookup(allDocs, nowDate, normalized);
+        if (resolved.action === 'not_found') return rateLimitFail();
+        if (resolved.action === 'ambiguous') {
           setRateLimitState(0, 0);
-          var floorOptions = joinable.map(vbFloorOptionFromDoc);
-          floorOptions.sort(function (a, b) {
-            return String(a.floor_label || '').localeCompare(String(b.floor_label || ''));
-          });
+          return { success: false, messageKey: MESSAGE_KEY_AMBIGUOUS, type: 'ambiguous' };
+        }
+        if (resolved.action === 'select_floor') {
+          setRateLimitState(0, 0);
           return {
             success: false,
             type: 'select_floor',
-            join_code: normalized,
-            floor_options: floorOptions
+            join_code: resolved.join_code || normalized,
+            floor_options: resolved.floor_options
           };
         }
-        if (joinable.length === 1) {
-          return processFoundDoc(joinable[0]);
+        if (resolved.action === 'join' && resolved.doc) {
+          return processFoundDoc(resolved.doc);
         }
-        var best = pickBestPartyDocForJoinCode(allDocs, nowDate);
-        if (!best) return rateLimitFail();
-        return processFoundDoc(best);
+        return rateLimitFail();
       });
     });
 
@@ -973,7 +1078,7 @@
     var diffMs = Math.max(0, startMs - Date.now());
 
     if (diffMs < 60000) {
-      return typeof t === 'function' ? (t('party_starts_now') || 'Startet jetzt') : 'Startet jetzt';
+      return typeof t === 'function' ? (t('party_starts_now') || 'Starting now') : 'Starting now';
     }
 
     var minutesCeil = Math.ceil(diffMs / (1000 * 60));
@@ -983,20 +1088,20 @@
 
     if (days >= 14) {
       var remainingDays = days % 7;
-      var T = typeof t === 'function' ? t : function (k) { return { time_week: 'Woche', time_weeks: 'Wochen', time_day: 'Tag', time_days: 'Tage' }[k] || k; };
+      var T = typeof t === 'function' ? t : function (k) { return { time_week: 'week', time_weeks: 'weeks', time_day: 'day', time_days: 'days' }[k] || k; };
       return weeks + ' ' + (weeks === 1 ? T('time_week') : T('time_weeks')) + (remainingDays === 0 ? '' : ', ' + remainingDays + ' ' + (remainingDays === 1 ? T('time_day') : T('time_days')));
     }
     if (days >= 1) {
       var remainingHours = Math.ceil((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-      var T = typeof t === 'function' ? t : function (k) { return { time_day: 'Tag', time_days: 'Tage', time_hour: 'Stunde', time_hours: 'Stunden' }[k] || k; };
+      var T = typeof t === 'function' ? t : function (k) { return { time_day: 'day', time_days: 'days', time_hour: 'hour', time_hours: 'hours' }[k] || k; };
       return days + ' ' + (days === 1 ? T('time_day') : T('time_days')) + (remainingHours === 0 ? '' : ', ' + remainingHours + ' ' + (remainingHours === 1 ? T('time_hour') : T('time_hours')));
     }
     if (hours >= 1) {
       var remainingMinutes = Math.ceil((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-      var T = typeof t === 'function' ? t : function (k) { return { time_hour: 'Stunde', time_hours: 'Stunden', time_minute: 'Minute', time_minutes: 'Minuten' }[k] || k; };
+      var T = typeof t === 'function' ? t : function (k) { return { time_hour: 'hour', time_hours: 'hours', time_minute: 'minute', time_minutes: 'minutes' }[k] || k; };
       return hours + ' ' + (hours === 1 ? T('time_hour') : T('time_hours')) + (remainingMinutes === 0 ? '' : ', ' + remainingMinutes + ' ' + (remainingMinutes === 1 ? T('time_minute') : T('time_minutes')));
     }
-    var T = typeof t === 'function' ? t : function (k) { return { time_minute: 'Minute', time_minutes: 'Minuten' }[k] || k; };
+    var T = typeof t === 'function' ? t : function (k) { return { time_minute: 'minute', time_minutes: 'minutes' }[k] || k; };
     return minutesCeil + ' ' + (minutesCeil === 1 ? T('time_minute') : T('time_minutes'));
   }
 
@@ -1015,6 +1120,250 @@
     return window.firebaseDoc(col, wishId);
   }
 
+  function vbCanonicalSongText(s) {
+    return String(s || '')
+      .trim()
+      .replace(/\s+/g, ' ')
+      .toLowerCase()
+      .replace(/ä/g, 'a')
+      .replace(/ö/g, 'o')
+      .replace(/ü/g, 'u')
+      .replace(/ß/g, 'ss')
+      .replace(/[^\w\s]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function vbEntriesHitSongBlacklist(title, artist, entries) {
+    if (!Array.isArray(entries) || !entries.length) return false;
+    var t = vbCanonicalSongText(title);
+    var a = vbCanonicalSongText(artist);
+    if (!t && !a) return false;
+    var i;
+    var e;
+    var et;
+    var ea;
+    for (i = 0; i < entries.length; i++) {
+      e = entries[i] || {};
+      et = vbCanonicalSongText(e.title);
+      ea = vbCanonicalSongText(e.artist);
+      if (et && ea && t === et && a === ea) return true;
+    }
+    for (i = 0; i < entries.length; i++) {
+      e = entries[i] || {};
+      et = vbCanonicalSongText(e.title);
+      ea = vbCanonicalSongText(e.artist);
+      if (et && !ea && t && t === et) return true;
+    }
+    for (i = 0; i < entries.length; i++) {
+      e = entries[i] || {};
+      et = vbCanonicalSongText(e.title);
+      ea = vbCanonicalSongText(e.artist);
+      if (ea && !et && a && a === ea) return true;
+    }
+    return false;
+  }
+
+  function vbEmptySongBlacklistDecision() {
+    return { enabled: false, hit: false, guestBlock: false };
+  }
+
+  function vbParseDjSongBlacklistData(data) {
+    var entries = data && Array.isArray(data.entries) ? data.entries : [];
+    var enabledField;
+    var guestBlockField;
+    var i;
+    var item;
+    if (data && Object.prototype.hasOwnProperty.call(data, 'enabled')) {
+      enabledField = data.enabled === true;
+    }
+    if (data && Object.prototype.hasOwnProperty.call(data, 'guest_block')) {
+      guestBlockField = data.guest_block === true;
+    }
+    for (i = 0; i < entries.length; i++) {
+      item = entries[i] || {};
+      if (item.id === '_vb_prefs') {
+        if (enabledField === undefined && Object.prototype.hasOwnProperty.call(item, 'enabled')) {
+          enabledField = item.enabled === true;
+        }
+        if (guestBlockField === undefined && Object.prototype.hasOwnProperty.call(item, 'guest_block')) {
+          guestBlockField = item.guest_block === true;
+        }
+      }
+    }
+    return {
+      enabled: enabledField !== undefined ? !!enabledField : true,
+      guestBlock: guestBlockField === true,
+      songEntries: entries.filter(function (e) {
+        return e && e.id !== '_vb_prefs';
+      })
+    };
+  }
+
+  var vbBlWatch = {
+    djId: '',
+    partyId: '',
+    unsubDj: null,
+    unsubParty: null,
+    hasDjSnap: false,
+    djParsed: { enabled: true, guestBlock: false, songEntries: [] },
+    partyEntries: [],
+    onChange: null
+  };
+
+  function vbEmitSongBlacklistWatch() {
+    if (typeof vbBlWatch.onChange !== 'function') return;
+    try {
+      vbBlWatch.onChange({
+        enabled: !!vbBlWatch.djParsed.enabled,
+        guestBlock: !!vbBlWatch.djParsed.guestBlock
+      });
+    } catch (eEmit) {}
+  }
+
+  function vbUnsubSongBlacklistWatch() {
+    if (vbBlWatch.unsubDj) {
+      try { vbBlWatch.unsubDj(); } catch (eU1) {}
+      vbBlWatch.unsubDj = null;
+    }
+    if (vbBlWatch.unsubParty) {
+      try { vbBlWatch.unsubParty(); } catch (eU2) {}
+      vbBlWatch.unsubParty = null;
+    }
+    vbBlWatch.hasDjSnap = false;
+  }
+
+  function vbComputeSongBlacklistDecision(title, artist) {
+    var dj = vbBlWatch.djParsed || { enabled: true, guestBlock: false, songEntries: [] };
+    var enabled = !!dj.enabled;
+    if (!enabled) {
+      return { enabled: false, hit: false, guestBlock: false };
+    }
+    var djHit = vbEntriesHitSongBlacklist(title, artist, dj.songEntries);
+    var partyHit = vbEntriesHitSongBlacklist(title, artist, vbBlWatch.partyEntries);
+    var hit = djHit || partyHit;
+    return {
+      enabled: true,
+      hit: !!hit,
+      guestBlock: !!(hit && dj.guestBlock)
+    };
+  }
+
+  function vbStartSongBlacklistWatch(djId, partyId, onChange) {
+    var d = djId ? String(djId) : '';
+    var p = (partyId && String(partyId) !== 'manual') ? String(partyId) : '';
+    if (typeof onChange === 'function') vbBlWatch.onChange = onChange;
+    if (
+      vbBlWatch.djId === d &&
+      vbBlWatch.partyId === p &&
+      (vbBlWatch.unsubDj || !d) &&
+      ((p && vbBlWatch.unsubParty) || !p)
+    ) {
+      vbEmitSongBlacklistWatch();
+      return;
+    }
+    vbUnsubSongBlacklistWatch();
+    vbBlWatch.djId = d;
+    vbBlWatch.partyId = p;
+    vbBlWatch.djParsed = { enabled: true, guestBlock: false, songEntries: [] };
+    vbBlWatch.partyEntries = [];
+    if (!window.firebaseDb || !window.firebaseDoc || typeof window.firebaseOnSnapshot !== 'function') {
+      return;
+    }
+    if (d) {
+      vbBlWatch.unsubDj = window.firebaseOnSnapshot(
+        window.firebaseDoc(
+          window.firebaseCollection(window.firebaseDb, 'dj_song_blacklists'),
+          d
+        ),
+        function (snap) {
+          vbBlWatch.djParsed = vbParseDjSongBlacklistData(snap && snap.exists() ? snap.data() : null);
+          vbBlWatch.hasDjSnap = true;
+          vbEmitSongBlacklistWatch();
+        },
+        function (err) {
+          console.warn('song blacklist watch dj', err);
+        }
+      );
+    } else {
+      vbBlWatch.hasDjSnap = true;
+    }
+    if (p) {
+      vbBlWatch.unsubParty = window.firebaseOnSnapshot(
+        window.firebaseDoc(
+          window.firebaseCollection(window.firebaseDb, 'party_song_blacklists'),
+          p
+        ),
+        function (snap) {
+          var partyData = snap && snap.exists() && snap.data() ? snap.data() : null;
+          vbBlWatch.partyEntries = partyData && Array.isArray(partyData.entries) ? partyData.entries : [];
+          vbEmitSongBlacklistWatch();
+        },
+        function (err) {
+          console.warn('song blacklist watch party', err);
+        }
+      );
+    }
+  }
+
+  async function vbSongBlacklistDecision(djId, title, artist, partyId) {
+    if (!window.firebaseDb || !window.firebaseDoc) {
+      return vbEmptySongBlacklistDecision();
+    }
+    try {
+      vbStartSongBlacklistWatch(djId, partyId, vbBlWatch.onChange);
+      if (vbBlWatch.hasDjSnap && vbBlWatch.djId === String(djId || '')) {
+        var sameParty = !(partyId && String(partyId) !== 'manual') ||
+          vbBlWatch.partyId === String(partyId);
+        if (sameParty) return vbComputeSongBlacklistDecision(title, artist);
+      }
+      var djSnap = null;
+      var partySnap = null;
+      if (djId && window.firebaseGetDoc) {
+        djSnap = await window.firebaseGetDoc(
+          window.firebaseDoc(
+            window.firebaseCollection(window.firebaseDb, 'dj_song_blacklists'),
+            String(djId)
+          )
+        );
+      }
+      if (partyId && String(partyId) !== 'manual' && window.firebaseGetDoc) {
+        partySnap = await window.firebaseGetDoc(
+          window.firebaseDoc(
+            window.firebaseCollection(window.firebaseDb, 'party_song_blacklists'),
+            String(partyId)
+          )
+        );
+      }
+      vbBlWatch.djParsed = vbParseDjSongBlacklistData(
+        djSnap && djSnap.exists() && djSnap.data() ? djSnap.data() : null
+      );
+      var partyData = partySnap && partySnap.exists() && partySnap.data() ? partySnap.data() : null;
+      vbBlWatch.partyEntries = partyData && Array.isArray(partyData.entries) ? partyData.entries : [];
+      vbBlWatch.hasDjSnap = true;
+      return vbComputeSongBlacklistDecision(title, artist);
+    } catch (err) {
+      console.warn('song blacklist check', err);
+      return vbEmptySongBlacklistDecision();
+    }
+  }
+
+  async function vbSongBlacklistHits(djId, title, artist, partyId) {
+    var d = await vbSongBlacklistDecision(djId, title, artist, partyId);
+    return !!(d && d.hit);
+  }
+
+  function vbStampSongBlacklistReject(wishData) {
+    if (!wishData) return;
+    wishData.status = 'rejected';
+    wishData.auto_rejected_by_blacklist = true;
+    wishData.rejection_reason = 'song_blacklist';
+    if (window.firebaseServerTimestamp) {
+      wishData.rejectedAt = window.firebaseServerTimestamp();
+      wishData.rejected_at = window.firebaseServerTimestamp();
+    }
+  }
+
   if (typeof window !== 'undefined') {
     window.vbPartyWishesCollection = vbPartyWishesCollection;
     window.vbPartyWishDoc = vbPartyWishDoc;
@@ -1030,6 +1379,8 @@
     window.pickBestPartyDocForJoinCode = pickBestPartyDocForJoinCode;
     window.getPartyLocale = getPartyLocale;
     window.partyHour12 = partyHour12;
+    window.partyTextDirection = partyTextDirection;
+    window.partyIsRtl = partyIsRtl;
     window.formatClockForLang = formatClockForLang;
     window.formatPartyLocalTime = formatPartyLocalTime;
     window.formatPartyLocalTimeWithSuffix = formatPartyLocalTimeWithSuffix;
@@ -1043,8 +1394,20 @@
     window.formatDuration = formatDuration;
     window.calculateTimeUntilParty = calculateTimeUntilParty;
     window.vbIsPreWishWindowOpen = vbIsPreWishWindowOpen;
+    window.vbArePreWishesPaused = vbArePreWishesPaused;
+    window.vbIsPreWishSubmissionOpen = vbIsPreWishSubmissionOpen;
+    window.vbIsPublicVenueParty = vbIsPublicVenueParty;
+    window.vbShouldOfferFloorSelection = vbShouldOfferFloorSelection;
+    window.vbFloorOptionsHaveMultipleDistinctKeys = vbFloorOptionsHaveMultipleDistinctKeys;
+    window.vbDistinctPublicVenueFloorKeysFromDocs = vbDistinctPublicVenueFloorKeysFromDocs;
+    window.vbResolveJoinCodeLookup = vbResolveJoinCodeLookup;
+    window.MESSAGE_KEY_AMBIGUOUS = MESSAGE_KEY_AMBIGUOUS;
     window.vbPreWishDeadlineMs = vbPreWishDeadlineMs;
     window.partyStartDateFromData = partyStartDateFromData;
     window.PRE_WISH_CLOSE_HOURS = PRE_WISH_CLOSE_HOURS;
+    window.vbSongBlacklistHits = vbSongBlacklistHits;
+    window.vbSongBlacklistDecision = vbSongBlacklistDecision;
+    window.vbStartSongBlacklistWatch = vbStartSongBlacklistWatch;
+    window.vbStampSongBlacklistReject = vbStampSongBlacklistReject;
   }
 })();

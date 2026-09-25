@@ -5,6 +5,7 @@ import '../services/navigation_service.dart';
 import '../services/party_session_service.dart';
 import '../utils/ui_constants.dart';
 import 'wishes_page.dart' show ContactForm, ContactFormState;
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 class ContactPage extends StatefulWidget {
   final GlobalKey<ContactFormState>? contactFormKey;
@@ -137,7 +138,7 @@ class _ContactPageState extends State<ContactPage> {
   @override
   Widget build(BuildContext context) {
     final localizations = AppLocalizations.of(context)!;
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
     return Scaffold(
       body: SafeArea(
         child: Column(

@@ -14,7 +14,8 @@
     { "code": "uk", "name": "Ukrainian", "file": "locales/uk.json" },
     { "code": "hi", "name": "Hindi", "file": "locales/hi.json" },
     { "code": "ar", "name": "Arabic", "file": "locales/ar.json" },
-    { "code": "sq", "name": "Albanian", "file": "locales/sq.json" }
+    { "code": "sq", "name": "Albanian", "file": "locales/sq.json" },
+    { "code": "th", "name": "Thai", "file": "locales/th.json" }
   ],
   "sourceLanguage": "de",
   "fallbackLanguage": "de"

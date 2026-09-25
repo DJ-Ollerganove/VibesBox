@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../l10n/app_localizations.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 /// Zentrales Widget für Leermeldungen (Empty States)
 /// Prüft den Party-Status und zeigt die entsprechende Nachricht an
@@ -18,7 +19,7 @@ class EmptyListMessage extends StatelessWidget {
     final l = AppLocalizations.of(context)!;
     
     // RTL-Support
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
     final textDirection = isRtl ? TextDirection.rtl : TextDirection.ltr;
 
     // Zeige immer die "keine Wünsche"-Nachricht, keine Party-Prüfung mehr

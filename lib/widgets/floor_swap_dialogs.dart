@@ -9,6 +9,7 @@ import '../services/public_dj_profile_service.dart';
 import '../utils/floor_key_utils.dart';
 import '../utils/ui_constants.dart';
 import 'party_creation/public_venue_floor_field.dart';
+import '../app_scaffold_messenger.dart';
 
 /// Bestätigt und sendet eine Floor-Tausch-Anfrage an den anderen DJ.
 Future<bool> showFloorSwapRequestDialog({
@@ -86,7 +87,7 @@ Future<bool> showFloorSwapRequestDialog({
 
   if (!context.mounted) return requestId != null;
 
-  ScaffoldMessenger.of(context).showSnackBar(
+  showVibesSnackBar(context, 
     SnackBar(
       content: Text(
         requestId != null
@@ -146,7 +147,7 @@ Future<void> showFloorSwapIncomingDialog({
               await FloorSwapService.instance.acceptRequest(requestId);
               if (ctx.mounted) Navigator.pop(ctx);
               if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
+                showVibesSnackBar(context, 
                   SnackBar(
                     content: Text(l.party_floor_swap_accepted),
                     backgroundColor: Colors.green,

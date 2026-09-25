@@ -7,26 +7,40 @@ import 'pages/beendete_partys_page.dart';
 import 'l10n/app_localizations.dart';
 import 'utils/formatting_utils.dart';
 import 'utils/ui_constants.dart';
-import 'widgets/party_qr_code_dialog.dart' show Party, PartyQrCodeDialog;
+import 'utils/party_qr_launch_helper.dart';
 import 'widgets/custom_page_header.dart';
-import 'widgets/sticky_pagination_layout.dart';
+import 'widgets/settings_help_dialog.dart';
+import 'pages/dj_setlists_library_page.dart';
 import 'services/active_party_service.dart';
+import 'services/pro_feature_guard.dart';
+import 'widgets/free_feature_locked.dart';
 import 'services/party_autostart_service.dart';
+import 'services/party_secure_service.dart';
 import 'settings_party_edit_dialog.dart';
 import 'settings_party_card_widget.dart';
 import 'services/user_service.dart';
+import 'services/navigation_service.dart';
 import 'services/limit_service.dart';
 import 'services/party_limit_service.dart';
 import 'widgets/pro_promotion_banner.dart';
 import 'models/user_model.dart';
 import 'utils/debug_log.dart';
+import 'app_scaffold_messenger.dart';
+import 'pages/home/dj/dj_home_party_utils.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 // Party-Verwaltungsseite für Admin
 class PartyVerwaltungPage extends StatefulWidget {
   /// Wird aufgerufen, wenn "Beendete Partys" geöffnet werden soll (Integration ins Haupt-Scaffold).
   final VoidCallback? onOpenEndedPartys;
+  /// Admin-DJ-Ansicht: gleiche effektive DJ-ID wie auf der Startseite.
+  final String? currentViewRole;
 
-  const PartyVerwaltungPage({super.key, this.onOpenEndedPartys});
+  const PartyVerwaltungPage({
+    super.key,
+    this.onOpenEndedPartys,
+    this.currentViewRole,
+  });
 
   @override
   State<PartyVerwaltungPage> createState() => _PartyVerwaltungPageState();
@@ -42,7 +56,7 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
     _timeController!.add(DateTime.now());
     _timeTimer?.cancel();
     _timeTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
-      if (!_timeController!.isClosed) {
+      if (_timeController != null && !_timeController!.isClosed) {
         _timeController!.add(DateTime.now());
       } else {
         timer.cancel();
@@ -77,16 +91,7 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
   }
 
   String _getPartyStatus(DateTime startDate, DateTime endDate, BuildContext context) {
-    final now = DateTime.now();
-    final l = AppLocalizations.of(context)!;
-    // Party ist aktiv, wenn jetzt >= Start UND jetzt < Ende (Endzeit ist exklusiv)
-    if (now.compareTo(startDate) < 0) {
-      return l.party_status_upcoming;
-    } else if (now.compareTo(startDate) >= 0 && now.compareTo(endDate) < 0) {
-      return l.party_status_running;
-    } else {
-      return l.party_status_ended;
-    }
+    return DjHomePartyUtils.statusFromDates(startDate, endDate, context);
   }
 
   Color _getPartyStatusColor(String status, BuildContext context) {
@@ -213,7 +218,7 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
     if (user == null) {
       if (mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(l.snackbar_party_not_logged_in_long),
             backgroundColor: Colors.red,
@@ -234,7 +239,7 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
       if (!partyDoc.exists) {
         if (mounted) {
           final l = AppLocalizations.of(context)!;
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(l.snackbar_party_not_found),
               backgroundColor: Colors.red,
@@ -253,7 +258,7 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
       if (createdBy != user.uid) {
         debugLog('❌ Löschung verweigert: nicht der Ersteller');
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(localizations.delete_party_only_own),
               backgroundColor: Colors.red,
@@ -298,7 +303,7 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
         debugLog('⚠️ Keine Startzeit gefunden für Party $partyId');
         if (mounted) {
           final l = AppLocalizations.of(context)!;
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(l.error_party_start_time_unknown),
               backgroundColor: Colors.red,
@@ -313,7 +318,7 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
       if (now.isAfter(startDate) || now.isAtSameMomentAs(startDate)) {
         debugLog('❌ Löschung verweigert: Party $partyId hat bereits begonnen (Start: $startDate, Jetzt: $now)');
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(localizations.party_delete_not_started),
               backgroundColor: Colors.red,
@@ -330,7 +335,7 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
       debugLog('Party gelöscht');
       
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(localizations.party_deleted_success),
             backgroundColor: Colors.green,
@@ -348,7 +353,7 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
         } else {
           errorMessage = '${loc.party_error_deleting} ${e.message ?? e.code}';
         }
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(errorMessage),
             backgroundColor: Colors.red,
@@ -360,7 +365,7 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
       debugLog('❌ Unerwarteter Fehler beim Löschen: $e');
       if (mounted) {
         final loc = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${loc.party_error_deleting} $e'),
             backgroundColor: Colors.red,
@@ -426,7 +431,7 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
       if (user == null) {
         if (mounted) {
           final l = AppLocalizations.of(context)!;
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(l.snackbar_not_logged_in_short),
               backgroundColor: Colors.red,
@@ -456,15 +461,18 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
       // Füge neuen Eintrag zum Array hinzu
       final updatedPauseLog = [...currentPauseLog, newLogEntry];
 
-      // Update Party-Dokument
-      await partyRef.update({
-        'is_paused': newPauseState,
-        'pause_log': updatedPauseLog,
-      });
+      // Update Party-Dokument (serverseitig — Client-Rules blockieren Pause sonst oft)
+      await PartySecureService.instance.updateParty(
+        partyId: partyId,
+        patch: {
+          'is_paused': newPauseState,
+          'pause_log': updatedPauseLog,
+        },
+      );
 
       if (mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(newPauseState ? l.wishbox_paused : l.wishbox_resumed),
             backgroundColor: Colors.green,
@@ -475,7 +483,7 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
     } catch (e) {
       if (mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${l.snackbar_error_pausing_wishbox} $e'),
             backgroundColor: Colors.red,
@@ -539,7 +547,7 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
       if (user == null) {
         if (mounted) {
           final l = AppLocalizations.of(context)!;
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(l.snackbar_not_logged_in_short),
               backgroundColor: Colors.red,
@@ -550,21 +558,24 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
       }
 
       final nowUtcSeconds = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
-      await FirebaseFirestore.instance.collection('parties').doc(partyId).update({
-        'lifecycle_status': 'finished',
-        'finished_at': FieldValue.serverTimestamp(),
-        'finished_by': user.uid,
-        'finished_manually': true,
-        'end_date': Timestamp.now(),
-        'end_time_posix': nowUtcSeconds,
-      });
+      await PartySecureService.instance.updateParty(
+        partyId: partyId,
+        patch: {
+          'lifecycle_status': 'finished',
+          'finished_at': Timestamp.now(),
+          'finished_by': user.uid,
+          'finished_manually': true,
+          'end_date': Timestamp.now(),
+          'end_time_posix': nowUtcSeconds,
+        },
+      );
       ActivePartyService.stopHeartbeat();
       await PartyAutostartService().stopRecognitionNow();
 
       if (mounted) {
         setState(() {});
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(l.snackbar_party_ended_success),
             backgroundColor: Colors.green,
@@ -575,7 +586,7 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
     } catch (e) {
       if (mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${l.snackbar_error_ending_party} $e'),
             backgroundColor: Colors.red,
@@ -591,7 +602,7 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
 
   @override
   Widget build(BuildContext context) {
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
     return Scaffold(
       backgroundColor: Colors.transparent,
       resizeToAvoidBottomInset: true,
@@ -608,17 +619,56 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
                     CustomPageHeader(
                       icon: Icons.event,
                       title: AppLocalizations.of(context)!.party_management_title,
+                      actionsBelowTitle: true,
+                      onInfoPressed: () => showPageInfoHelp(
+                        context,
+                        titleKey: 'party_management_title',
+                        prefix: 'info_page_party_management',
+                      ),
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
+                          IconButton(
+                            icon: const Icon(Icons.queue_music),
+                            color: UIConstants.colorDjSetlist,
+                            visualDensity: VisualDensity.compact,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(
+                              minWidth: 36,
+                              minHeight: 36,
+                            ),
+                            tooltip: AppLocalizations.of(context)!
+                                .translate('dj_setlist_ai_title'),
+                            onPressed: () {
+                              final l = AppLocalizations.of(context)!;
+                              if (!ProFeatureGuard.canUseProExclusiveNow()) {
+                                FreeFeatureLockedDialog.show(
+                                  context,
+                                  title: l.free_feature_dj_setlist_title,
+                                  description:
+                                      l.free_feature_dj_setlist_description,
+                                );
+                                return;
+                              }
+                              DjSetlistsLibraryPage.requestCreate();
+                              NavigationService().setTabIndex(12);
+                            },
+                          ),
                           _NewPartyButton(session: session, user: user),
-                          // Icon 2: Beendete Partys – eingebettet im bestehenden Layout (mit DJ-Navigation)
                           IconButton(
                             icon: const Icon(Icons.archive),
                             color: Colors.white,
+                            visualDensity: VisualDensity.compact,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(
+                              minWidth: 36,
+                              minHeight: 36,
+                            ),
                             tooltip: AppLocalizations.of(context)!.ended_parties_title,
                             onPressed: () {
-                              setState(() => _showEndedPartys = true);
+                              setState(() {
+                                _showEndedPartys = true;
+                              });
                             },
                           ),
                         ],
@@ -638,25 +688,35 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          child: TextButton.icon(
-                            icon: const Icon(Icons.arrow_back, size: 20, color: Colors.white70),
-                            label: Text(
-                              AppLocalizations.of(context)!.back,
-                              style: const TextStyle(color: Colors.white70),
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                          child: Text(
+                            AppLocalizations.of(context)!.party_history_title,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
                             ),
-                            onPressed: () => setState(() => _showEndedPartys = false),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          child: Align(
+                            alignment: AlignmentDirectional.centerStart,
+                            child: TextButton.icon(
+                              icon: const Icon(Icons.arrow_back, size: 20, color: Colors.white70),
+                              label: Text(
+                                AppLocalizations.of(context)!.back,
+                                style: const TextStyle(color: Colors.white70),
+                              ),
+                              onPressed: () => setState(() => _showEndedPartys = false),
+                            ),
                           ),
                         ),
                         const Expanded(child: BeendetePartysPage(embeddedInMainScaffold: true)),
                       ],
                     )
-                  : StickyPaginationLayout(
-                currentPage: 1,
-                totalPages: 1,
-                onPrevious: null,
-                onNext: null,
-                child: SingleChildScrollView(
+                  : SingleChildScrollView(
                   padding: EdgeInsets.only(
                     left: 16,
                     right: 16,
@@ -667,425 +727,13 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       const SizedBox(height: 24),
-                      // Liste der Partys
-                      StreamBuilder<QuerySnapshot>(
-                stream: () {
-                  final user = FirebaseAuth.instance.currentUser;
-                  if (user == null) {
-                    // Wenn kein User eingeloggt, leere Query zurückgeben
-                    return FirebaseFirestore.instance
-                        .collection('parties')
-                        .where('created_by', isEqualTo: '')
-                        .snapshots();
-                  }
-                  // Filtere nach created_by, damit jeder DJ nur seine eigenen Partys sieht
-                  return FirebaseFirestore.instance
-                      .collection('parties')
-                      .where('created_by', isEqualTo: user.uid)
-                      .snapshots();
-                }(),
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-                  if (snapshot.hasError) {
-                    return Center(
-                      child: Text('${AppLocalizations.of(context)!.party_error} ${snapshot.error}'),
-                    );
-                  }
-                  final parties = snapshot.data?.docs ?? [];
-
-                  // Zeit-Tick: Gruppierung bei jedem _timeStream-Tick neu berechnen (wie home_dj setState),
-                  // damit „Läuft“ → „Beendet“ beim Zeitablauf ohne Firestore-Update umschaltet.
-                  return StreamBuilder<DateTime>(
-                    stream: _timeStream,
-                    initialData: DateTime.now(),
-                    builder: (context, timeSnapshot) {
-                  // Gruppiere Partys: Laufend und Bevorstehend (basierend auf Start-/Enddatum)
-                  // WICHTIG: Keine Filterung nach lifecycle_status - nutze die gesamte Datenbasis
-                  // Die Anzeige basiert ausschließlich auf dem berechneten UI-Status (_getPartyStatus)
-                  final localizations = AppLocalizations.of(context)!;
-                  final running = localizations.party_status_running;
-                  final upcoming = localizations.party_status_upcoming;
-
-                  final runningParties = <QueryDocumentSnapshot>[];
-                  final upcomingParties = <QueryDocumentSnapshot>[];
-
-                  // Iteriere über ALLE Partys; Echtzeit: lifecycle_status/finished_at = sofort "Beendet"
-                  for (final party in parties) {
-                    final data = party.data() as Map<String, dynamic>;
-                    if (data['lifecycle_status'] == 'finished' || data['finished_at'] != null) continue;
-                    final startTimestamp = data['start_date'] as Timestamp?;
-                    final endTimestamp = data['end_date'] as Timestamp?;
-
-                    if (startTimestamp == null || endTimestamp == null) continue;
-
-                    final startDate = startTimestamp.toDate();
-                    final endDate = endTimestamp.toDate();
-                    final status = _getPartyStatus(startDate, endDate, context);
-
-                    if (status == running) {
-                      runningParties.add(party);
-                    } else if (status == upcoming) {
-                      upcomingParties.add(party);
-                    }
-                  }
-
-                  // Sortierung innerhalb der Gruppen (nach Startdatum aufsteigend)
-                  runningParties.sort((a, b) {
-                    final startA = (a.data() as Map<String, dynamic>)['start_date'] as Timestamp;
-                    final startB = (b.data() as Map<String, dynamic>)['start_date'] as Timestamp;
-                    return startA.toDate().compareTo(startB.toDate());
-                  });
-
-                  upcomingParties.sort((a, b) {
-                    final startA = (a.data() as Map<String, dynamic>)['start_date'] as Timestamp;
-                    final startB = (b.data() as Map<String, dynamic>)['start_date'] as Timestamp;
-                    return startA.toDate().compareTo(startB.toDate());
-                  });
-
-                  // Dynamische Slot-Validierung: Free-DJ – pro Abrechnungszeitraum nur erste Party aktiv
-                  final nonFinishedParties = <QueryDocumentSnapshot>[...runningParties, ...upcomingParties];
-                  final quotaExceededIds = (user != null && user.isFree)
-                      ? LimitService.getQuotaExceededPartyIds(user, nonFinishedParties)
-                      : <String>{};
-
-                  // Helper-Funktion für Party-Card
-                  Widget buildPartyCard(QueryDocumentSnapshot party) {
-                    final data = party.data() as Map<String, dynamic>;
-                    final partyName = data['party_name'] as String? ?? localizations.unnamed_party;
-                    final startTimestamp = data['start_date'] as Timestamp?;
-                    final endTimestamp = data['end_date'] as Timestamp?;
-                    
-                    if (startTimestamp == null || endTimestamp == null) {
-                      return const SizedBox.shrink();
-                    }
-                    
-                    final startDate = startTimestamp.toDate();
-                    final endDate = endTimestamp.toDate();
-                    final status = _getPartyStatus(startDate, endDate, context);
-                    final partyCode = data['party_code'] as String?;
-                    final partyId = party.id;
-                    final hasNotStarted = DateTime.now().compareTo(startDate) < 0;
-                    final statusColor = _getPartyStatusColor(status, context);
-                    
-                    // Extrahiere Location und Timezone-Daten (Firestore liefert num → sicher zu double konvertieren)
-                    final locationName = data['location_name'] as String?;
-                    final locationStreet = (data['location_street'] as String?)?.trim();
-                    final locationZip = (data['location_zip'] as String?)?.trim();
-                    final locationCity = (data['location_city'] as String?)?.trim();
-                    final latitude = (data['latitude'] as num?)?.toDouble();
-                    final longitude = (data['longitude'] as num?)?.toDouble();
-                    
-                    // Prüfe verschiedene Feldnamen für timezone_id und behandle "null" Strings
-                    dynamic timezoneIdRaw = data['timezone_id'] ?? 
-                                           data['timezoneId'] ?? 
-                                           data['time_zone_id'] ??
-                                           data['timezone'];
-                    
-                    // Konvertiere "null" String zu null und prüfe auf leere Strings
-                    // STANDARDWERT: Nutze System-Zeitzone wenn nicht vorhanden
-                    String? timezoneId;
-                    if (timezoneIdRaw == null) {
-                      // Standardwert: System-Zeitzone ermitteln
-                      final systemOffset = DateTime.now().timeZoneOffset.inHours;
-                      if (systemOffset == 1 || systemOffset == 2) {
-                        timezoneId = 'Europe/Berlin'; // Standard für Deutschland
-                      } else {
-                        timezoneId = null; // Wird später im Widget behandelt
-                      }
-                    } else if (timezoneIdRaw is String) {
-                      // Behandle "null" String, leere Strings und Whitespace
-                      final cleaned = timezoneIdRaw.trim();
-                      if (cleaned.isEmpty || 
-                          cleaned.toLowerCase() == 'null' || 
-                          cleaned == '') {
-                        // Standardwert statt null
-                        final systemOffset = DateTime.now().timeZoneOffset.inHours;
-                        timezoneId = (systemOffset == 1 || systemOffset == 2) ? 'Europe/Berlin' : null;
-                      } else {
-                        timezoneId = cleaned;
-                      }
-                    } else {
-                      // Versuche zu String zu konvertieren
-                      final converted = timezoneIdRaw.toString().trim();
-                      if (converted.isEmpty || converted.toLowerCase() == 'null') {
-                        // Standardwert statt null
-                        final systemOffset = DateTime.now().timeZoneOffset.inHours;
-                        timezoneId = (systemOffset == 1 || systemOffset == 2) ? 'Europe/Berlin' : null;
-                      } else {
-                        timezoneId = converted;
-                      }
-                    }
-                    
-                    final lifecycleStatus = data['lifecycle_status'] as String?;
-                    final isPaused = data['is_paused'] as bool? ?? false;
-                    
-                    // startTimePosix kann als int (Sekunden) oder int (Millisekunden) gespeichert sein
-                    // Prüfe verschiedene Feldnamen
-                    final startTimePosixRaw = data['startTimePosix'] ?? 
-                                             data['start_time_posix'] ?? 
-                                             data['startTimePosixSeconds'] ??
-                                             data['start_time_posix_seconds'];
-                    
-                    int? startTimePosix;
-                    
-                    if (startTimePosixRaw != null) {
-                      if (startTimePosixRaw is int) {
-                        startTimePosix = startTimePosixRaw < 10000000000 
-                            ? startTimePosixRaw 
-                            : (startTimePosixRaw ~/ 1000);
-                      } else if (startTimePosixRaw is String) {
-                        final parsed = int.tryParse(startTimePosixRaw);
-                        if (parsed != null) {
-                          startTimePosix = parsed < 10000000000 ? parsed : (parsed ~/ 1000);
-                        }
-                      }
-                    }
-                    
-                    if (startTimePosix == null || startTimePosix <= 0) {
-                      startTimePosix = startTimestamp.seconds;
-                    }
-                    
-                    // endTimePosix extrahieren (analog zu startTimePosix)
-                    final endTimePosixRaw = data['endTimePosix'] ?? 
-                                           data['end_time_posix'] ?? 
-                                           data['endTimePosixSeconds'] ??
-                                           data['end_time_posix_seconds'];
-                    
-                    int? endTimePosix;
-                    
-                    if (endTimePosixRaw != null) {
-                      if (endTimePosixRaw is int) {
-                        endTimePosix = endTimePosixRaw < 10000000000 
-                            ? endTimePosixRaw 
-                            : (endTimePosixRaw ~/ 1000);
-                      } else if (endTimePosixRaw is String) {
-                        final parsed = int.tryParse(endTimePosixRaw);
-                        if (parsed != null) {
-                          endTimePosix = parsed < 10000000000 ? parsed : (parsed ~/ 1000);
-                        }
-                      }
-                    }
-                    
-                    if (endTimePosix == null || endTimePosix <= 0) {
-                      endTimePosix = endTimestamp.seconds;
-                    }
-                    
-                    if (timezoneId == null || timezoneId.isEmpty) {
-                      final systemOffset = DateTime.now().timeZoneOffset.inHours;
-                      if (systemOffset == 1 || systemOffset == 2) {
-                        timezoneId = 'Europe/Berlin';
-                      } else if (systemOffset == 0) {
-                        timezoneId = 'Europe/London';
-                      } else {
-                        timezoneId = 'UTC';
-                      }
-                    }
-                    
-                    // GEZIELTE LÖSCH-LOGIK: Prüfe mehrere Bedingungen
-                    // 1. User muss der Ersteller sein (created_by)
-                    // 2. Party muss noch nicht gestartet haben (start_time_posix > jetzt)
-                    // 3. active/upcoming wie bisher; Standby/Kontingent-Überschreitung (Free-DJ): ebenfalls löschbar
-                    final user = FirebaseAuth.instance.currentUser;
-                    final createdBy = data['created_by'] as String?;
-                    final isOwner = user != null && createdBy == user.uid;
-                    
-                    // Zeit-Check: Party darf noch nicht gestartet haben
-                    final nowUnixSeconds = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
-                    final partyNotStarted =
-                        startTimePosix > 0 && nowUnixSeconds < startTimePosix;
-                    
-                    // Status-Check: normale Bearbeitung/Löschen wie bisher für active/upcoming.
-                    // Standby (Free-DJ-Kontingent) oder rein berechnetes Kontingent-Überschreiten: nur Löschen
-                    // (noch nicht gestartet), gleiche Server-Regeln in [_deleteParty].
-                    final isUpcomingLifecycle =
-                        lifecycleStatus == 'active' || lifecycleStatus == 'upcoming';
-                    final isStandbyLifecycle = lifecycleStatus == 'standby';
-                    final canDelete = isOwner &&
-                        partyNotStarted &&
-                        (isUpcomingLifecycle ||
-                            isStandbyLifecycle ||
-                            quotaExceededIds.contains(partyId));
-                    
-                    final allowPreWishes = data['allow_pre_wishes'] == true;
-
-                    return SettingsPartyCard(
-                      partyId: partyId,
-                      partyName: partyName,
-                      allowPreWishes: allowPreWishes,
-                      startDate: startDate,
-                      endDate: endDate,
-                      partyCode: partyCode,
-                      status: status,
-                      statusColor: statusColor,
-                      hasNotStarted: hasNotStarted,
-                      isDeactivated: lifecycleStatus == 'standby' || quotaExceededIds.contains(partyId),
-                      timeStream: _timeStream,
-                      formatDateTime: _formatDateTime,
-                      borderColor: UIConstants.partyYellow,
-                      locationName: locationName,
-                      locationStreet: locationStreet?.isNotEmpty == true ? locationStreet : null,
-                      locationZip: locationZip?.isNotEmpty == true ? locationZip : null,
-                      locationCity: locationCity?.isNotEmpty == true ? locationCity : null,
-                      timezoneId: timezoneId,
-                      startTimePosix: startTimePosix,
-                      endTimePosix: endTimePosix,
-                      latitude: latitude,
-                      longitude: longitude,
-                      isPaused: isPaused,
-                      onEdit: () {
-                        SettingsPartyEditDialog.show(
-                          context,
-                          partyId,
-                          partyName,
-                          startDate,
-                          endDate,
-                          data['party_type'] as String?,
-                          _formatDateTime,
-                          currentGuestLimit: data['guest_limit_per_hour'] as int?,
-                          currentUserLimit: data['user_limit_per_hour'] as int?,
-                        );
-                      },
-                      onDelete: canDelete ? () {
-                        _showDeleteConfirmationDialog(context, partyId, partyName);
-                      } : null,
-                      onPause: status == running ? () {
-                        _showPauseConfirmationDialog(context, partyId, partyName, isPaused);
-                      } : null,
-                      onEnd: status == running ? () {
-                        _showEndPartyConfirmationDialog(context, partyId, partyName);
-                      } : null,
-                      onQrCode: partyCode != null
-                          ? () async {
-                              // Einzeilige Anzeige mit Dubletten-Schutz (Name nur wenn kein Duplikat von Straße/Ort)
-                              final locName = locationName?.trim();
-                              final street = locationStreet?.trim();
-                              final zip = locationZip?.trim();
-                              final city = locationCity?.trim();
-                              final zipCityPart = [if (zip != null && zip.isNotEmpty) zip, if (city != null && city.isNotEmpty) city].join(' ').trim();
-                              final addressPart = [if (street != null && street.isNotEmpty) street, if (zipCityPart.isNotEmpty) zipCityPart].join(', ');
-                              final isExplicitName = locName != null && locName.isNotEmpty &&
-                                  (street == null || street.isEmpty || locName.toLowerCase() != street.toLowerCase()) &&
-                                  (city == null || city.isEmpty || locName.toLowerCase() != city.toLowerCase());
-                              final locationDisplay = addressPart.isNotEmpty
-                                  ? (isExplicitName ? '$locName · $addressPart' : addressPart)
-                                  : (locName != null && locName.isNotEmpty ? locName : null);
-                              final mapsUrl = (latitude != null && longitude != null)
-                                  ? 'https://www.google.com/maps/search/?api=1&query=$latitude,$longitude'
-                                  : null;
-
-                              // Fetch DJ Logo + Kontaktdaten
-                              String? djLogoUrl;
-                              String? profileImageUrl;
-                              String? djEmail;
-                              String? djPhone;
-                              String? djAlternativeEmail;
-                              try {
-                                final user = FirebaseAuth.instance.currentUser;
-                                if (user != null) {
-                                  final userDoc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
-                                  final userData = userDoc.data();
-                                  djLogoUrl = userData?['djLogoUrl'];
-                                  profileImageUrl = userData?['profileImageUrl'] ?? user.photoURL;
-                                  djEmail = user.email ?? userData?['email'] as String?;
-                                  djPhone = userData?['phoneNumber'] as String?;
-                                  if (userData?['useAlternativeEmail'] == true) {
-                                    djAlternativeEmail = userData?['alternativeEmail'] as String?;
-                                  }
-                                }
-                              } catch (_) {}
-
-                              if (context.mounted) {
-                                PartyQrCodeDialog.show(
-                                context: context,
-                                party: Party(
-                                  partyName: partyName,
-                                  startDate: startDate,
-                                  endDate: endDate,
-                                  partyCode: partyCode,
-                                  partyLocation: locationDisplay,
-                                  locationUrl: mapsUrl,
-                                ),
-                                djName: FirebaseAuth.instance.currentUser?.displayName,
-                                djLogoUrl: djLogoUrl,
-                                profileImageUrl: profileImageUrl,
-                                djEmail: djEmail,
-                                djPhone: djPhone,
-                                djAlternativeEmail: djAlternativeEmail,
-                              );
-                              }
-                            }
-                          : () {},
-                    );
-                  }
-                  
-                  // Helper-Funktion für Sektions-Header
-                  Widget buildSectionHeader(String title, Color color) {
-                    return Padding(
-                      padding: const EdgeInsets.only(top: 20, bottom: 12, left: 4),
-                      child: Text(
-                        title,
-                        style: TextStyle(
-                          color: color,
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    );
-                  }
-                  
-                  return Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Sektion 1: LÄUFT
-                      if (runningParties.isNotEmpty) ...[
-                        buildSectionHeader(running, Colors.green),
-                        ...runningParties.map((party) => buildPartyCard(party)),
-                      ],
-                      
-                      // Sektion 2: BEVORSTEHEND
-                      if (upcomingParties.isNotEmpty) ...[
-                        buildSectionHeader(upcoming, UIConstants.appOrange),
-                        ...upcomingParties.map((party) => buildPartyCard(party)),
-                      ] else if (runningParties.isEmpty) ...[
-                        // "Keine Partys" nur wenn beide Listen leer sind
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 32),
-                          child: Center(
-                            child: Text(
-                              localizations.no_further_parties_planned,
-                              style: TextStyle(
-                                color: Colors.grey[400],
-                                fontSize: 14,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                      if (session?.isActive != true) ...[
-                        const SizedBox(height: 20),
-                        const ProPromotionBanner(
-                          message: 'Mit Pro unbegrenzt Partys planen',
-                          compactPadding: false,
-                        ),
-                      ],
-                      // Footer-Abstand
-                      const SizedBox(height: UIConstants.kFooterPadding * 2),
-                    ],
-                  );
-                    },
-                  );
-                    },
-                  ),
+                      _buildPartyList(session: session, user: user),
                     ],
                   ),
                 ),
-              ),
-            ),
-          ],
-        );
+                    ),
+                  ],
+                );
           },
           );
           },
@@ -1093,7 +741,260 @@ class _PartyVerwaltungPageState extends State<PartyVerwaltungPage> {
       ),
     );
   }
+
+  DateTime? _partyStartDate(Map<String, dynamic> data) {
+    final startTs = data['start_date'] as Timestamp?;
+    if (startTs != null) return startTs.toDate();
+    return DjHomePartyUtils.partyStartDate(data);
+  }
+
+  DateTime? _partyEndDate(Map<String, dynamic> data) {
+    final endTs = data['end_date'] as Timestamp?;
+    if (endTs != null) return endTs.toDate();
+    return DjHomePartyUtils.partyEndDate(data);
+  }
+
+  /// Backup-Logik (git HEAD) + posix-Fallback für Start/Ende.
+  Widget _buildPartyList({
+    required SessionProStatus? session,
+    required UserModel? user,
+  }) {
+    final authUser = FirebaseAuth.instance.currentUser;
+    if (authUser == null) {
+      final l = AppLocalizations.of(context)!;
+      return Text(
+        l.not_logged_in,
+        style: const TextStyle(color: Colors.white),
+      );
+    }
+
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('parties')
+          .where('created_by', isEqualTo: authUser.uid)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          final l = AppLocalizations.of(context)!;
+          return Text(
+            '${l.error_loading_prefix}: ${snapshot.error}',
+            style: const TextStyle(color: Colors.red),
+          );
+        }
+        final parties = snapshot.data?.docs ?? [];
+
+        return StreamBuilder<DateTime>(
+          stream: _timeStream,
+          initialData: DateTime.now(),
+          builder: (context, timeSnapshot) {
+            final localizations = AppLocalizations.of(context)!;
+            final runningLabel = localizations.party_status_running;
+            final upcomingLabel = localizations.party_status_upcoming;
+
+            final runningParties = <QueryDocumentSnapshot>[];
+            final upcomingParties = <QueryDocumentSnapshot>[];
+
+            for (final party in parties) {
+              final data = party.data() as Map<String, dynamic>;
+              if (data['lifecycle_status'] == 'finished' ||
+                  data['finished_at'] != null) {
+                continue;
+              }
+              final startDate = _partyStartDate(data);
+              final endDate = _partyEndDate(data);
+              if (startDate == null || endDate == null) continue;
+
+              final status = _getPartyStatus(startDate, endDate, context);
+              if (status == runningLabel) {
+                runningParties.add(party);
+              } else if (status == upcomingLabel) {
+                upcomingParties.add(party);
+              }
+            }
+
+            runningParties.sort((a, b) {
+              final sa = _partyStartDate(a.data() as Map<String, dynamic>);
+              final sb = _partyStartDate(b.data() as Map<String, dynamic>);
+              return (sa ?? DateTime(0)).compareTo(sb ?? DateTime(0));
+            });
+            upcomingParties.sort((a, b) {
+              final sa = _partyStartDate(a.data() as Map<String, dynamic>);
+              final sb = _partyStartDate(b.data() as Map<String, dynamic>);
+              return (sa ?? DateTime(0)).compareTo(sb ?? DateTime(0));
+            });
+
+            final nonFinishedParties = <QueryDocumentSnapshot>[
+              ...runningParties,
+              ...upcomingParties,
+            ];
+            final quotaExceededIds = (user != null && user.isFree)
+                ? LimitService.getQuotaExceededPartyIds(user, nonFinishedParties)
+                : <String>{};
+
+            Widget buildSectionHeader(String title, Color color) {
+              return Padding(
+                padding: const EdgeInsets.only(top: 20, bottom: 12, left: 4),
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              );
+            }
+
+            Widget buildPartyCard(QueryDocumentSnapshot party) {
+              final data = party.data() as Map<String, dynamic>;
+              final partyName =
+                  data['party_name'] as String? ?? localizations.unnamed_party;
+              final startDate = _partyStartDate(data);
+              final endDate = _partyEndDate(data);
+              if (startDate == null || endDate == null) {
+                return const SizedBox.shrink();
+              }
+              final partyCode = data['party_code'] as String?;
+              final partyId = party.id;
+              final status = _getPartyStatus(startDate, endDate, context);
+              final hasNotStarted = DateTime.now().isBefore(startDate);
+              final statusColor = _getPartyStatusColor(status, context);
+              final lifecycleStatus = data['lifecycle_status'] as String?;
+              final isPaused = data['is_paused'] as bool? ?? false;
+              final allowPreWishes = data['allow_pre_wishes'] == true;
+
+              final startTimePosix =
+                  (data['start_time_posix'] as int?) ??
+                  (data['start_date'] as Timestamp?)?.seconds;
+              final endTimePosix =
+                  (data['end_time_posix'] as int?) ??
+                  (data['end_date'] as Timestamp?)?.seconds;
+
+              final auth = FirebaseAuth.instance.currentUser;
+              final createdBy = data['created_by'] as String?;
+              final isOwner = auth != null && createdBy == auth.uid;
+              final nowUnix = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
+              final partyNotStarted =
+                  (startTimePosix ?? 0) > 0 && nowUnix < (startTimePosix ?? 0);
+              final isUpcomingLifecycle =
+                  lifecycleStatus == 'active' || lifecycleStatus == 'upcoming';
+              final isStandbyLifecycle = lifecycleStatus == 'standby';
+              final canDelete = isOwner &&
+                  partyNotStarted &&
+                  (isUpcomingLifecycle ||
+                      isStandbyLifecycle ||
+                      quotaExceededIds.contains(partyId));
+
+              return SettingsPartyCard(
+                key: ValueKey('party-card-$partyId'),
+                allowPastScheduledEnd: true,
+                partyId: partyId,
+                partyName: partyName,
+                partyType: data['party_type'] as String?,
+                floorKey: data['floor_key'] as String?,
+                floorLabel: data['floor_label'] as String?,
+                allowPreWishes: allowPreWishes,
+                startDate: startDate,
+                endDate: endDate,
+                partyCode: partyCode,
+                status: status,
+                statusColor: statusColor,
+                hasNotStarted: hasNotStarted,
+                isDeactivated: lifecycleStatus == 'standby' ||
+                    quotaExceededIds.contains(partyId),
+                timeStream: _timeStream,
+                formatDateTime: _formatDateTime,
+                borderColor: UIConstants.partyYellow,
+                locationName: data['location_name'] as String?,
+                onEdit: () {
+                  SettingsPartyEditDialog.show(
+                    context,
+                    partyId,
+                    partyName,
+                    startDate,
+                    endDate,
+                    data['party_type'] as String?,
+                    _formatDateTime,
+                    currentGuestLimit: data['guest_limit_per_hour'] as int?,
+                    currentUserLimit: data['user_limit_per_hour'] as int?,
+                  );
+                },
+                onDelete: canDelete
+                    ? () => _showDeleteConfirmationDialog(
+                          context,
+                          partyId,
+                          partyName,
+                        )
+                    : null,
+                onPause: status == runningLabel
+                    ? () => _showPauseConfirmationDialog(
+                          context,
+                          partyId,
+                          partyName,
+                          isPaused,
+                        )
+                    : null,
+                onEnd: status == runningLabel
+                    ? () => _showEndPartyConfirmationDialog(
+                          context,
+                          partyId,
+                          partyName,
+                        )
+                    : null,
+                onQrCode: partyCode != null
+                    ? () => PartyQrLaunchHelper.showForPartyData(
+                          context: context,
+                          partyId: partyId,
+                          data: data,
+                        )
+                    : () {},
+                isPaused: isPaused,
+                startTimePosix: startTimePosix,
+                endTimePosix: endTimePosix,
+              );
+            }
+
+            final hasManaged = runningParties.isNotEmpty ||
+                upcomingParties.isNotEmpty;
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (runningParties.isNotEmpty) ...[
+                  buildSectionHeader(runningLabel, Colors.green),
+                  ...runningParties.map(buildPartyCard),
+                ],
+                if (upcomingParties.isNotEmpty) ...[
+                  buildSectionHeader(upcomingLabel, UIConstants.appOrange),
+                  ...upcomingParties.map(buildPartyCard),
+                ],
+                if (!hasManaged)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 32),
+                    child: Text(
+                      localizations.no_further_parties_planned,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.grey[400], fontSize: 14),
+                    ),
+                  ),
+                if (session?.isActive != true) ...[
+                  const SizedBox(height: 20),
+                  ProPromotionBanner(
+                    message: localizations.party_management_pro_banner,
+                    compactPadding: false,
+                  ),
+                ],
+                const SizedBox(height: UIConstants.kFooterPadding * 2),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
 }
+
 
 /// Button „Neue Party“: Bei Pro immer aktiv, bei Free nur wenn Kontingent nicht ausgeschöpft (sonst ausgegraut, Klick zeigt Dialog).
 class _NewPartyButton extends StatefulWidget {
@@ -1117,6 +1018,9 @@ class _NewPartyButtonState extends State<_NewPartyButton> {
       return IconButton(
         icon: const Icon(Icons.add_circle_outline),
         color: Colors.grey,
+        visualDensity: VisualDensity.compact,
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
         onPressed: null,
         tooltip: AppLocalizations.of(context)!.new_party,
       );
@@ -1126,6 +1030,9 @@ class _NewPartyButtonState extends State<_NewPartyButton> {
     return IconButton(
       icon: const Icon(Icons.add_circle_outline),
       color: UIConstants.appOrange,
+      visualDensity: VisualDensity.compact,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
       tooltip: AppLocalizations.of(context)!.new_party,
       onPressed: () => NeuePartyPage.show(context),
     );

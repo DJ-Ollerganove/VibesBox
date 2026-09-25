@@ -1,5 +1,5 @@
 #include? "Pods/Target Support Files/Pods-Runner/Pods-Runner.profile.xcconfig"
 #include "Generated.xcconfig"
 // iOS-App-Version bewusst getrennt von Android (pubspec = Play Store).
-FLUTTER_BUILD_NAME=1.0.15
-FLUTTER_BUILD_NUMBER=15
+FLUTTER_BUILD_NAME=1.1.40
+FLUTTER_BUILD_NUMBER=40

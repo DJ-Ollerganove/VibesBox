@@ -125,7 +125,7 @@
       try {
         if (typeof localStorage === 'undefined') return;
         var fromUrl = (typeof window.readPwaUrlLangParam === 'function') ? window.readPwaUrlLangParam() : '';
-        if (fromUrl && fromUrl !== 'ar' && typeof window.persistUrlLanguageToAllStorage === 'function') {
+        if (fromUrl && typeof window.persistUrlLanguageToAllStorage === 'function') {
           window.persistUrlLanguageToAllStorage(fromUrl);
         }
       } catch (e) {}
@@ -147,7 +147,6 @@
         var lang = '';
         if (typeof window.readPwaUrlLangParam === 'function') lang = window.readPwaUrlLangParam();
         if (!lang && typeof window.vbGetResolvedPwaLanguageCode === 'function') lang = window.vbGetResolvedPwaLanguageCode();
-        if (lang === 'ar') lang = '';
         var suffix = lang ? ('?lang=' + encodeURIComponent(lang)) : '';
         window.history.replaceState({}, document.title, path + suffix);
       } catch (e) {
@@ -176,6 +175,118 @@
         }
       } catch (ePr) {}
     })();
+
+    /** Boot-Race: checkWishboxStatus erst nach processQRCodeLogin (verhindert parallelen clearPartyData-Redirect). */
+    window.__vbDeferWishboxStatusUntilBoot = true;
+
+    function vbIsOnWishboxPath() {
+      try {
+        return (window.location.pathname || '').toLowerCase().indexOf('/vb') !== -1;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function vbHasPendingJoinCode8() {
+      try {
+        if (typeof sessionStorage === 'undefined') return false;
+        var pend = sessionStorage.getItem('vb_pending_join_code');
+        if (pend && String(pend).replace(/\D/g, '').length >= 8) return true;
+      } catch (e) {}
+      try {
+        var ls = localStorage.getItem('pending_party_code');
+        if (ls && String(ls).replace(/\D/g, '').length >= 8) return true;
+      } catch (e2) {}
+      return false;
+    }
+
+    /** True wenn Gast gerade per QR/Code joined oder ein Status-Modal/Floor-Picker sichtbar ist. */
+    function vbHasAnyJoinFlowSignal() {
+      if (typeof window.vbGetSessionPartyCode8 === 'function' && window.vbGetSessionPartyCode8()) return true;
+      if (vbHasPendingJoinCode8()) return true;
+      if (document.getElementById('partyCodeErrorModalOverlay')) return true;
+      if (document.getElementById('vbPartyEndedOverlay')) return true;
+      var floorOv = document.getElementById('guestFloorPickerOverlay');
+      if (floorOv && floorOv.style.display !== 'none') return true;
+      return false;
+    }
+
+    function vbGetActiveJoinCode8() {
+      try {
+        if (typeof window.vbGetSessionPartyCode8 === 'function') {
+          var s = window.vbGetSessionPartyCode8();
+          if (s) return s;
+        }
+      } catch (e0) {}
+      try {
+        var raw = typeof window.vbGetPartyCodeFromUrl === 'function' ? window.vbGetPartyCodeFromUrl() : null;
+        if (raw != null && String(raw).trim() !== '') {
+          var d = String(raw).replace(/\D/g, '').substring(0, 8);
+          if (d.length === 8 && /^\d+$/.test(d)) return d;
+        }
+      } catch (e1) {}
+      return null;
+    }
+
+    /** Nur validated*-Felder — Join-Code in Session bleibt erhalten. */
+    function vbClearStaleValidatedPartyStorage() {
+      try {
+        localStorage.removeItem('validatedPartyId');
+        localStorage.removeItem('validatedPartyCode');
+        localStorage.removeItem('validatedPartyName');
+        localStorage.removeItem('currentPartyName');
+        sessionStorage.removeItem('validatedPartyId');
+        sessionStorage.removeItem('validatedPartyCode');
+        sessionStorage.removeItem('validatedPartyName');
+        sessionStorage.removeItem('currentPartyName');
+      } catch (e) {}
+    }
+
+    /** Neuer QR/Session-Code ≠ gespeicherte Party → alte validated*-Daten entfernen (Race vor Auto-Login). */
+    function vbClearStaleValidatedPartyIfJoinCodeMismatch() {
+      try {
+        var join8 = vbGetActiveJoinCode8();
+        if (!join8) return false;
+        var storedCode = localStorage.getItem('validatedPartyCode') || sessionStorage.getItem('validatedPartyCode');
+        var storedEight = storedCode ? String(storedCode).replace(/\D/g, '').substring(0, 8) : '';
+        if (storedEight === join8) return false;
+        var hasStale = localStorage.getItem('validatedPartyId') || sessionStorage.getItem('validatedPartyId') || storedCode;
+        if (!hasStale) return false;
+        if (window.IS_DEBUG) console.log('vbClearStaleValidatedPartyIfJoinCodeMismatch: neuer Code', join8, '— alte Party-Daten entfernen');
+        vbClearStaleValidatedPartyStorage();
+        return true;
+      } catch (e) {}
+      return false;
+    }
+
+    function vbMaybeCheckWishboxStatus(options) {
+      if (window.__vbDeferWishboxStatusUntilBoot === true) {
+        if (window.IS_DEBUG) console.log('vbMaybeCheckWishboxStatus: Boot läuft — überspringe');
+        return;
+      }
+      checkWishboxStatus(options);
+    }
+
+    /** Redirect zur Root — auf /vb/ nur bei direktem Besuch ohne Code; nie während Join/Status-Modal. */
+    function vbRedirectToRootPwa(reason, force) {
+      if (force) {
+        window.location.replace('/');
+        return;
+      }
+      if (vbHasAnyJoinFlowSignal()) {
+        if (window.IS_DEBUG) console.log('vbRedirectToRootPwa: Join-Signal — kein Redirect (' + (reason || '') + ')');
+        if (typeof updateWishboxUI === 'function') updateWishboxUI();
+        return;
+      }
+      var allowLeaveVb = (reason === 'entryGate' || reason === 'bootNoCode');
+      if (vbIsOnWishboxPath() && !allowLeaveVb) {
+        if (window.IS_DEBUG) console.log('vbRedirectToRootPwa: bleibe auf /vb/ (' + (reason || '') + ')');
+        if (typeof updateWishboxUI === 'function') updateWishboxUI();
+        return;
+      }
+      if (window.IS_DEBUG) console.log('vbRedirectToRootPwa:', reason || '(ohne Grund)');
+      window.location.replace('/');
+    }
 
     /** Storage + data-i18n / Titel nach Navigation (Header nutzt oft nur localStorage — hier abgleichen). */
     window.vbApplyResolvedLanguageToUi = function vbApplyResolvedLanguageToUi() {
@@ -294,6 +405,74 @@
       clean.order = order;
       return clean;
     }
+
+    function vbReadCachedDjSocials() {
+      try {
+        var raw = sessionStorage.getItem('currentDjSocials');
+        if (!raw) return null;
+        var parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return null;
+        return sanitizeSocialsData(parsed);
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function vbSocialsHaveLinks(socialsData) {
+      if (!socialsData) return false;
+      var order = socialsData.order || socialsData.socialOrder || [];
+      if (order.length > 0) return true;
+      return Object.keys(socialsData).some(function (k) {
+        return k !== 'order' && k !== 'socialOrder' && socialsData[k];
+      });
+    }
+
+    async function vbFetchRemoteDjSocials() {
+      var uid = (sessionStorage.getItem('validatedPartyDjId') || localStorage.getItem('validatedPartyDjId') || '').trim();
+      if (!uid) {
+        var validatedPartyId = localStorage.getItem('validatedPartyId') || sessionStorage.getItem('validatedPartyId');
+        if (!validatedPartyId || validatedPartyId === 'manual' || validatedPartyId === '') return null;
+        try {
+          var partyRef = window.firebaseDoc(window.firebaseCollection(window.firebaseDb, 'parties'), validatedPartyId);
+          var partyDoc = await window.firebaseGetDoc(partyRef);
+          if (!partyDoc.exists()) return null;
+          uid = String(partyDoc.data().created_by || '').trim();
+          if (uid) {
+            sessionStorage.setItem('validatedPartyDjId', uid);
+            localStorage.setItem('validatedPartyDjId', uid);
+          }
+        } catch (eParty) {
+          if (window.IS_DEBUG) console.warn('vbFetchRemoteDjSocials party:', eParty);
+          return null;
+        }
+      }
+      if (!uid) return null;
+      try {
+        var socialsRef = window.firebaseDoc(window.firebaseCollection(window.firebaseDb, 'social_media_links'), uid);
+        var socialsSnap = await window.firebaseGetDoc(socialsRef);
+        if (!socialsSnap || !socialsSnap.exists()) return null;
+        var socialsData = sanitizeSocialsData(socialsSnap.data());
+        try { sessionStorage.setItem('currentDjSocials', JSON.stringify(socialsData)); } catch (eStore) {}
+        return socialsData;
+      } catch (e) {
+        if (window.IS_DEBUG) console.warn('vbFetchRemoteDjSocials:', e);
+        return null;
+      }
+    }
+
+    function vbApplyPartyDjLogo(logoContainer, logoImg, partyData) {
+      if (!logoContainer || !logoImg || !partyData) return false;
+      var planType = (sessionStorage.getItem('djPlanType') || '').toLowerCase();
+      var logoUrl = (planType === 'free') ? 'icon/vibesbox-logo.png' : (partyData.dj_logo || null);
+      if (logoUrl) {
+        logoImg.src = logoUrl;
+        logoImg.style.display = 'block';
+        logoContainer.style.display = 'flex';
+        return true;
+      }
+      logoContainer.style.display = 'none';
+      return false;
+    }
     
     // Debounce Timer
     let titleDebounceTimer = null;
@@ -306,11 +485,19 @@
     // Wunschbox Status
     let isWishboxActive = false;
     let vbFloorPickerOptions = null;
+    let vbFloorSelectionActive = false;
     let vbFloorJoinInProgress = false;
     let vbMultiFloorAvailable = false;
     let vbPendingJoinCodeForFloorPick = null;
     let vbFloorEndedRedirectLabel = null;
+
+    function vbIsFloorPickerActive() {
+      return vbFloorSelectionActive === true
+        || (vbFloorPickerOptions && vbFloorPickerOptions.length > 0);
+    }
     let isPreWishMode = false;
+    /** Vorab-Wünsche vom DJ pausiert — Wunschbox darf nicht erscheinen (auch nach Poll). */
+    let isPreWishesPausedMode = false;
     let isBlocked = false;
     let partyCodeFromUrl = null;
     let blockStatusListeners = []; // Permanente Realtime-Listener für Block-Status
@@ -367,6 +554,21 @@
         localStorage.setItem('validatedPartyDjId', djUid);
       } catch (_) {}
       vbBindWishboxGuestLiveStream(djUid);
+      vbBindSongBlacklistWatch(djUid);
+    }
+
+    function vbBindSongBlacklistWatch(djId) {
+      if (typeof window.vbStartSongBlacklistWatch !== 'function') return;
+      var partyId = '';
+      try {
+        partyId = sessionStorage.getItem('validatedPartyId') ||
+          localStorage.getItem('validatedPartyId') || '';
+      } catch (_) {}
+      window.vbStartSongBlacklistWatch(djId, partyId, function (state) {
+        if (state && state.enabled === false) {
+          hideBlacklistErrorIfShowing();
+        }
+      });
     }
 
     async function vbBindWishboxGuestLiveStream(djId) {
@@ -783,6 +985,16 @@
         let currentPartyId = partyCtx.party_id;
         const currentPartyCode = partyCtx.party_code;
         const currentPartyDjId = partyCtx.dj_id || '';
+        const blacklistDecision = (typeof window.vbSongBlacklistDecision === 'function')
+          ? await window.vbSongBlacklistDecision(currentPartyDjId, title, artist, currentPartyId)
+          : { enabled: false, hit: false, guestBlock: false };
+        if (blacklistDecision.guestBlock) {
+          clearWishFormFields();
+          showBlacklistBlockedError();
+          resetSubmitButtonAfterError();
+          return;
+        }
+        const blacklistHit = !!blacklistDecision.hit;
         if (partyCodeInput && currentPartyCode && currentPartyCode !== 'manual') {
           partyCodeInput.value = currentPartyCode;
         }
@@ -799,8 +1011,14 @@
             );
             const partySnap = await window.firebaseGetDoc(partyRef);
             const partyLive = partySnap.exists() ? partySnap.data() : null;
-            if (!partyLive || !window.vbIsPreWishWindowOpen(partyLive)) {
+            if (!partyLive || !(typeof window.vbIsPreWishSubmissionOpen === 'function'
+                ? window.vbIsPreWishSubmissionOpen(partyLive)
+                : window.vbIsPreWishWindowOpen(partyLive))) {
+              if (partyLive && window.vbArePreWishesPaused && window.vbArePreWishesPaused(partyLive)) {
+                showError(t('pre_wishes_paused_guest_message', 'Enough advance requests have already been received – no further requests can be submitted for now.'));
+              } else {
               showError(t('pre_wish_submit_blocked_deadline', 'Advance requests are only available until 6 hours before the party starts.'));
+              }
               isSubmitting = false;
               submitBtn.disabled = false;
               submitBtn.innerHTML = '<span>📤</span><span>' + (t('submit_wish', 'Send request')) + '</span>';
@@ -889,7 +1107,7 @@
 
         if (window.IS_DEBUG) console.log('=== DUPLIKAT-PRÜFUNG STARTET ===');
         
-        if (similarWish) {
+        if (similarWish && !blacklistHit) {
           if (window.IS_DEBUG) console.log('✓✓✓ DUPLIKAT GEFUNDEN! ✓✓✓');
           if (window.IS_DEBUG) console.log('Original-ID: ' + similarWish.id);
           
@@ -938,11 +1156,11 @@
             } else if (person === originalOwnerName && baseCreated) {
               createdAtList.push(baseCreated);
             } else if (person === sanitizedName) {
-              createdAtList.push(window.firebaseServerTimestamp());
+              createdAtList.push(window.firebaseTimestamp.now());
             } else if (baseCreated) {
               createdAtList.push(baseCreated);
             } else {
-              createdAtList.push(window.firebaseServerTimestamp());
+              createdAtList.push(window.firebaseTimestamp.now());
             }
           }
           
@@ -962,7 +1180,8 @@
             requested_by: requestedBy,
             createdAt_list: createdAtList,
             greetings: greetings,
-            is_registered_users: existingIsRegisteredUsers
+            is_registered_users: existingIsRegisteredUsers,
+            duplicate_updated_at: window.firebaseServerTimestamp(),
           };
           if (originalData.is_pre_wish === true && originalData.pre_wish_published !== true) {
             updateData.pre_wish_published = true;
@@ -999,6 +1218,7 @@
             browser_language: pwaWishBrowserLanguage,
             client_platform: pwaWishClientPlatform
           };
+          if (blacklistHit && blacklistDecision.enabled) window.vbStampSongBlacklistReject(wishData);
           
           // ✅ DEBUGGING: Logge das komplette wishData Objekt
           if (window.IS_DEBUG) console.log('✅ Basisdaten geladen');
@@ -1058,6 +1278,7 @@
             browser_language: pwaWishBrowserLanguage,
             client_platform: pwaWishClientPlatform
           };
+          if (blacklistHit && blacklistDecision.enabled) window.vbStampSongBlacklistReject(wishData);
           if (name) {
             wishData.name = name;
             wishData.requested_by = [name];
@@ -1208,11 +1429,13 @@
             
             // Erfolgsmeldung verstecken
             successMessage.classList.remove('show');
-            
-            // Formular wieder anzeigen
-            form.style.display = 'block';
-            
-            // ✅ Limit wird durch onSnapshot-Stream aktuell gehalten – kein updateWishLimitInfo nötig
+
+            // Nicht blind Formular zeigen — Sperre/Pause/Inaktiv hat Vorrang (Realtime)
+            if (typeof updateWishboxUI === 'function') {
+              updateWishboxUI();
+            } else {
+              form.style.display = 'block';
+            }
             
             // Scroll nach oben
             window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1408,13 +1631,67 @@
       });
     }
 
+    var lastErrorI18n = null;
+
+    function showBlacklistBlockedError() {
+      lastErrorI18n = { kind: 'blacklist' };
+      var blockedTitle = t('song_blacklist_guest_blocked_title', 'Request not possible');
+      var blockedBody = t(
+        'song_blacklist_guest_blocked',
+        'This title cannot be requested at this party. Please choose another song.'
+      );
+      errorMessage.textContent = blockedTitle ? (blockedTitle + ' — ' + blockedBody) : blockedBody;
+      errorMessage.classList.add('show');
+    }
+
+    function refreshWishErrorI18n() {
+      if (!errorMessage || !errorMessage.classList.contains('show')) return;
+      if (!lastErrorI18n || lastErrorI18n.kind !== 'blacklist') return;
+      var blockedTitle = t('song_blacklist_guest_blocked_title', 'Request not possible');
+      var blockedBody = t(
+        'song_blacklist_guest_blocked',
+        'This title cannot be requested at this party. Please choose another song.'
+      );
+      errorMessage.textContent = blockedTitle ? (blockedTitle + ' — ' + blockedBody) : blockedBody;
+    }
+    window.vbRefreshWishErrorI18n = refreshWishErrorI18n;
+
+    function hideBlacklistErrorIfShowing() {
+      if (!lastErrorI18n || lastErrorI18n.kind !== 'blacklist') return;
+      hideError();
+    }
+
+    function clearWishFormFields() {
+      selectedSpotifyTrack = null;
+      currentSelectedArtist = null;
+      if (form) form.reset();
+      if (titleInput) titleInput.value = '';
+      if (artistInput) artistInput.value = '';
+      if (greetingInput) greetingInput.value = '';
+      if (nameInput) nameInput.value = '';
+      if (titleSuggestions) {
+        titleSuggestions.classList.remove('show');
+        titleSuggestions.innerHTML = '';
+      }
+      if (artistSuggestions) {
+        artistSuggestions.classList.remove('show');
+        artistSuggestions.innerHTML = '';
+      }
+      if (charCount) charCount.textContent = '0 / 200';
+      if (nameCharCount) nameCharCount.textContent = '0 / 120';
+      if (titleCharCount) titleCharCount.textContent = '0 / 120';
+      if (artistCharCount) artistCharCount.textContent = '0 / 120';
+    }
+
     function showError(message) {
+      lastErrorI18n = null;
       errorMessage.textContent = message;
       errorMessage.classList.add('show');
     }
 
     // Fehlermeldung verstecken
     function hideError() {
+      lastErrorI18n = null;
       errorMessage.classList.remove('show');
     }
 
@@ -2256,17 +2533,17 @@
         return; // Cache ist aktuell
       }
       
-      try {
+        try {
         localHistoryCache = [];
         
-        // 1. Prüfe in music_history – Filter: party_id (mit Unterstrich)
         const historySessionsQuery = window.firebaseQuery(
           window.firebaseCollection(window.firebaseDb, 'music_history'),
           window.firebaseWhere('party_id', '==', partyId)
         );
         const historySessionsSnapshot = await window.firebaseGetDocs(historySessionsQuery);
 
-        for (const sessionDoc of historySessionsSnapshot.docs) {
+        const sessionDocs = historySessionsSnapshot.docs.slice(0, 4);
+        const trackSnaps = await Promise.all(sessionDocs.map(function (sessionDoc) {
           const tracksRef = window.firebaseCollection(
             window.firebaseDb,
             'music_history/' + sessionDoc.id + '/tracks'
@@ -2276,8 +2553,10 @@
             window.firebaseOrderBy('timestamp', 'desc'),
             window.firebaseLimit(PWA_FS_RECENT_TRACKS_PER_SESSION)
           );
-          const tracksSnapshot = await window.firebaseGetDocs(tracksRecentQ);
+          return window.firebaseGetDocs(tracksRecentQ);
+        }));
 
+        for (const tracksSnapshot of trackSnaps) {
           for (const trackDoc of tracksSnapshot.docs) {
             const trackData = trackDoc.data();
             localHistoryCache.push({
@@ -2596,9 +2875,21 @@
       }
     }
 
-    /** Ein Dokument aus `parties` per Join-Code: party_code / fixed_party_code (nur 8-stellig). Bei mehreren Treffern: laufend → nächste zukünftige → zuletzt beendet. */
+    /** Ein Dokument aus `parties` per Join-Code (legacy-tolerant, ohne lifecycle_status-Filter). */
     async function findPartyDocByJoinCode(partyCode) {
       if (!partyCode || partyCode === 'manual') return null;
+      const normalized = String(partyCode).trim();
+      if (normalized.length !== 8) return null;
+
+      if (typeof window.vbCollectJoinCodePartyDocs === 'function') {
+        const allDocs = await window.vbCollectJoinCodePartyDocs(normalized);
+        if (!allDocs || allDocs.length === 0) return null;
+        if (typeof window.pickBestPartyDocForJoinCode === 'function') {
+          return window.pickBestPartyDocForJoinCode(allDocs, new Date());
+        }
+        return allDocs[0];
+      }
+
       const partiesRef = window.firebaseCollection(window.firebaseDb, 'parties');
       const numericCode = parseInt(partyCode, 10);
       const lifecycleJoin = ['active', 'finished', 'standby', 'upcoming'];
@@ -2657,6 +2948,134 @@
       return tpl.split('{floorLabel}').join(label).split('{djName}').join(dj);
     }
 
+    var vbPartySessionGeneration = 0;
+
+    function vbClearPartyBrandingCache() {
+      try { window.__vbCachedPartyBrandingData = null; } catch (e) {}
+    }
+
+    function vbShouldShowFloorPickerForOptions(options) {
+      if (typeof window.vbFloorOptionsHaveMultipleDistinctKeys === 'function') {
+        return window.vbFloorOptionsHaveMultipleDistinctKeys(options);
+      }
+      if (!options || options.length <= 1) return false;
+      var keys = Object.create(null);
+      var defKey = (typeof window.VB_DEFAULT_FLOOR_KEY === 'string') ? window.VB_DEFAULT_FLOOR_KEY : 'default';
+      for (var i = 0; i < options.length; i++) {
+        var k = options[i].floor_key;
+        if (k == null || String(k).trim() === '') k = defKey;
+        else k = String(k).trim();
+        keys[k] = true;
+      }
+      return Object.keys(keys).length > 1;
+    }
+
+    function vbHasMultipleJoinableFloors(options, currentPartyId) {
+      if (!vbShouldShowFloorPickerForOptions(options)) return false;
+      if (!currentPartyId) return true;
+      var defKey = (typeof window.VB_DEFAULT_FLOOR_KEY === 'string') ? window.VB_DEFAULT_FLOOR_KEY : 'default';
+      var currentKey = null;
+      var currentListed = false;
+      for (var i = 0; i < options.length; i++) {
+        if (options[i].party_id === currentPartyId) {
+          currentListed = true;
+          currentKey = options[i].floor_key;
+          if (currentKey == null || String(currentKey).trim() === '') currentKey = defKey;
+          else currentKey = String(currentKey).trim();
+          break;
+        }
+      }
+      if (!currentListed) return false;
+      if (!currentKey) return false;
+      for (var j = 0; j < options.length; j++) {
+        if (options[j].party_id === currentPartyId) continue;
+        var otherKey = options[j].floor_key;
+        if (otherKey == null || String(otherKey).trim() === '') otherKey = defKey;
+        else otherKey = String(otherKey).trim();
+        if (otherKey !== currentKey) return true;
+      }
+      return false;
+    }
+
+    async function vbLoadDjSessionBundle(createdByUid) {
+      var uid = String(createdByUid || '').trim();
+      if (!uid) return { userData: null, socialsData: null };
+      var userPromise = (typeof fetchPublicDjProfile === 'function')
+        ? fetchPublicDjProfile(uid).catch(function () { return null; })
+        : Promise.resolve(null);
+      var socialsPromise = (async function () {
+        try {
+          if (!window.firebaseDb || typeof window.firebaseDoc !== 'function') return null;
+          var socialsRef = window.firebaseDoc(
+            window.firebaseCollection(window.firebaseDb, 'social_media_links'),
+            uid
+          );
+          var socialsDoc = await window.firebaseGetDoc(socialsRef);
+          if (socialsDoc.exists()) return sanitizeSocialsData(socialsDoc.data());
+        } catch (e) {
+          if (window.IS_DEBUG) console.warn('vbLoadDjSessionBundle socials:', e);
+        }
+        return null;
+      })();
+      var results = await Promise.all([userPromise, socialsPromise]);
+      return { userData: results[0], socialsData: results[1] };
+    }
+
+    /** DJ-Profil, Socials, Branding, Drawer — atomar für Party (Join + Floor-Wechsel). */
+    async function vbHydratePartyDjSession(partyId, partyData, createdByUid) {
+      var gen = ++vbPartySessionGeneration;
+      var uid = String(createdByUid || '').trim();
+      if (uid) {
+        try {
+          sessionStorage.setItem('validatedPartyDjId', uid);
+          localStorage.setItem('validatedPartyDjId', uid);
+        } catch (eDj) {}
+      }
+      var bundle = await vbLoadDjSessionBundle(uid);
+      if (gen !== vbPartySessionGeneration) return false;
+      var activeId = localStorage.getItem('validatedPartyId') || sessionStorage.getItem('validatedPartyId');
+      if (!activeId || activeId !== partyId) return false;
+      var userData = bundle.userData;
+      var socialsData = bundle.socialsData;
+      if (userData && userData.displayName) {
+        sessionStorage.setItem(
+          'currentDjName',
+          String(userData.displayName).trim().substring(0, 100)
+        );
+      }
+      var planType = (userData && userData.planType != null && String(userData.planType).trim() !== '')
+        ? String(userData.planType).toLowerCase()
+        : 'free';
+      sessionStorage.setItem('djPlanType', planType);
+      if (socialsData) {
+        try { sessionStorage.setItem('currentDjSocials', JSON.stringify(socialsData)); } catch (eSoc) {}
+      }
+      if (partyData && typeof partyData === 'object') {
+        window.__vbCachedPartyBrandingData = partyData;
+      }
+      if (uid && typeof vbBindWishboxGuestLiveStream === 'function') {
+        vbBindWishboxGuestLiveStream(uid);
+      }
+      var djNameFromStorage = sessionStorage.getItem('currentDjName');
+      if (djNameFromStorage) updateDrawerDjName(djNameFromStorage);
+      if (typeof syncGuestDrawerNav === 'function') syncGuestDrawerNav();
+      updateHeaderBranding(userData, socialsData);
+      if (typeof updateHeaderBasedOnLoginStatus === 'function') updateHeaderBasedOnLoginStatus();
+      if (typeof updatePartyInfoLine === 'function') updatePartyInfoLine();
+      if (typeof updateBrandingLine === 'function') await updateBrandingLine(partyData);
+      if (typeof updateLogoutButtonVisibility === 'function') updateLogoutButtonVisibility();
+      if (typeof window.updatePageTitle === 'function') window.updatePageTitle();
+      applyWishboxBrandingFromParty(partyData, planType);
+      if (typeof loadDrawerLogo === 'function') loadDrawerLogo();
+      if (typeof renderSocialMediaLinks === 'function') {
+        var socialPage = document.getElementById('socialMediaPage');
+        if (socialPage && socialPage.style.display !== 'none') {
+          await renderSocialMediaLinks();
+        }
+      }
+      return true;
+    }
+
     async function vbCollectAllPartyDocsByJoinCode(partyCode) {
       if (!partyCode || partyCode === 'manual') return [];
       var normalized = String(partyCode).replace(/[^0-9]/g, '').substring(0, 8);
@@ -2673,11 +3092,16 @@
       var out = options.slice();
       await Promise.all(out.map(async function (opt) {
         try {
-          var partyRef = window.firebaseDoc(window.firebaseCollection(window.firebaseDb, 'parties'), opt.party_id);
-          var partyDoc = await window.firebaseGetDoc(partyRef);
-          if (!partyDoc.exists()) return;
-          var data = partyDoc.data();
-          var djId = (data.created_by || data.dj_code || '').toString().trim();
+          var djId = (opt.created_by && String(opt.created_by).trim())
+            ? String(opt.created_by).trim()
+            : '';
+          if (!djId) {
+            var partyRef = window.firebaseDoc(window.firebaseCollection(window.firebaseDb, 'parties'), opt.party_id);
+            var partyDoc = await window.firebaseGetDoc(partyRef);
+            if (!partyDoc.exists()) return;
+            var data = partyDoc.data();
+            djId = (data.created_by || data.dj_code || '').toString().trim();
+          }
           if (!djId) return;
           var profile = await fetchPublicDjProfile(djId);
           var name = profile && profile.displayName ? String(profile.displayName).trim() : '';
@@ -2696,9 +3120,13 @@
         ? window.vbIsPartyGuestJoinable
         : function () { return false; };
       var options = [];
+      var isPublicVenue = typeof window.vbIsPublicVenueParty === 'function'
+        ? window.vbIsPublicVenueParty
+        : function () { return false; };
       docs.forEach(function (doc) {
         if (excludePartyId && doc.id === excludePartyId) return;
         if (!isJoinable(doc.data(), now)) return;
+        if (!isPublicVenue(doc.data())) return;
         if (typeof window.vbFloorOptionFromDoc === 'function') {
           options.push(window.vbFloorOptionFromDoc(doc));
         } else {
@@ -2730,17 +3158,18 @@
         return;
       }
       var options = await vbListJoinableFloorOptions(joinCode, null);
-      vbMultiFloorAvailable = options.length > 1 && options.some(function (o) { return o.party_id !== partyId; });
+      vbMultiFloorAvailable = vbHasMultipleJoinableFloors(options, partyId);
       vbUpdateFloorSwitchButton();
     }
 
     function vbHideFloorPicker() {
+      vbFloorSelectionActive = false;
       vbFloorPickerOptions = null;
       vbFloorEndedRedirectLabel = null;
-      var picker = document.getElementById('guestFloorPicker');
+      var overlay = document.getElementById('guestFloorPickerOverlay');
       var opts = document.getElementById('guestFloorPickerOptions');
       var info = document.getElementById('guestFloorPickerInfo');
-      if (picker) picker.style.display = 'none';
+      if (overlay) overlay.style.display = 'none';
       if (opts) opts.innerHTML = '';
       if (info) {
         info.style.display = 'none';
@@ -2749,11 +3178,16 @@
     }
 
     function vbRenderFloorPicker(options, infoMessage) {
-      var picker = document.getElementById('guestFloorPicker');
+      var overlay = document.getElementById('guestFloorPickerOverlay');
       var optsEl = document.getElementById('guestFloorPickerOptions');
       var infoEl = document.getElementById('guestFloorPickerInfo');
-      if (!picker || !optsEl) return;
+      var titleEl = document.getElementById('guestFloorPickerTitle');
+      var subtitleEl = document.getElementById('guestFloorPickerSubtitle');
+      if (!overlay || !optsEl) return;
       vbFloorPickerOptions = options || [];
+      vbFloorSelectionActive = true;
+      if (titleEl) titleEl.textContent = t('guest_floor_picker_title', 'Choose a floor');
+      if (subtitleEl) subtitleEl.textContent = t('guest_floor_picker_choose', 'Select the floor for your music requests.');
       optsEl.innerHTML = '';
       if (infoMessage && infoEl) {
         infoEl.textContent = infoMessage;
@@ -2773,23 +3207,56 @@
         });
         optsEl.appendChild(btn);
       });
-      picker.style.display = 'block';
+      overlay.style.display = 'flex';
+      if (typeof showLoader === 'function') showLoader(false);
+      var loadingOverlay = document.getElementById('loading-overlay');
+      if (loadingOverlay) loadingOverlay.style.display = 'none';
       var inactive = document.getElementById('wishboxInactiveMessage');
       if (inactive) inactive.style.display = 'none';
+    }
+
+    function vbShowFloorPickerLoadingState(message) {
+      var overlay = document.getElementById('guestFloorPickerOverlay');
+      var optsEl = document.getElementById('guestFloorPickerOptions');
+      var titleEl = document.getElementById('guestFloorPickerTitle');
+      var subtitleEl = document.getElementById('guestFloorPickerSubtitle');
+      if (titleEl) titleEl.textContent = t('guest_floor_picker_title', 'Choose a floor');
+      if (subtitleEl) subtitleEl.textContent = t('guest_floor_picker_choose', 'Select the floor for your music requests.');
+      if (overlay) overlay.style.display = 'flex';
+      if (optsEl) {
+        optsEl.innerHTML = '';
+        var p = document.createElement('p');
+        p.className = 'guest-floor-picker-loading';
+        p.textContent = message || t('loading_data', 'Loading data...');
+        optsEl.appendChild(p);
+      }
+      if (typeof showLoader === 'function') showLoader(false);
+      var loadingOverlay = document.getElementById('loading-overlay');
+      if (loadingOverlay) loadingOverlay.style.display = 'none';
     }
 
     async function vbShowFloorPickerForJoinCode(joinCode, options, endedFloorLabel) {
       var normalized = String(joinCode || '').replace(/[^0-9]/g, '').substring(0, 8);
       if (normalized.length !== 8) return false;
+      if (!vbShouldShowFloorPickerForOptions(options || [])) return false;
       vbPendingJoinCodeForFloorPick = normalized;
+      vbFloorSelectionActive = true;
+      vbShowFloorPickerLoadingState(t('loading_data', 'Loading data...'));
       try { sessionStorage.setItem(window.vbSessionPartyCodeKey || 'vb_session_party_code', normalized); } catch (e) {}
       var enriched = await vbEnrichFloorOptionsWithDjNames(options || []);
-      if (!enriched.length) return false;
+      if (!enriched.length) {
+        vbFloorSelectionActive = false;
+        vbHideFloorPicker();
+        if (typeof showPartyStatusModal === 'function') {
+          showPartyStatusModal('invalid', t('party_code_invalid_or_inactive', 'Invalid or inactive party code.'));
+        }
+        return false;
+      }
       vbFloorEndedRedirectLabel = endedFloorLabel || null;
       var info = null;
       if (endedFloorLabel) {
         var floorLabel = vbFloorDisplayLabel(endedFloorLabel, null);
-        var tpl = t('guest_floor_ended_redirect_message', 'The party in {floorLabel} has ended. Please choose another room.');
+        var tpl = t('guest_floor_ended_redirect_message', 'The party on {floorLabel} has ended. Please choose another floor.');
         info = tpl.split('{floorLabel}').join(floorLabel);
       }
       isWishboxActive = false;
@@ -2801,9 +3268,9 @@
     function vbUpdateFloorSwitchButton() {
       var btn = document.getElementById('guestFloorSwitchBtn');
       if (!btn) return;
-      var show = isWishboxActive && vbMultiFloorAvailable && !vbFloorPickerOptions;
+      var show = isWishboxActive && vbMultiFloorAvailable && !vbIsFloorPickerActive();
       btn.style.display = show ? 'block' : 'none';
-      if (show) btn.textContent = t('guest_floor_switch_button', 'Change room');
+      if (show) btn.textContent = t('guest_floor_switch_button', 'Switch floor');
     }
 
     async function vbShowFloorSwitchSheet() {
@@ -2811,33 +3278,63 @@
         || localStorage.getItem('validatedPartyCode')
         || vbPendingJoinCodeForFloorPick
         || (typeof window.vbGetSessionPartyCode8 === 'function' ? window.vbGetSessionPartyCode8() : null);
-      var partyId = sessionStorage.getItem('validatedPartyId') || localStorage.getItem('validatedPartyId');
       if (!joinCode) return;
-      var options = await vbListJoinableFloorOptions(joinCode, partyId);
-      if (!options.length) return;
+      await vbPrepareForFloorReselection(joinCode);
+      var options = await vbListJoinableFloorOptions(joinCode, null);
+      var partyId = sessionStorage.getItem('validatedPartyId') || localStorage.getItem('validatedPartyId');
+      if (!vbHasMultipleJoinableFloors(options, partyId)) return;
       await vbShowFloorPickerForJoinCode(joinCode, options, null);
     }
 
     async function vbPrepareForFloorReselection(joinCode) {
+      vbPartySessionGeneration++;
+      vbClearPartyBrandingCache();
       var normalized = String(joinCode || '').replace(/[^0-9]/g, '').substring(0, 8);
+      delete togglePartyPausedOverlay._lastPaused;
       if (typeof clearBlockStatusListeners === 'function') clearBlockStatusListeners();
       if (typeof stopWishLimitStream === 'function') stopWishLimitStream();
+      if (typeof stopPreWishLimitStream === 'function') stopPreWishLimitStream();
+      if (typeof historyListener !== 'undefined' && historyListener) {
+        try { historyListener(); } catch (e) {}
+        historyListener = null;
+      }
+      if (typeof allTracksCache !== 'undefined') {
+        allTracksCache.length = 0;
+        allTracksCache = [];
+      }
+      if (typeof currentDjSocials !== 'undefined') currentDjSocials = null;
       localStorage.removeItem('validatedPartyId');
-      sessionStorage.removeItem('validatedPartyId');
-      sessionStorage.removeItem('validatedPartyName');
-      sessionStorage.removeItem('currentPartyName');
-      sessionStorage.removeItem('currentDjName');
       localStorage.removeItem('validatedPartyName');
       localStorage.removeItem('currentPartyName');
+      if (typeof clearSessionPartyData === 'function') clearSessionPartyData();
+      try { sessionStorage.removeItem('validatedPartyDjId'); } catch (eDj1) {}
+      try { localStorage.removeItem('validatedPartyDjId'); } catch (eDj2) {}
+      try { localStorage.removeItem('guest_client_id'); } catch (eGc) {}
+      currentClientId = null;
       try { sessionStorage.removeItem('guestPreWishSession'); } catch (e) {}
       if (normalized.length === 8) {
         sessionStorage.setItem('validatedPartyCode', normalized);
         localStorage.setItem('validatedPartyCode', normalized);
         try { sessionStorage.setItem(window.vbSessionPartyCodeKey || 'vb_session_party_code', normalized); } catch (e2) {}
+        vbPendingJoinCodeForFloorPick = normalized;
       }
       isWishboxActive = false;
       isBlocked = false;
-      wishboxBlockGateResolved = true;
+      blockedByWriteDenied = false;
+      blockedByGuestRealtime = false;
+      blockedByDeviceRealtime = false;
+      blockedByUserRealtime = false;
+      wishboxBlockGateResolved = false;
+      if (typeof clearPreWishMode === 'function') clearPreWishMode();
+      currentPartyStartDate = null;
+      if (typeof stopPrePartyCountdown === 'function') stopPrePartyCountdown();
+      if (typeof togglePartyPausedOverlay === 'function') togglePartyPausedOverlay(false);
+      updateHeaderBranding(null, null);
+      updateDrawerDjName('');
+      if (typeof loadDrawerLogo === 'function') loadDrawerLogo();
+      if (typeof updateHeaderBasedOnLoginStatus === 'function') updateHeaderBasedOnLoginStatus();
+      if (typeof updatePartyInfoLine === 'function') updatePartyInfoLine();
+      if (typeof updateLogoutButtonVisibility === 'function') updateLogoutButtonVisibility();
       vbMultiFloorAvailable = false;
       vbUpdateFloorSwitchButton();
     }
@@ -2860,7 +3357,8 @@
             sessionStorage.setItem('validatedPartyId', partyId);
             sessionStorage.setItem('validatedPartyCode', normalized);
             localStorage.setItem('validatedPartyCode', normalized);
-            showPreWishWishboxMode(data.party_name || 'Party', se.startDate);
+            showPreWishOrPausedMode(data, data.party_name || 'Party', se.startDate);
+            vbRunBlockCheckAfterJoin(partyId);
             vbHideFloorPicker();
             vbPendingJoinCodeForFloorPick = null;
             return true;
@@ -2906,11 +3404,17 @@
           || sessionStorage.getItem('validatedPartyCode')
           || localStorage.getItem('validatedPartyCode')
           || (typeof window.vbGetSessionPartyCode8 === 'function' ? window.vbGetSessionPartyCode8() : '');
+        vbFloorSelectionActive = true;
+        vbShowFloorPickerLoadingState(t('loading_data', 'Loading data...'));
         var ok = await vbJoinPartyById(option.party_id, joinCode);
         if (!ok && typeof showPartyStatusModal === 'function') {
           showPartyStatusModal('invalid', t('party_code_invalid_or_inactive', 'Invalid or inactive party code.'));
+          vbHideFloorPicker();
         } else if (ok) {
           vbRunBlockCheckAfterJoin(option.party_id);
+          if (typeof checkWishboxStatus === 'function') {
+            checkWishboxStatus({ skipFullBlockRecheck: true });
+          }
         }
       } finally {
         vbFloorJoinInProgress = false;
@@ -2918,6 +3422,9 @@
     }
 
     async function vbTryFloorRedirectAfterPartyEnded(partyData, partyId) {
+      if (typeof window.vbIsPublicVenueParty === 'function' && !window.vbIsPublicVenueParty(partyData)) {
+        return false;
+      }
       var joinCode = sessionStorage.getItem('validatedPartyCode')
         || localStorage.getItem('validatedPartyCode')
         || (partyData && partyData.party_code != null ? String(partyData.party_code) : '')
@@ -2926,9 +3433,16 @@
       if (normalized.length !== 8 || !partyId) return false;
       var options = await vbListJoinableFloorOptions(normalized, partyId);
       if (!options.length) return false;
+      var endedKey = (typeof window.vbEffectiveFloorKey === 'function')
+        ? window.vbEffectiveFloorKey(partyData)
+        : 'default';
+      var otherFloors = options.filter(function (o) {
+        return (o.floor_key || 'default') !== endedKey;
+      });
+      if (!otherFloors.length || !vbShouldShowFloorPickerForOptions(otherFloors)) return false;
       var endedLabel = (typeof window.vbRawFloorLabel === 'function') ? window.vbRawFloorLabel(partyData) : null;
       await vbPrepareForFloorReselection(normalized);
-      await vbShowFloorPickerForJoinCode(normalized, options, endedLabel);
+      await vbShowFloorPickerForJoinCode(normalized, otherFloors, endedLabel);
       return true;
     }
 
@@ -3415,12 +3929,27 @@
     async function checkWishboxStatus(options) {
       window.bodyLoadError = false;
       try {
-        const savedPartyIdLocal = localStorage.getItem('validatedPartyId');
-        const savedPartyIdSession = sessionStorage.getItem('validatedPartyId');
+        if (window.__vbDeferWishboxStatusUntilBoot === true) {
+          if (window.IS_DEBUG) console.log('DEBUG PWA: checkWishboxStatus — Boot läuft, überspringe');
+          return;
+        }
+        if (vbIsFloorPickerActive()) {
+          if (window.IS_DEBUG) console.log('DEBUG PWA: checkWishboxStatus — Floor-Auswahl aktiv, überspringe');
+          return;
+        }
+
+        vbClearStaleValidatedPartyIfJoinCodeMismatch();
+        var savedPartyIdLocal = localStorage.getItem('validatedPartyId');
+        var savedPartyIdSession = sessionStorage.getItem('validatedPartyId');
         if (window.IS_DEBUG) console.log('DEBUG PWA: checkWishboxStatus partyId local=', savedPartyIdLocal, 'session=', savedPartyIdSession);
         
         if ((!savedPartyIdLocal || savedPartyIdLocal === 'manual' || savedPartyIdLocal === '') &&
             (!savedPartyIdSession || savedPartyIdSession === 'manual' || savedPartyIdSession === '')) {
+          if (vbIsFloorPickerActive()) return;
+          if (vbHasAnyJoinFlowSignal()) {
+            if (window.IS_DEBUG) console.log('DEBUG PWA: Keine Party-ID, Join-Signal — warte auf Auto-Login (kein Inaktiv-UI)');
+            return;
+          }
           if (window.IS_DEBUG) console.log('DEBUG PWA: Keine Party-ID, breche ab');
           isWishboxActive = false;
           wishboxBlockGateResolved = true;
@@ -3434,9 +3963,32 @@
           if (window.IS_DEBUG) console.log('✅ checkWishboxStatus: Erfolgsmeldung aktiv, überspringe UI-Updates');
           return;
         }
+
+        const skipBlock = options && options.skipFullBlockRecheck === true;
+        if (skipBlock) {
+          if (document.getElementById('vbPartyEndedOverlay')) {
+            if (window.IS_DEBUG) console.log('checkWishboxStatus: Poll — Party-Ende-Overlay aktiv, überspringe');
+            return;
+          }
+          if (isPreWishesPausedMode
+              || (typeof vbIsPrePartyWaitUiActive === 'function' && vbIsPrePartyWaitUiActive())
+              || (typeof vbIsFloorPickerActive === 'function' && vbIsFloorPickerActive())
+              || document.getElementById('partyCodeErrorModalOverlay')) {
+            if (window.IS_DEBUG) console.log('checkWishboxStatus: Poll — Sonderfenster aktiv, überspringe');
+            return;
+          }
+          var pollPauseOv = document.getElementById('partyPausedOverlay');
+          if (pollPauseOv && pollPauseOv.style.display === 'flex') {
+            if (window.IS_DEBUG) console.log('checkWishboxStatus: Poll — Pause aktiv, überspringe');
+            return;
+          }
+          if (isBlocked) {
+            if (window.IS_DEBUG) console.log('checkWishboxStatus: Poll — Gast gesperrt, überspringe');
+            return;
+          }
+        }
         
         // Block-Status: bei vollem Lauf; beim 30s-Poll überspringen (sonst Gate-Reset → Flackern)
-        const skipBlock = options && options.skipFullBlockRecheck === true;
         if (!skipBlock) {
           // Prüfe zuerst Block-Status (immer, auch ohne Party-Code)
           if (window.IS_DEBUG) console.log('🔍 checkWishboxStatus: Starte Block-Status-Prüfung...');
@@ -3455,6 +4007,8 @@
           if (window.IS_DEBUG) console.log('✅ Party-ID in sessionStorage gespeichert');
           
           // ✅ Volle DJ-/Header-Anreicherung nur außerhalb des 30s-Polls (sonst Flackern)
+          var vbStatusPartyDoc = null;
+          var vbStatusPartyData = null;
           if (!skipBlock) {
           try {
             if (window.IS_DEBUG) console.log('🔍 Lade Party-Daten von Firebase für Party-ID:', savedPartyId);
@@ -3464,12 +4018,21 @@
             if (partyDoc.exists()) {
               if (window.IS_DEBUG) console.log('DEBUG PWA: Party-Dokument geladen, partyId=', savedPartyId);
               const partyDataForDj = sanitizePartyData(partyDoc.data());
+              vbStatusPartyDoc = partyDoc;
+              vbStatusPartyData = partyDataForDj;
+              window.__vbCachedPartyBrandingData = partyDataForDj;
               
               // ✅ Wenn Party beendet: sofort Reset und zurück zur Code-Eingabe
+              const nowDate = new Date();
+              const endedByHelper = typeof window.vbIsPartyEnded === 'function'
+                ? window.vbIsPartyEnded(partyDataForDj, nowDate)
+                : false;
               const lifecycleStatus = partyDataForDj.lifecycle_status;
               const nowPosix = Math.floor(Date.now() / 1000);
               const endPosix = Number(partyDataForDj.end_time_posix || 0);
-              if (lifecycleStatus === 'finished' || (Number.isFinite(endPosix) && endPosix > 0 && nowPosix >= endPosix)) {
+              const statusEnded = partyDataForDj.status === 'beendet' || partyDataForDj.status === 'ended';
+              if (endedByHelper || lifecycleStatus === 'finished' || statusEnded
+                  || (Number.isFinite(endPosix) && endPosix > 0 && nowPosix >= endPosix)) {
                 if (window.IS_DEBUG) console.log('⚠️ Party ist beendet (lifecycle_status === finished), Floor-Redirect oder Ausgang');
                 if (typeof vbHandleGuestPartyEnded === 'function') {
                   void vbHandleGuestPartyEnded(partyDataForDj, savedPartyId);
@@ -3634,8 +4197,12 @@
               updateBrandingLine();
             } else {
               if (window.IS_DEBUG) console.warn('⚠️ Party-Dokument existiert nicht in Firebase für ID:', savedPartyId);
-              if (typeof clearPartyData === 'function') clearPartyData();
-              return;
+              if (vbHasAnyJoinFlowSignal()) {
+                vbClearStaleValidatedPartyStorage();
+              } else if (typeof clearPartyData === 'function') {
+                clearPartyData();
+                return;
+              }
             }
           } catch (e) {
             console.error('❌ Fehler beim Laden der Party-Daten:', e);
@@ -3643,15 +4210,20 @@
           }
           }
           
-          // Prüfe, ob die Party noch aktiv ist
+          // Prüfe, ob die Party noch aktiv ist (Party-Doc aus erstem Lauf wiederverwenden)
           try {
-            const partyRef = window.firebaseDoc(
-              window.firebaseCollection(window.firebaseDb, 'parties'),
-              savedPartyId
-            );
-            const partyDoc = await window.firebaseGetDoc(partyRef);
+            let partyDoc = vbStatusPartyDoc;
+            let partyData = vbStatusPartyData;
+            if (!partyDoc) {
+              const partyRef = window.firebaseDoc(
+                window.firebaseCollection(window.firebaseDb, 'parties'),
+                savedPartyId
+              );
+              partyDoc = await window.firebaseGetDoc(partyRef);
+              partyData = partyDoc.exists() ? partyDoc.data() : null;
+            }
             if (partyDoc.exists()) {
-              const partyData = partyDoc.data();
+              if (!partyData) partyData = partyDoc.data();
               const lifecycleEarly = partyData.lifecycle_status;
               const nowPosixEarly = Math.floor(Date.now() / 1000);
               const endPosixEarly = Number(partyData.end_time_posix || 0);
@@ -3676,12 +4248,21 @@
                 // Prüfe Pre-Party Status (Party startet in der Zukunft)
                 if (now < startDate) {
                   if (typeof window.vbIsPreWishWindowOpen === 'function' && window.vbIsPreWishWindowOpen(partyData, now)) {
+                    if (window.vbArePreWishesPaused && window.vbArePreWishesPaused(partyData)) {
+                      if (skipBlock && isPreWishesPausedMode && currentPartyStartDate && currentPartyStartDate.getTime() === startDate.getTime()) {
+                        if (window.IS_DEBUG) console.log('Poll: Vorab pausiert unverändert, kein UI-Reset');
+                        return;
+                      }
+                      if (window.IS_DEBUG) console.log('⏸ Party in der Zukunft – Vorab-Wunschbox pausiert');
+                      showPreWishesPausedMode(partyData.party_name || 'Party', startDate);
+                    } else {
                     if (skipBlock && isPreWishMode && currentPartyStartDate && currentPartyStartDate.getTime() === startDate.getTime()) {
                       if (window.IS_DEBUG) console.log('Poll: Vorab-Wunschbox unverändert, kein UI-Reset');
                       return;
                     }
                     if (window.IS_DEBUG) console.log('📬 Party in der Zukunft – Vorab-Wunschbox aktiv');
-                    showPreWishWishboxMode(partyData.party_name || 'Party', startDate);
+                    showPreWishOrPausedMode(partyData, partyData.party_name || 'Party', startDate);
+                    }
                   } else {
                   if (skipBlock) {
                     const preEl = document.getElementById('prePartyWaitMode');
@@ -3724,7 +4305,9 @@
                   }
                   const isPaused = partyData.is_paused === true;
                   togglePartyPausedOverlay(isPaused);
-                  if (!skipBlock || wasWishboxInactive) {
+                  if (isPaused) {
+                    if (typeof vbHideWishboxFormChrome === 'function') vbHideWishboxFormChrome();
+                  } else if (!skipBlock || wasWishboxInactive) {
                     updateWishboxUI();
                   }
                   // URL bereinigen (falls Code noch drin steht) - NUR wenn nicht bereits von QR-Code-Login verarbeitet
@@ -3742,16 +4325,26 @@
                 }
               }
             } else {
-              if (window.IS_DEBUG) console.warn('⚠️ Party-Dokument fehlt, clearPartyData');
-              if (typeof clearPartyData === 'function') clearPartyData();
-              return;
+              if (window.IS_DEBUG) console.warn('⚠️ Party-Dokument fehlt, Storage bereinigen');
+              if (vbHasAnyJoinFlowSignal()) {
+                vbClearStaleValidatedPartyStorage();
+              } else if (typeof clearPartyData === 'function') {
+                clearPartyData();
+                return;
+              }
             }
           } catch (e) {
             if (window.IS_DEBUG) console.warn('⚠️ Fehler beim Prüfen der gespeicherten party_id:', e);
             // Weiter mit normaler Suche
           }
         }
-        
+
+        savedPartyIdLocal = localStorage.getItem('validatedPartyId');
+        savedPartyIdSession = sessionStorage.getItem('validatedPartyId');
+        var hasValidatedPartyIdAfterStaleClear =
+          (savedPartyIdLocal && savedPartyIdLocal !== 'manual' && savedPartyIdLocal !== '') ||
+          (savedPartyIdSession && savedPartyIdSession !== 'manual' && savedPartyIdSession !== '');
+
         // Party-Code aus URL lesen (Query oder Hash, nur wenn keine gültige party_id in localStorage)
         const urlParams = new URLSearchParams(window.location.search);
         let rawCode = typeof window.vbGetPartyCodeFromUrl === 'function' ? window.vbGetPartyCodeFromUrl() : urlParams.get('code');
@@ -3801,6 +4394,14 @@
         // Wenn kein Code vorhanden ist, bleibt Wunschbox inaktiv
         // (auch mit manuellem Schalter benötigen wir einen Party-Code)
         if (!codeToCheck) {
+          if (hasValidatedPartyIdAfterStaleClear) {
+            if (window.IS_DEBUG) console.log('Kein Join-Code, aber validatedPartyId — überspringe Inaktiv-Fallback');
+            return;
+          }
+          if (vbHasAnyJoinFlowSignal()) {
+            if (window.IS_DEBUG) console.log('Kein Join-Code im Storage-Feld, Join-Signal aktiv — warte auf Auto-Login');
+            return;
+          }
           if (window.IS_DEBUG) console.log('Kein Party-Code vorhanden - Wunschbox bleibt inaktiv');
           isWishboxActive = false;
           updateWishboxUI(); // UI wird aktualisiert, Block-Status wurde bereits geprüft
@@ -4069,9 +4670,47 @@
 
     // Prüfe manuell eingegebenen Party-Code
     // Zeit-/Countdown-Logik: party_shared.js (formatPartyLocalTime, formatPartyStartAtLine, formatLocaleCompactDateTime, …)
+
+    /** Storage leeren ohne UI-Flash – danach Redirect zur Startseite. */
+    function vbClearGuestJoinStorageForHomeRedirect() {
+      try {
+        localStorage.removeItem('validatedPartyId');
+        localStorage.removeItem('validatedPartyCode');
+        localStorage.removeItem('validatedPartyName');
+        localStorage.removeItem('currentPartyName');
+        localStorage.removeItem('pending_party_code');
+        localStorage.removeItem('pendingPartyId');
+        localStorage.removeItem('guest_client_id');
+        localStorage.removeItem('validatedPartyStartMs');
+        localStorage.removeItem('validatedPartyDjId');
+        localStorage.removeItem('vb_party_floor_key');
+      } catch (eLs) {}
+      if (typeof clearSessionPartyData === 'function') {
+        try { clearSessionPartyData(); } catch (eSs) {}
+      }
+    }
+
+    /** Party noch nicht gestartet / beendet: Hinweis auf der Startseite zeigen, nicht in der leeren Wunschbox. */
+    function vbRedirectHomeWithPartyStatusNotice(type, message, timeInfo) {
+      window.__vbLeavingForHomeNotice = true;
+      var html = message || '';
+      if (timeInfo && type === 'future' && html.indexOf(timeInfo) === -1) {
+        var startInText = (typeof t === 'function') ? t('party_start_in', 'Starts in:') : 'Starts in:';
+        html += '<br><br><strong>' + startInText + ' ' + (typeof escapeHtml === 'function' ? escapeHtml(String(timeInfo)) : String(timeInfo)) + '</strong>';
+      }
+      var payload = JSON.stringify({ type: String(type || ''), html: html });
+      vbClearGuestJoinStorageForHomeRedirect();
+      try { sessionStorage.setItem('vb_party_status_notice', payload); } catch (eN) {}
+      window.location.replace('/');
+    }
     
     // ✅ Funktion zum Anzeigen des Party-Status-Modals (Drei-Farben-System)
     function showPartyStatusModal(type, message, timeInfo = null) {
+      if (type === 'future' || type === 'ended') {
+        vbRedirectHomeWithPartyStatusNotice(type, message, timeInfo);
+        return;
+      }
+
       // Entferne vorhandenes Modal falls vorhanden
       const existingModal = document.getElementById('partyCodeErrorModalOverlay');
       if (existingModal) {
@@ -4107,7 +4746,7 @@
         // Zeitinfo wird bereits in der message enthalten sein (mit Ortszeit)
         // Füge nur den Countdown hinzu, falls nicht bereits enthalten
         if (!fullMessage.includes(timeInfo)) {
-          fullMessage += '<br><br><strong>' + startInText + ' ' + timeInfo + '</strong>';
+          fullMessage += '<br><br><strong>' + escapeHtml(startInText) + ' ' + escapeHtml(timeInfo) + '</strong>';
         }
       }
       
@@ -4115,7 +4754,7 @@
         <div class="party-code-error-modal-icon">
           <i class="${iconClass}"></i>
         </div>
-        <p class="party-code-error-modal-message">${fullMessage}</p>
+        <p class="party-code-error-modal-message">${typeof escapeHtml === 'function' ? escapeHtml(fullMessage) : fullMessage}</p>
         <button class="party-code-error-modal-button" id="partyCodeErrorModalOkBtn">
           ${t('button_ok', 'OK')}
         </button>
@@ -4125,14 +4764,6 @@
       document.body.appendChild(overlay);
       
       function closePartyStatusModal() {
-        if (type === 'ended') {
-          if (typeof vbGoToRootPwaAfterPartyEnded === 'function') {
-            vbGoToRootPwaAfterPartyEnded();
-          } else {
-            window.location.replace('/');
-          }
-          return;
-        }
         overlay.remove();
       }
 
@@ -4251,8 +4882,11 @@
       const limitText = document.getElementById('wishLimitText');
       const submitBtn = document.getElementById('submitBtn');
       if (!limitInfoDiv || !limitText) return;
-      if (!isWishboxActive) {
+      if (!isWishboxActive || isBlocked || isPreWishesPausedMode
+          || (typeof vbIsFloorPickerActive === 'function' && vbIsFloorPickerActive())
+          || (typeof vbIsGuestWishboxFormSuppressed === 'function' && vbIsGuestWishboxFormSuppressed())) {
         limitInfoDiv.style.display = 'none';
+        if (submitBtn) submitBtn.disabled = true;
         return;
       }
       limitInfoDiv.style.display = 'block';
@@ -4359,10 +4993,10 @@
                   void vbHandleGuestPartyEnded(partyData, partyId);
                 } else if (typeof runGuestPartyEndedWishboxFlow === 'function') {
                   runGuestPartyEndedWishboxFlow();
-                } else if (typeof vbGoToRootPwaAfterPartyEnded === 'function') {
-                  vbGoToRootPwaAfterPartyEnded();
-                } else {
-                  window.location.replace('/');
+                } else if (typeof runGuestPartyEndedWishboxFlow === 'function') {
+                  runGuestPartyEndedWishboxFlow();
+                } else if (typeof clearPartyData === 'function') {
+                  clearPartyData(true);
                 }
                 return;
               }
@@ -4446,7 +5080,8 @@
         overlay.style.display = 'none';
         
         // Formular und Branding wieder einblenden (falls Wunschbox aktiv ist und kein Erfolgsfenster offen)
-        if (isWishboxActive && !window.isSuccessActive) {
+        if (isWishboxActive && !window.isSuccessActive
+            && !(typeof vbIsGuestWishboxFormSuppressed === 'function' && vbIsGuestWishboxFormSuppressed())) {
           // Sichtbarkeit wie updateWishboxUI (isWishboxActive): #wishForm hat initial visibility:hidden;
           // wenn der erste Lauf bei aktiver Pause früh zurückkam, blieb visibility hidden → nach Ende der Pause nur „schwarze“ Karte.
           if (wishForm) {
@@ -4602,6 +5237,42 @@
       if (banner) banner.style.display = 'none';
     }
 
+    function hidePreWishesPausedNotice() {
+      isPreWishesPausedMode = false;
+      const notice = document.getElementById('preWishesPausedNotice');
+      if (notice) notice.style.display = 'none';
+    }
+
+    function showPreWishesPausedNotice() {
+      hidePreWishBanner();
+      const notice = document.getElementById('preWishesPausedNotice');
+      const noticeText = document.getElementById('preWishesPausedNoticeText');
+      const prePartyDiv = document.getElementById('prePartyWaitMode');
+      const inactiveDiv = document.getElementById('wishboxInactiveMessage');
+      const wishForm = document.getElementById('wishForm');
+      if (prePartyDiv) prePartyDiv.style.display = 'none';
+      if (inactiveDiv) inactiveDiv.style.display = 'none';
+      if (wishForm) {
+        wishForm.style.display = 'none';
+        wishForm.style.visibility = 'hidden';
+      }
+      if (notice) notice.style.display = 'block';
+      if (noticeText) {
+        noticeText.textContent = t(
+          'pre_wishes_paused_guest_message',
+          'Enough advance requests have already been received – no further requests can be submitted for now.',
+        );
+      }
+      try { sessionStorage.removeItem('guestPreWishSession'); } catch (e) {}
+      isPreWishMode = false;
+      isPreWishesPausedMode = true;
+      if (typeof stopPreWishLimitStream === 'function') stopPreWishLimitStream();
+      if (typeof stopWishLimitStream === 'function') stopWishLimitStream();
+      syncPreWishDisclaimerUi();
+      syncGuestDrawerNav();
+      if (typeof updateHeaderBranding === 'function') updateHeaderBranding();
+    }
+
     /** Vorab-Modus: roten DJ-Disclaimer im Formular/Erfolg ausblenden (nur Vorab-Banner). */
     function isPreWishUiActive() {
       if (isPreWishMode === true) return true;
@@ -4627,7 +5298,7 @@
       const plan = (sessionStorage.getItem('djPlanType') || '').toLowerCase().trim();
       // Nur explizit „free“ ausblenden — leerer Plan ≠ Free (sonst fehlen Social/Kontakt bis DJ-Profil lädt).
       const isFreeDj = plan === 'free';
-      const preWish = isPreWishUiActive();
+      const preWish = isPreWishUiActive() || isPreWishesPausedMode || vbIsPrePartyWaitUiActive();
 
       if (history) {
         history.style.display = (hasParty && preWish) ? 'none' : '';
@@ -4715,15 +5386,27 @@
 
     function clearPreWishMode() {
       isPreWishMode = false;
+      isPreWishesPausedMode = false;
       try { sessionStorage.removeItem('guestPreWishSession'); } catch (e) {}
       if (typeof stopPreWishLimitStream === 'function') stopPreWishLimitStream();
       hidePreWishBanner();
+      hidePreWishesPausedNotice();
       syncPreWishDisclaimerUi();
       syncGuestDrawerNav();
     }
 
+    function showPreWishOrPausedMode(partyData, partyName, startDate) {
+      if (window.vbArePreWishesPaused && window.vbArePreWishesPaused(partyData)) {
+        showPreWishesPausedMode(partyName, startDate);
+      } else {
+        showPreWishWishboxMode(partyName, startDate);
+      }
+    }
+
     function showPreWishWishboxMode(partyName, startDate) {
       isPreWishMode = true;
+      isPreWishesPausedMode = false;
+      hidePreWishesPausedNotice();
       try { sessionStorage.setItem('guestPreWishSession', '1'); } catch (e) {}
       if (partyName && String(partyName).trim()) {
         const pn = String(partyName).trim();
@@ -4757,9 +5440,31 @@
       if (typeof updateWishboxUI === 'function') updateWishboxUI();
     }
 
+    function showPreWishesPausedMode(partyName, startDate) {
+      isWishboxActive = true;
+      stopPrePartyCountdown();
+      currentPartyStartDate = startDate;
+      if (startDate) persistPartyStartDate(startDate);
+      if (partyName && String(partyName).trim()) {
+        const pn = String(partyName).trim();
+        try {
+          sessionStorage.setItem('validatedPartyName', pn);
+          localStorage.setItem('validatedPartyName', pn);
+          sessionStorage.setItem('currentPartyName', pn);
+          localStorage.setItem('currentPartyName', pn);
+        } catch (ePn) {}
+      }
+      showPreWishesPausedNotice();
+      if (window.IS_DEBUG) console.log('⏸ Vorab-Wunschbox pausiert für', partyName || 'Party');
+      if (typeof updateWishboxUI === 'function') updateWishboxUI();
+    }
+
     // Pre-Party Wartemodus Funktionen
     function showPrePartyWaitMode(partyName, startDate) {
       clearPreWishMode();
+      isWishboxActive = false;
+      if (typeof stopWishLimitStream === 'function') stopWishLimitStream();
+      if (typeof stopPreWishLimitStream === 'function') stopPreWishLimitStream();
       const prePartyDiv = document.getElementById('prePartyWaitMode');
       const inactiveDiv = document.getElementById('wishboxInactiveMessage');
       const wishForm = document.getElementById('wishForm');
@@ -4775,7 +5480,10 @@
         if (subtitleElement) subtitleElement.textContent = t('pre_party_subtitle', 'The wishbox will be unlocked automatically');
       }
       if (inactiveDiv) inactiveDiv.style.display = 'none';
-      if (wishForm) wishForm.style.display = 'none';
+      if (wishForm) {
+        wishForm.style.display = 'none';
+        wishForm.style.visibility = 'hidden';
+      }
       
       // Starte Countdown
       startPrePartyCountdown(startDate);
@@ -4832,11 +5540,62 @@
       currentPartyStartDate = null;
     }
 
+    function vbIsDomElementVisible(el) {
+      if (!el) return false;
+      try {
+        return el.style.display !== 'none' && window.getComputedStyle(el).display !== 'none';
+      } catch (e) {
+        return el.style.display !== 'none';
+      }
+    }
+
+    /** True wenn ein Sonderfenster aktiv ist — Wunschbox-Formular darf dann nie eingeblendet werden. */
+    function vbIsGuestWishboxFormSuppressed() {
+      if (typeof vbIsPrePartyWaitUiActive === 'function' && vbIsPrePartyWaitUiActive()) return true;
+      if (document.getElementById('vbPartyEndedOverlay')) return true;
+      if (document.getElementById('partyCodeErrorModalOverlay')) return true;
+      var pausedOverlay = document.getElementById('partyPausedOverlay');
+      if (pausedOverlay && pausedOverlay.style.display === 'flex') return true;
+      var pausedNotice = document.getElementById('preWishesPausedNotice');
+      if (pausedNotice && vbIsDomElementVisible(pausedNotice)) return true;
+      return false;
+    }
+
+    function vbHideWishboxFormChrome() {
+      var wf = document.getElementById('wishForm');
+      var lim = document.getElementById('wishLimitInfo');
+      var bl = document.getElementById('brandingLine');
+      if (wf) {
+        wf.style.display = 'none';
+        wf.style.visibility = 'hidden';
+      }
+      if (lim) lim.style.display = 'none';
+      if (bl) {
+        bl.style.display = 'none';
+        bl.style.visibility = 'hidden';
+      }
+      var sb = document.getElementById('submitBtn');
+      if (sb) sb.disabled = true;
+    }
+
     function updateWishboxUI() {
       if (window.IS_DEBUG) console.log('DEBUG: UI Update gestartet, Status:', isWishboxActive);
+      // Erfolgs-Overlay darf normale Updates blockieren — aber NICHT die Sperr-UI.
+      // Sonst bleibt die Wunschbox bis Refresh/„Weiteren Wunsch“ offen, obwohl onSnapshot schon gesperrt hat.
       if (window.isSuccessActive) {
-        if (window.IS_DEBUG) console.log('DEBUG PWA: updateWishboxUI Erfolgsmeldung aktiv, überspringe');
-        return;
+        if (isBlocked) {
+          window.isSuccessActive = false;
+          var successEl = document.getElementById('successMessage');
+          if (successEl) successEl.classList.remove('show');
+          var successOpenFc = document.querySelector('.form-container');
+          if (successOpenFc) successOpenFc.classList.remove('success-open');
+          if (window.IS_DEBUG) {
+            console.log('🚫 updateWishboxUI: Sperre während Erfolgsmeldung — Overlay schließen, Block-UI zeigen');
+          }
+        } else {
+          if (window.IS_DEBUG) console.log('DEBUG PWA: updateWishboxUI Erfolgsmeldung aktiv, überspringe');
+          return;
+        }
       }
 
       var loadingOverlay = document.getElementById('loading-overlay');
@@ -4867,8 +5626,96 @@
       }
       if (bodyLoadErrorEl) bodyLoadErrorEl.style.display = 'none';
 
+      if (vbIsGuestWishboxFormSuppressed()) {
+        if (typeof showLoader === 'function') showLoader(false);
+        else if (loadingOverlay) loadingOverlay.style.display = 'none';
+        vbHideWishboxFormChrome();
+        if (typeof vbIsPrePartyWaitUiActive === 'function' && vbIsPrePartyWaitUiActive()) {
+          var inactivePreParty = document.getElementById('wishboxInactiveMessage');
+          var blockedPreParty = document.getElementById('wishboxBlockedMessage');
+          if (inactivePreParty) inactivePreParty.style.display = 'none';
+          if (blockedPreParty) {
+            blockedPreParty.style.display = 'none';
+            blockedPreParty.style.visibility = 'hidden';
+          }
+          hidePreWishBanner();
+        }
+        if (document.getElementById('vbPartyEndedOverlay')) {
+          var inactiveEnded = document.getElementById('wishboxInactiveMessage');
+          if (inactiveEnded) inactiveEnded.style.display = 'none';
+        }
+        if (typeof syncGuestDrawerNav === 'function') syncGuestDrawerNav();
+        return;
+      }
+
+      if (isPreWishesPausedMode) {
+        if (typeof showLoader === 'function') showLoader(false);
+        else if (loadingOverlay) loadingOverlay.style.display = 'none';
+        var noticePaused = document.getElementById('preWishesPausedNotice');
+        var wfPaused = document.getElementById('wishForm');
+        var bannerPaused = document.getElementById('preWishBanner');
+        var inactPaused = document.getElementById('wishboxInactiveMessage');
+        var blkPaused = document.getElementById('wishboxBlockedMessage');
+        var limPaused = document.getElementById('wishLimitInfo');
+        var blPaused = document.getElementById('brandingLine');
+        var prePartyPaused = document.getElementById('prePartyWaitMode');
+        if (noticePaused) noticePaused.style.display = 'block';
+        if (wfPaused) {
+          wfPaused.style.display = 'none';
+          wfPaused.style.visibility = 'hidden';
+        }
+        if (bannerPaused) bannerPaused.style.display = 'none';
+        if (inactPaused) inactPaused.style.display = 'none';
+        if (blkPaused) {
+          blkPaused.style.display = 'none';
+          blkPaused.style.visibility = 'hidden';
+        }
+        if (limPaused) limPaused.style.display = 'none';
+        if (blPaused) blPaused.style.display = 'none';
+        if (prePartyPaused) prePartyPaused.style.display = 'none';
+        var sbPaused = document.getElementById('submitBtn');
+        if (sbPaused) sbPaused.disabled = true;
+        if (typeof stopPreWishLimitStream === 'function') stopPreWishLimitStream();
+        if (typeof stopWishLimitStream === 'function') stopWishLimitStream();
+        syncGuestDrawerNav();
+        if (typeof updateHeaderBranding === 'function') updateHeaderBranding();
+        return;
+      }
+
+      if (vbIsFloorPickerActive()) {
+        vbUpdateFloorSwitchButton();
+        var loadingOvFloor = document.getElementById('loading-overlay');
+        if (typeof showLoader === 'function') showLoader(false);
+        else if (loadingOvFloor) loadingOvFloor.style.display = 'none';
+        var wfFloor = document.getElementById('wishForm');
+        var blFloor = document.getElementById('brandingLine');
+        var limFloor = document.getElementById('wishLimitInfo');
+        var inactFloor = document.getElementById('wishboxInactiveMessage');
+        var blkFloor = document.getElementById('wishboxBlockedMessage');
+        var pauseFloor = document.getElementById('partyPausedOverlay');
+        var prePartyFloor = document.getElementById('prePartyWaitMode');
+        if (wfFloor) {
+          wfFloor.style.display = 'none';
+          wfFloor.style.visibility = 'hidden';
+        }
+        if (blFloor) {
+          blFloor.style.display = 'none';
+          blFloor.style.visibility = 'hidden';
+        }
+        if (limFloor) limFloor.style.display = 'none';
+        if (inactFloor) inactFloor.style.display = 'none';
+        if (blkFloor) {
+          blkFloor.style.display = 'none';
+          blkFloor.style.visibility = 'hidden';
+        }
+        if (pauseFloor) pauseFloor.style.display = 'none';
+        if (prePartyFloor) prePartyFloor.style.display = 'none';
+        hidePreWishBanner();
+        return;
+      }
+
       var floorPickerEl = document.getElementById('guestFloorPicker');
-      var floorPickerVisible = floorPickerEl && floorPickerEl.style.display !== 'none' && vbFloorPickerOptions && vbFloorPickerOptions.length > 0;
+      var floorPickerVisible = false;
       vbUpdateFloorSwitchButton();
 
       // Bis checkBlockStatus die ersten Reads abgeschlossen hat: kein Formular (verhindert Flackern bei Sperre)
@@ -4878,6 +5725,23 @@
         var limGate = document.getElementById('wishLimitInfo');
         var inactGate = document.getElementById('wishboxInactiveMessage');
         var blkGate = document.getElementById('wishboxBlockedMessage');
+        if (isPreWishMode && isWishboxActive && !isBlocked) {
+          if (typeof showLoader === 'function') showLoader(false);
+          else if (loadingOverlay) loadingOverlay.style.display = 'none';
+          if (wfGate) {
+            wfGate.style.display = 'block';
+            wfGate.style.visibility = 'visible';
+          }
+          if (inactGate) inactGate.style.display = 'none';
+          if (blkGate) blkGate.style.display = 'none';
+          var preWishBannerGate = document.getElementById('preWishBanner');
+          if (preWishBannerGate) preWishBannerGate.style.display = 'block';
+          if (blGate) blGate.style.visibility = 'visible';
+          if (typeof updateBrandingLine === 'function') updateBrandingLine();
+          syncPreWishDisclaimerUi();
+          syncGuestDrawerNav();
+          return;
+        }
         if (wfGate) {
           wfGate.style.display = 'none';
           wfGate.style.visibility = 'hidden';
@@ -4899,8 +5763,12 @@
           if (sbGate) sbGate.disabled = true;
           return;
         }
-        if (typeof showLoader === 'function' && !isWishboxActive) showLoader(true);
-        else if (!isWishboxActive && loadingOverlay) loadingOverlay.style.display = 'flex';
+        var storedPartyForLoader = (sessionStorage.getItem('validatedPartyId') || localStorage.getItem('validatedPartyId') || '').trim();
+        var hasStoredPartyForLoader = storedPartyForLoader && storedPartyForLoader !== 'manual';
+        if (!hasStoredPartyForLoader) {
+          if (typeof showLoader === 'function' && !isWishboxActive) showLoader(true);
+          else if (!isWishboxActive && loadingOverlay) loadingOverlay.style.display = 'flex';
+        }
         if (inactGate) inactGate.style.display = 'none';
         if (blkGate) blkGate.style.display = 'none';
         return;
@@ -4960,9 +5828,10 @@
         return; // Pause-Overlay wird von togglePartyPausedOverlay gesteuert
       }
       
-      if (isWishboxActive) {
+      if (isWishboxActive && !vbIsFloorPickerActive()) {
         // Wunschbox ist aktiv und Gast ist nicht gesperrt
-        if (floorPickerEl) floorPickerEl.style.display = 'none';
+        var floorOverlayEl = document.getElementById('guestFloorPickerOverlay');
+        if (floorOverlayEl) floorOverlayEl.style.display = 'none';
         if (wishForm) {
           wishForm.style.display = 'block';
           wishForm.style.visibility = 'visible';
@@ -5011,9 +5880,25 @@
       } else {
         hidePreWishBanner();
         // Wunschbox ist inaktiv
+        if (window.__vbDeferWishboxStatusUntilBoot === true || vbHasAnyJoinFlowSignal()) {
+          if (typeof showLoader === 'function') {
+            var joinLoaderMsg = (typeof getTranslation === 'function' ? getTranslation('loading_party_connection') : null) || 'Connecting to the party...';
+            showLoader(true, joinLoaderMsg);
+          } else if (loadingOverlay) loadingOverlay.style.display = 'flex';
+          if (inactiveMessage) inactiveMessage.style.display = 'none';
+          if (wishForm) {
+            wishForm.style.display = 'none';
+            wishForm.style.visibility = 'hidden';
+          }
+          if (blockedMessage) {
+            blockedMessage.style.display = 'none';
+            blockedMessage.style.visibility = 'hidden';
+          }
+          return;
+        }
         if (typeof showLoader === 'function') showLoader(false);
         else if (loadingOverlay) loadingOverlay.style.display = 'none';
-        if (floorPickerVisible) {
+        if (floorPickerVisible || vbIsFloorPickerActive()) {
           if (wishForm) {
             wishForm.style.display = 'none';
             wishForm.style.visibility = 'hidden';
@@ -5241,7 +6126,7 @@
       const title = document.createElement('div');
       title.className = 'language-modal-title';
       // ✅ Hole Übersetzung für "Sprache"
-      let languageTitle = t('language', 'Sprache');
+      let languageTitle = t('language', 'Language');
       title.textContent = languageTitle;
       
       // Scroll-Container mit Overlays
@@ -5383,6 +6268,7 @@
           hi: 'lang_hindi',
           sq: 'lang_albanian',
           vi: 'lang_vietnamese',
+          ar: 'lang_arabic',
         };
       
       // Aktuelle Sprache bestimmen
@@ -5406,8 +6292,8 @@
           translated = window.getTranslation(nameKey);
         } else if (typeof window.translations !== 'undefined' && window.translations[currentLang] && window.translations[currentLang][nameKey]) {
           translated = window.translations[currentLang][nameKey];
-        } else if (typeof window.translations !== 'undefined' && window.translations['de'] && window.translations['de'][nameKey]) {
-          translated = window.translations['de'][nameKey];
+        } else if (typeof window.translations !== 'undefined' && window.translations['en'] && window.translations['en'][nameKey]) {
+          translated = window.translations['en'][nameKey];
         }
         if (translated && translated !== nameKey) langName = translated;
       }
@@ -5549,6 +6435,9 @@
     };
 
     window.addEventListener('translationsReady', function () {
+      if (typeof window.vbRefreshWishErrorI18n === 'function') {
+        window.vbRefreshWishErrorI18n();
+      }
       if (typeof window.syncPreWishDisclaimerUi === 'function') {
         window.syncPreWishDisclaimerUi();
       }
@@ -5791,11 +6680,12 @@
       var partyName = (localStorage.getItem('currentPartyName') || localStorage.getItem('validatedPartyName') || sessionStorage.getItem('currentPartyName') || sessionStorage.getItem('validatedPartyName') || '').trim();
       var djName = (sessionStorage.getItem('currentDjName') || localStorage.getItem('currentDjName') || '').trim();
       showPartyWishboxEndedOverlay(function () {
-        if (typeof vbGoToRootPwaAfterPartyEnded === 'function') {
-          vbGoToRootPwaAfterPartyEnded();
-        } else {
-          window.location.replace('/');
+        if (typeof clearPartyData === 'function') {
+          clearPartyData(true);
+        } else if (typeof updateWishboxUI === 'function') {
+          updateWishboxUI();
         }
+        try { sessionStorage.setItem('vb_entry_granted', '1'); } catch (eEg) {}
       }, partyName, djName);
     }
 
@@ -5819,19 +6709,40 @@
       try { sessionStorage.removeItem('guestPreWishSession'); } catch (ePw) {}
       try { sessionStorage.removeItem('validatedPartyStartMs'); } catch (ePs) {}
       try { localStorage.removeItem('validatedPartyStartMs'); } catch (ePl) {}
+      try { sessionStorage.removeItem('vb_party_floor_key'); } catch (eFk) {}
+      try { localStorage.removeItem('vb_party_floor_key'); } catch (eFk2) {}
+      try { sessionStorage.removeItem('validatedPartyDjId'); } catch (eDjS) {}
+      try { localStorage.removeItem('validatedPartyDjId'); } catch (eDjL) {}
     }
 
-    /** Gast nach Party-Ende: Session leeren und zur Root-PWA – ohne zweites Code-Overlay auf /. */
+    /** Gast nach Party-Ende: Session leeren, auf /vb/ bleiben (kein Redirect zur Root). */
     function vbGoToRootPwaAfterPartyEnded() {
       if (typeof clearPartyData === 'function') {
-        clearPartyData(false, false);
-      } else {
-        window.location.replace('/');
+        clearPartyData(true);
+      } else if (typeof updateWishboxUI === 'function') {
+        updateWishboxUI();
       }
+      try { sessionStorage.setItem('vb_entry_granted', '1'); } catch (eEg) {}
     }
 
     /** skipRedirect: nur Storage/UI, kein Redirect. endedNoticeForRoot: legacy (nicht mehr für Code-Overlay). */
     function clearPartyData(skipRedirect, endedNoticeForRoot) {
+      var preserveJoin = false;
+      var preservedSessionCode = null;
+      var preservedPending = null;
+      var preservedEntry = null;
+      if (typeof vbHasAnyJoinFlowSignal === 'function' && vbHasAnyJoinFlowSignal()) {
+        preserveJoin = true;
+        if (!skipRedirect) {
+          skipRedirect = true;
+          if (window.IS_DEBUG) console.log('clearPartyData: Join-Signal — kein Redirect');
+        }
+        try {
+          preservedSessionCode = sessionStorage.getItem(window.vbSessionPartyCodeKey || 'vb_session_party_code');
+          preservedPending = sessionStorage.getItem('vb_pending_join_code');
+          preservedEntry = sessionStorage.getItem('vb_entry_granted');
+        } catch (ePres) {}
+      }
       delete togglePartyPausedOverlay._lastPaused;
       if (window.IS_DEBUG) console.log('🧹 clearPartyData: Party beendet – lösche Speicher und setze UI zurück');
       localStorage.removeItem('validatedPartyId');
@@ -5841,6 +6752,13 @@
       try { localStorage.removeItem('pending_party_code'); } catch (e) {}
       try { localStorage.removeItem('guest_client_id'); } catch (e) {}
       clearSessionPartyData();
+      if (preserveJoin) {
+        try {
+          if (preservedSessionCode) sessionStorage.setItem(window.vbSessionPartyCodeKey || 'vb_session_party_code', preservedSessionCode);
+          if (preservedPending) sessionStorage.setItem('vb_pending_join_code', preservedPending);
+          if (preservedEntry === '1') sessionStorage.setItem('vb_entry_granted', '1');
+        } catch (eRestore) {}
+      }
       vbHideFloorPicker();
       vbPendingJoinCodeForFloorPick = null;
       vbMultiFloorAvailable = false;
@@ -5871,7 +6789,7 @@
         if (endedNoticeForRoot === true) {
           try { sessionStorage.setItem('vb_party_ended_notice', '1'); } catch (eN) {}
         }
-        window.location.replace('/');
+        vbRedirectToRootPwa('clearPartyData');
       } else if (window.IS_DEBUG) {
         console.log('✅ clearPartyData: Storage geleert (ohne Redirect, z.B. QR-Code-Wechsel).');
       }
@@ -6132,8 +7050,8 @@
           partyName !== 'Your Party';
         if (headerPartyInfo && headerPartyInfoText && headerPartyInfoName && validPartyName) {
           let infoText = preWishHeader
-            ? 'Vorab-Wünsche für die Party:'
-            : 'Du bist bei der Party:';
+            ? 'Advance requests for the party:'
+            : 'You are at the party:';
           const infoKey = preWishHeader ? 'pre_wish_header_for_party' : 'party_info_text';
           try {
             if (typeof window.getTranslation === 'function') {
@@ -6150,7 +7068,7 @@
           headerPartyInfoName.textContent = partyName.trim();
           if (preWishHeader && headerPartyStartRow && headerPartyStartLabel && headerPartyStartValue) {
             const startDate = getStoredPartyStartDate();
-            let startLabel = 'Beginn der Party:';
+            let startLabel = 'Party starts:';
             try {
               if (typeof window.getTranslation === 'function') {
                 startLabel = window.getTranslation('pre_wish_party_start_label') || startLabel;
@@ -6310,22 +7228,15 @@
       );
     }
 
-    /** Branding vollständig (Name + Plan + Logo) — vor erster Formular-Anzeige awaiten. */
+    /** Branding vollständig (Name + Plan + Logo + Socials) — vor erster Formular-Anzeige awaiten. */
     async function vbApplyWishboxBrandingReady(partyId, partyData) {
-      if (partyData && typeof partyData === 'object') {
-        window.__vbCachedPartyBrandingData = partyData;
+      if (!partyId || !partyData) return;
+      var createdByUid = (typeof partyData.created_by === 'string') ? partyData.created_by.trim() : '';
+      if (!createdByUid && partyData.dj_code != null) {
+        createdByUid = String(partyData.dj_code).trim();
       }
       try {
-        if (partyId && partyData) {
-          await updateHeaderDjName(partyId, partyData);
-        }
-        const planType = partyData
-          ? await ensureDjPlanTypeForBranding(partyData)
-          : (sessionStorage.getItem('djPlanType') || 'free');
-        applyWishboxBrandingFromParty(partyData || window.__vbCachedPartyBrandingData || null, planType);
-        updateHeaderBranding();
-        updatePartyInfoLine();
-        if (typeof loadDrawerLogo === 'function') loadDrawerLogo();
+        await vbHydratePartyDjSession(partyId, partyData, createdByUid);
       } catch (eBr) {
         if (window.IS_DEBUG) console.warn('vbApplyWishboxBrandingReady:', eBr);
         applyWishboxBrandingFromParty(partyData || window.__vbCachedPartyBrandingData || null, sessionStorage.getItem('djPlanType'));
@@ -6597,6 +7508,9 @@
     }
 
     function vbWishboxTranslationKeyForPartyCheck(messageKey) {
+      if (messageKey === 'party_code_ambiguous' || messageKey === (window.MESSAGE_KEY_AMBIGUOUS || '')) {
+        return 'party_code_ambiguous';
+      }
       const map = {
         main_code_error_invalid: 'party_unknown',
         party_ended: 'party_ended',
@@ -6610,6 +7524,9 @@
     function vbHasWishboxEntryPermission() {
       try {
         if (typeof window.vbGetSessionPartyCode8 === 'function' && window.vbGetSessionPartyCode8()) {
+          return true;
+        }
+        if (typeof vbHasPendingJoinCode8 === 'function' && vbHasPendingJoinCode8()) {
           return true;
         }
         const vid = localStorage.getItem('validatedPartyId') || sessionStorage.getItem('validatedPartyId');
@@ -6697,10 +7614,16 @@
       }
 
       try {
-        await vbApplyWishboxBrandingReady(partyId, partyDataResolved);
-      } catch (e) {
-        if (window.IS_DEBUG) console.warn('⚠️ vbFinalizePartyJoin: Branding:', e);
-      }
+        var floorKey = (typeof window.vbEffectiveFloorKey === 'function')
+          ? window.vbEffectiveFloorKey(partyDataResolved)
+          : 'default';
+        sessionStorage.setItem('vb_party_floor_key', floorKey);
+        localStorage.setItem('vb_party_floor_key', floorKey);
+      } catch (eFk) { /* ignore */ }
+
+      var createdByUid = (partyDataResolved.created_by && typeof partyDataResolved.created_by === 'string')
+        ? partyDataResolved.created_by.trim()
+        : ((partyDataResolved.dj_code != null) ? String(partyDataResolved.dj_code).trim() : '');
 
       const seJoin = vbWishboxStartEndFromPartyData(partyDataResolved);
       const nowJoin = new Date();
@@ -6708,16 +7631,26 @@
           && typeof window.vbIsPreWishWindowOpen === 'function'
           && window.vbIsPreWishWindowOpen(partyDataResolved, nowJoin)) {
         try { sessionStorage.setItem('guestPreWishSession', '1'); } catch (e) {}
-        showPreWishWishboxMode(partyDataResolved.party_name || partyName || 'Party', seJoin.startDate);
+        vbBindWishboxFromPartyData(partyDataResolved);
+        if (typeof showLoader === 'function') showLoader(false);
+        void vbHydratePartyDjSession(partyId, partyDataResolved, createdByUid).catch(function (ePw) {
+          if (window.IS_DEBUG) console.warn('vbFinalizePartyJoin preWish branding:', ePw);
+        });
+        showPreWishOrPausedMode(partyDataResolved, partyDataResolved.party_name || partyName || 'Party', seJoin.startDate);
+        vbRunBlockCheckAfterJoin(partyId);
         return { partyId, canonicalPartyCode, partyDataResolved, preWishMode: true };
       }
 
       isWishboxActive = true;
       clearPreWishMode();
       vbBindWishboxFromPartyData(partyDataResolved);
+      if (typeof showLoader === 'function') showLoader(false);
       const isPaused = partyDataResolved.is_paused === true;
       togglePartyPausedOverlay(isPaused);
       updateWishboxUI();
+      void vbHydratePartyDjSession(partyId, partyDataResolved, createdByUid).catch(function (eBr) {
+        if (window.IS_DEBUG) console.warn('⚠️ vbFinalizePartyJoin: Branding:', eBr);
+      });
       unawaited(vbRefreshMultiFloorAvailable());
       return { partyId, canonicalPartyCode, partyDataResolved };
     }
@@ -6745,23 +7678,30 @@
       const isJoinable = typeof window.vbIsPartyGuestJoinable === 'function'
         ? window.vbIsPartyGuestJoinable
         : function () { return false; };
-      const joinable = allDocs.filter(function (doc) {
-        return isJoinable(doc.data(), now);
-      });
+      const resolveFn = typeof window.vbResolveJoinCodeLookup === 'function'
+        ? window.vbResolveJoinCodeLookup
+        : null;
+      const resolved = resolveFn
+        ? resolveFn(allDocs, now, codeToCheck)
+        : { action: 'not_found' };
 
-      if (joinable.length > 1) {
-        const options = joinable.map(function (doc) {
-          if (typeof window.vbFloorOptionFromDoc === 'function') return window.vbFloorOptionFromDoc(doc);
-          const data = doc.data();
-          return {
-            party_id: doc.id,
-            floor_key: (typeof window.vbEffectiveFloorKey === 'function') ? window.vbEffectiveFloorKey(data) : 'default',
-            floor_label: (typeof window.vbRawFloorLabel === 'function') ? window.vbRawFloorLabel(data) : 'default',
-            party_name: data.party_name || data.partyName || null,
-            dj_name: 'DJ'
-          };
-        });
-        await vbShowFloorPickerForJoinCode(codeToCheck, options, null);
+      if (resolved.action === 'ambiguous') {
+        const ambKey = (typeof window.MESSAGE_KEY_AMBIGUOUS === 'string')
+          ? window.MESSAGE_KEY_AMBIGUOUS
+          : 'party_code_ambiguous';
+        if (typeof showPartyStatusModal === 'function') {
+          showPartyStatusModal(
+            'invalid',
+            (typeof getTranslation === 'function' ? getTranslation(ambKey) : null) || ambKey,
+          );
+        }
+        return false;
+      }
+
+      if (resolved.action === 'select_floor'
+          && resolved.floor_options
+          && vbShouldShowFloorPickerForOptions(resolved.floor_options)) {
+        await vbShowFloorPickerForJoinCode(codeToCheck, resolved.floor_options, null);
         if (partyCodeFromUrl && !sessionStorage.getItem('qrCodeProcessed')) {
           if (typeof window.vbReplaceStateStripPartyCodeKeepLang === 'function') {
             window.vbReplaceStateStripPartyCodeKeepLang();
@@ -6770,7 +7710,7 @@
         return true;
       }
 
-      const partyDoc = joinable.length === 1 ? joinable[0] : await findPartyDocByJoinCode(codeToCheck);
+      const partyDoc = resolved.action === 'join' ? resolved.doc : null;
       if (!partyDoc) return false;
 
       const data = partyDoc.data();
@@ -6786,7 +7726,7 @@
       if (se.startDate && now < se.startDate) {
         currentPartyStartDate = se.startDate;
         if (typeof window.vbIsPreWishWindowOpen === 'function' && window.vbIsPreWishWindowOpen(data, now)) {
-          showPreWishWishboxMode(data.party_name || 'Party', se.startDate);
+          showPreWishOrPausedMode(data, data.party_name || 'Party', se.startDate);
         } else {
           showPrePartyWaitMode(data.party_name || 'Party', se.startDate);
         }
@@ -6802,6 +7742,7 @@
             window.vbReplaceStateStripPartyCodeKeepLang();
           }
         }
+        vbRunBlockCheckAfterJoin(partyDoc.id);
         return true;
       }
 
@@ -6823,7 +7764,8 @@
       const isPaused = data.is_paused === true;
       togglePartyPausedOverlay(isPaused);
       vbBindWishboxFromPartyData(data);
-      await vbApplyWishboxBrandingReady(partyDoc.id, data);
+      if (typeof showLoader === 'function') showLoader(false);
+      void vbApplyWishboxBrandingReady(partyDoc.id, data);
       if (typeof window.updatePageTitle === 'function') window.updatePageTitle();
       if (partyCodeFromUrl && !sessionStorage.getItem('qrCodeProcessed')) {
         if (typeof window.vbReplaceStateStripPartyCodeKeepLang === 'function') {
@@ -6918,34 +7860,50 @@
           }
         }
 
-        if (!codeFromUrl) {
+        function vbStoredPartyId() {
+          var fromPending = localStorage.getItem('pendingPartyId');
+          var fromSessionValidated = sessionStorage.getItem('validatedPartyId');
+          var fromLocalValidated = localStorage.getItem('validatedPartyId');
+          if (fromPending && typeof fromPending === 'string' && validatePartyId(fromPending)) return fromPending;
+          if (fromSessionValidated && typeof fromSessionValidated === 'string' && validatePartyId(fromSessionValidated)) return fromSessionValidated;
+          if (fromLocalValidated && typeof fromLocalValidated === 'string' && validatePartyId(fromLocalValidated)) return fromLocalValidated;
+          return '';
+        }
+        function vbStoredJoinDigits() {
+          return String(
+            localStorage.getItem('validatedPartyCode') ||
+            sessionStorage.getItem('validatedPartyCode') ||
+            ''
+          ).replace(/\D/g, '').substring(0, 8);
+        }
+
+        // Session-Code ist kein neuer QR-Join. Sonst würde jeder Reload checkPartyCode
+        // (4 Collection-Queries, Timeout 20s) statt parties/{id} lesen — Overlay „Verbindung wird geprüft“.
+        if (!codeFromUrl && !vbStoredPartyId()) {
           var sessOnly = typeof window.vbGetSessionPartyCode8 === 'function' ? window.vbGetSessionPartyCode8() : null;
           if (sessOnly) codeFromUrl = sessOnly;
         }
 
-        // ✅ Priorität 2: NUR wenn kein Join-Code (URL/Session) – Party-ID aus Storage (validatedPartyId oder pendingPartyId)
         if (!codeFromUrl) {
-          var fromPending = localStorage.getItem('pendingPartyId');
-          var fromSessionValidated = sessionStorage.getItem('validatedPartyId');
-          var fromLocalValidated = localStorage.getItem('validatedPartyId');
-          if (fromPending && typeof fromPending === 'string' && validatePartyId(fromPending)) {
-            partyIdToUse = fromPending;
-            idSourceKey = 'pendingPartyId (localStorage)';
-          } else if (fromSessionValidated && typeof fromSessionValidated === 'string' && validatePartyId(fromSessionValidated)) {
-            partyIdToUse = fromSessionValidated;
-            idSourceKey = 'validatedPartyId (sessionStorage)';
-          } else if (fromLocalValidated && typeof fromLocalValidated === 'string' && validatePartyId(fromLocalValidated)) {
-            partyIdToUse = fromLocalValidated;
-            idSourceKey = 'validatedPartyId (localStorage)';
+          partyIdToUse = vbStoredPartyId();
+          if (partyIdToUse) {
+            idSourceKey = 'validatedPartyId (storage)';
           }
+        } else if (vbStoredPartyId() && vbStoredJoinDigits() && vbStoredJoinDigits() === String(codeFromUrl)) {
+          partyIdToUse = vbStoredPartyId();
+          idSourceKey = 'validatedPartyId (same join code)';
         }
 
         vbLog('processQRCodeLogin Start. ID gelesen aus Key:', idSourceKey || (codeFromUrl ? 'code (URL)' : '(keine)'), 'Wert:', partyIdToUse || (codeFromUrl || '(leer)'));
-        var loadingText = (typeof getTranslation === 'function' ? getTranslation('loading_party_connection') : null) || 'Connecting to the party...';
-        showLoader(true, loadingText);
         loaderShown = true;
+        if (!partyIdToUse) {
+          var loadingText = (typeof getTranslation === 'function' ? getTranslation('loading_party_connection') : null) || 'Connecting to the party...';
+          showLoader(true, loadingText);
+        }
         if (partyIdToUse) {
-          if (idSourceKey === 'pendingPartyId (localStorage)') localStorage.removeItem('pendingPartyId');
+          try {
+            if (localStorage.getItem('pendingPartyId') === partyIdToUse) localStorage.removeItem('pendingPartyId');
+          } catch (ePendRm) {}
           vbLog('Starte Firestore-Abfrage für Party-ID:', partyIdToUse);
           const partyRef = window.firebaseDoc(window.firebaseCollection(window.firebaseDb, 'parties'), partyIdToUse);
           var partyDoc;
@@ -6997,9 +7955,24 @@
             const hiddenPartyCodeInput = document.getElementById('partyCodeInput');
             if (hiddenPartyCodeInput) hiddenPartyCodeInput.value = partyCodeFromDb;
             vbBindWishboxFromPartyData(partyData);
-            try {
-              await vbApplyWishboxBrandingReady(partyId, partyData);
-            } catch (e) { if (window.IS_DEBUG) console.warn('⚠️ Konnte Party-Daten für DJ-Namen nicht laden:', e); }
+            showLoader(false);
+            loaderShown = false;
+            void vbApplyWishboxBrandingReady(partyId, partyData).catch(function (e) {
+              if (window.IS_DEBUG) console.warn('⚠️ Konnte Party-Daten für DJ-Namen nicht laden:', e);
+            });
+            const seBoot = vbWishboxStartEndFromPartyData(partyData);
+            if (seBoot.startDate && now < seBoot.startDate) {
+              if (typeof window.vbIsPreWishWindowOpen === 'function' && window.vbIsPreWishWindowOpen(partyData, now)) {
+                showPreWishOrPausedMode(partyData, partyName || partyData.party_name || 'Party', seBoot.startDate);
+              } else {
+                showPrePartyWaitMode(partyName || partyData.party_name || 'Party', seBoot.startDate);
+              }
+              showLoader(false);
+              loaderShown = false;
+              vbRunBlockCheckAfterJoin(partyId);
+              if (typeof window.vbApplyResolvedLanguageToUi === 'function') window.vbApplyResolvedLanguageToUi();
+              return true;
+            }
             isWishboxActive = true;
             showLoader(false);
             loaderShown = false;
@@ -7039,7 +8012,9 @@
 
           const checkResult = await window.checkPartyCode(codeFromUrl);
 
-          if (checkResult && checkResult.type === 'select_floor' && checkResult.floor_options && checkResult.floor_options.length > 1) {
+          if (checkResult && checkResult.type === 'select_floor'
+              && checkResult.floor_options
+              && vbShouldShowFloorPickerForOptions(checkResult.floor_options)) {
             showLoader(false);
             loaderShown = false;
             await vbShowFloorPickerForJoinCode(codeFromUrl, checkResult.floor_options, null);
@@ -7063,7 +8038,7 @@
             return true;
           }
 
-          if (checkResult && checkResult.type === 'future' && checkResult.start_time_posix) {
+          if (checkResult && checkResult.type === 'future') {
             const langCode = (typeof window.vbGetResolvedPwaLanguageCode === 'function') ? window.vbGetResolvedPwaLanguageCode() : '';
             const tzId = checkResult.timezone_id || 'UTC';
             const startPosix = checkResult.start_time_posix;
@@ -7071,32 +8046,31 @@
               ? window.formatPartyStartAtLine(startPosix, tzId, langCode, typeof t === 'function' ? t : getTranslation)
               : '';
             const introFuture = (typeof getTranslation === 'function' ? getTranslation('main_party_not_started_intro') : null) || 'This party has not started yet.';
-            const futureMsg = introFuture + '<br><br><strong>' + atLine + '</strong>';
+            const futureMsg = introFuture + '<br><br><strong>' + (typeof escapeHtml === 'function' ? escapeHtml(atLine) : atLine) + '</strong>';
             const countdownStr = (typeof window.calculateTimeUntilParty === 'function' && typeof t === 'function')
               ? window.calculateTimeUntilParty(startPosix, t)
               : '';
             showPartyStatusModal('future', futureMsg, countdownStr);
-            if (typeof window.vbReplaceStateStripPartyCodeKeepLang === 'function') window.vbReplaceStateStripPartyCodeKeepLang();
-            if (typeof window.vbApplyResolvedLanguageToUi === 'function') window.vbApplyResolvedLanguageToUi();
-            showLoader(false);
-            loaderShown = false;
-            return true;
+            return false;
           }
 
           if (!checkResult || !checkResult.success || !checkResult.data || !checkResult.data.party_id) {
             showLoader(false);
             loaderShown = false;
-            if (checkResult && checkResult.type === 'select_floor' && checkResult.floor_options && checkResult.floor_options.length) {
+            if (checkResult && checkResult.type === 'select_floor'
+                && checkResult.floor_options
+                && vbShouldShowFloorPickerForOptions(checkResult.floor_options)) {
               await vbShowFloorPickerForJoinCode(codeFromUrl, checkResult.floor_options, null);
               if (typeof window.vbReplaceStateStripPartyCodeKeepLang === 'function') window.vbReplaceStateStripPartyCodeKeepLang();
               return true;
             }
             const errKey = vbWishboxTranslationKeyForPartyCheck(checkResult && checkResult.messageKey);
-            const modalType = errKey === 'party_ended' ? 'ended' : 'invalid';
+            const modalType = errKey === 'party_ended' ? 'ended' : (errKey === 'party_not_started' ? 'future' : 'invalid');
             showPartyStatusModal(
               modalType,
               (typeof getTranslation === 'function' ? getTranslation(errKey) : null) || errKey,
             );
+            if (modalType === 'ended') return false;
             if (typeof window.vbReplaceStateStripPartyCodeKeepLang === 'function') window.vbReplaceStateStripPartyCodeKeepLang();
             return false;
           }
@@ -7138,10 +8112,12 @@
           if (p.indexOf('/vb') === -1) return;
           if (typeof vbHasWishboxEntryPermission === 'function' && vbHasWishboxEntryPermission()) return;
           vbBlockedByEntryGate = true;
-          window.location.replace('/');
+          vbRedirectToRootPwa('entryGate');
         } catch (eGate) {}
       })();
       if (vbBlockedByEntryGate) return;
+
+      vbClearStaleValidatedPartyIfJoinCodeMismatch();
 
       try {
         currentClientId = await getOrCreateClientId(null, { deferWrites: true });
@@ -7179,12 +8155,15 @@
       })();
 
       const qrLoginSuccess = await processQRCodeLogin();
+      if (window.__vbLeavingForHomeNotice) return;
       if (window.bodyLoadError) {
         vbLog('Ladefehler von processQRCodeLogin, zeige Fehler-UI');
+        window.__vbDeferWishboxStatusUntilBoot = false;
         if (typeof updateWishboxUI === 'function') updateWishboxUI();
         return;
       }
       if (!qrLoginSuccess) {
+        window.__vbDeferWishboxStatusUntilBoot = false;
         if (hadPartyCodeInUrl || (typeof window.vbGetSessionPartyCode8 === 'function' && window.vbGetSessionPartyCode8())) {
           if (window.IS_DEBUG) console.log('DEBUG PWA: QR-/URL-Code oder vb_session_party_code — Login fehlgeschlagen, bleibe in /vb/ (kein Redirect zu /).');
           if (typeof updateWishboxUI === 'function') updateWishboxUI();
@@ -7193,10 +8172,11 @@
         }
         // Kein Session-Code und kein erfolgreicher Auto-Login → zur Hauptseite (Marketing-PWA)
         if (window.IS_DEBUG) console.log('DEBUG PWA: processQRCodeLogin fehlgeschlagen ohne Session-Party-Code, Redirect zu /');
-        window.location.replace('/');
+        vbRedirectToRootPwa('bootNoCode');
         return;
       }
       try { sessionStorage.setItem('vb_entry_granted', '1'); } catch (eEg) {}
+      window.__vbDeferWishboxStatusUntilBoot = false;
       if (window.IS_DEBUG) console.log('DEBUG PWA: Initial checkWishboxStatus() (nach Login, ohne erneutes Block-Gate)');
       checkWishboxStatus({ skipFullBlockRecheck: true });
       updateHeaderBasedOnLoginStatus();
@@ -7220,14 +8200,14 @@
     
     // Prüfe alle 30 Sekunden erneut (Party-Laufzeit/Wunschbox — ohne erneutes Block-Gate)
     setInterval(function () {
-      checkWishboxStatus({ skipFullBlockRecheck: true });
+      vbMaybeCheckWishboxStatus({ skipFullBlockRecheck: true });
     }, 30000);
     
     // ✅ Limit-Info läuft über Firebase onSnapshot (subscribeWishLimitStream) – kein Polling, kein Flackern
     
     // Prüfe auch bei URL-Änderungen (z.B. wenn Code in URL hinzugefügt wird)
     window.addEventListener('popstate', () => {
-      checkWishboxStatus();
+      vbMaybeCheckWishboxStatus();
     });
     
     // Prüfe auch wenn Hash oder Query-Parameter sich ändern
@@ -7235,7 +8215,7 @@
     setInterval(() => {
       if (window.location.href !== lastUrl) {
         lastUrl = window.location.href;
-        checkWishboxStatus();
+        vbMaybeCheckWishboxStatus();
       }
     }, 1000);
 
@@ -7538,7 +8518,7 @@
         if (!validateResponse.ok) {
           const errorData = await validateResponse.json().catch(() => ({}));
           console.error('❌ reCAPTCHA v3: Validierung fehlgeschlagen', errorData);
-          let msg = errorData.error || 'Fehler bei der Validierung';
+          let msg = errorData.error || t('contact_error_recaptcha_validation_failed', 'reCAPTCHA validation failed. Please try again.');
           if (errorData.code === 'MISSING_TOKEN') {
             msg = t('contact_error_recaptcha_token_missing', msg);
           } else if (
@@ -7685,6 +8665,45 @@
     })();
     let tracksPerPage = VB_DEFAULT_RESULTS_PER_PAGE;
 
+    function vbIsPrePartyWaitUiActive() {
+      var prePartyDiv = document.getElementById('prePartyWaitMode');
+      if (!prePartyDiv) return false;
+      try {
+        return prePartyDiv.style.display === 'block'
+          || window.getComputedStyle(prePartyDiv).display !== 'none';
+      } catch (e) {
+        return prePartyDiv.style.display === 'block';
+      }
+    }
+
+    /** History erst nach Party-Start (nicht Vorab / nicht Pre-Party-Wartezeit). */
+    function vbIsGuestHistoryBlocked() {
+      if (isPreWishMode || isPreWishesPausedMode) return true;
+      if (vbIsPrePartyWaitUiActive()) return true;
+      try {
+        if (sessionStorage.getItem('guestPreWishSession') === '1') return true;
+      } catch (e) {}
+      var start = typeof getStoredPartyStartDate === 'function' ? getStoredPartyStartDate() : null;
+      if (start && !isNaN(start.getTime()) && new Date() < start) return true;
+      return false;
+    }
+
+    function vbShowHistoryIdleState() {
+      var historyLoading = document.getElementById('historyLoading');
+      var historyError = document.getElementById('historyError');
+      var historyEmpty = document.getElementById('historyEmpty');
+      var historyList = document.getElementById('historyList');
+      var historyPagination = document.getElementById('historyPagination');
+      if (historyLoading) historyLoading.style.display = 'none';
+      if (historyError) historyError.style.display = 'none';
+      if (historyList) historyList.innerHTML = '';
+      if (historyPagination) {
+        historyPagination.innerHTML = '';
+        historyPagination.style.display = 'none';
+      }
+      if (historyEmpty) historyEmpty.style.display = 'block';
+    }
+
     function vbParseResultsPerPage(raw) {
       const n = typeof raw === 'number' ? raw : parseInt(String(raw), 10);
       if (VB_ALLOWED_RESULTS_PER_PAGE.indexOf(n) !== -1) return n;
@@ -7732,14 +8751,26 @@
       
       if (!hasPartyId) {
         if (window.IS_DEBUG) console.log('⚠️ loadHistory: Keine Party-ID vorhanden, breche ab');
-        const historyList = document.getElementById('historyList');
-        if (historyList) {
-          historyList.innerHTML = '';
+        vbShowHistoryIdleState();
+        return;
+      }
+
+      if (vbIsGuestHistoryBlocked()) {
+        if (window.IS_DEBUG) console.log('⚠️ loadHistory: Vorab/Pre-Party — leere History ohne Ladebalken');
+        if (historyListener) {
+          try {
+            if (typeof historyListener === 'function') historyListener();
+            else if (historyListener.unsubscribe) historyListener.unsubscribe();
+            if (historyListener.trackListeners) {
+              historyListener.trackListeners.forEach(function (u) {
+                if (typeof u === 'function') u();
+              });
+            }
+          } catch (eHist) {}
+          historyListener = null;
         }
-        const historyPagination = document.getElementById('historyPagination');
-        if (historyPagination) {
-          historyPagination.innerHTML = '';
-        }
+        allTracksCache = [];
+        vbShowHistoryIdleState();
         return;
       }
       
@@ -7768,74 +8799,69 @@
       historyList.innerHTML = '';
       
       try {
-        // Party-Code aus verstecktem Feld lesen
-        const partyCodeInput = document.getElementById('partyCodeInput');
-        const partyCode = partyCodeInput ? (partyCodeInput.value || 'manual') : 'manual';
-        
-        if (window.IS_DEBUG) console.log('🔍 PWA-DEBUG: partyCode aus Input: ' + partyCode);
-        
-        if (!partyCode || partyCode === 'manual') {
-          if (window.IS_DEBUG) console.warn('⚠️ PWA-WARNING: Kein Party-Code gefunden - zeige leere History');
-          // Keine aktive Party - zeige leere History
-          historyLoading.style.display = 'none';
-          historyEmpty.style.display = 'block';
-          return;
-        }
-        
-        // Hole Party-Info um party_id zu bekommen
-        if (window.IS_DEBUG) console.log('🔍 PWA-DEBUG: Rufe getActivePartyInfo() auf...');
-        const partyInfo = await getActivePartyInfo(partyCode);
-        const currentPartyId = partyInfo.party_id;
-        
-        if (window.IS_DEBUG) console.log('🔍 PWA-DEBUG: getActivePartyInfo() zurückgegeben: party_id=' + currentPartyId);
-        if (window.IS_DEBUG) console.log('✅ Basisdaten geladen');
-        
+        const currentPartyId =
+          (validatedPartyIdSession && validatedPartyIdSession !== 'manual'
+            ? validatedPartyIdSession
+            : validatedPartyId) || '';
+
         if (!currentPartyId || currentPartyId === 'manual') {
           if (window.IS_DEBUG) console.warn('⚠️ PWA-WARNING: Keine gültige party_id - zeige leere History');
-          // Keine aktive Party - zeige leere History
           historyLoading.style.display = 'none';
           historyEmpty.style.display = 'block';
           return;
         }
-        
-        // ✅ Aktualisiere History-Cache beim Laden der History-Seite
-        await updateHistoryCache(currentPartyId);
-        
-        // DEBUG-LOGGING: Zeige partyId
-        if (window.IS_DEBUG) console.log('🔍 PWA-DEBUG: currentPartyId=' + currentPartyId);
-        
-        // Lade Party-Dokument direkt, um created_by (djId) zu bekommen
-        let djId = null;
-        try {
-          const partyDocRef = window.firebaseDoc(window.firebaseDb, 'parties', currentPartyId);
-          const partyDoc = await window.firebaseGetDoc(partyDocRef);
-          if (partyDoc.exists()) {
-            const partyData = partyDoc.data();
-            djId = partyData.created_by;
-            if (window.IS_DEBUG) console.log('🔍 PWA-DEBUG: djId=' + djId);
-            if (window.IS_DEBUG) console.log('✅ Basisdaten geladen');
-            
-            if (!djId || djId === '') {
-              console.error('❌ PWA-ERROR: djId konnte nicht aus created_by extrahiert werden!');
-              console.error('❌ PWA-ERROR: Party-Basisdaten unvollständig');
-            }
-          } else {
-            console.error('❌ PWA-ERROR: Party-Dokument nicht gefunden für ID: ' + currentPartyId);
-          }
-        } catch (e) {
-          console.error('❌ PWA-ERROR: Fehler beim Laden des Party-Dokuments:', e);
+
+        let djId = (
+          sessionStorage.getItem('validatedPartyDjId') ||
+          localStorage.getItem('validatedPartyDjId') ||
+          ''
+        ).trim();
+
+        const partyDocRef = window.firebaseDoc(window.firebaseDb, 'parties', currentPartyId);
+        const partyDoc = await window.firebaseGetDoc(partyDocRef);
+        if (!partyDoc.exists()) {
+          console.error('❌ PWA-ERROR: Party-Dokument nicht gefunden für ID: ' + currentPartyId);
+          historyLoading.style.display = 'none';
+          historyEmpty.style.display = 'block';
+          return;
         }
-        
-        // VALIDIERUNG: Stelle sicher, dass djId vorhanden ist
-        if (!djId || djId === '') {
+        const partyData = partyDoc.data() || {};
+        if (!djId) {
+          djId = String(partyData.created_by || '').trim();
+        }
+        if (djId) {
+          try {
+            sessionStorage.setItem('validatedPartyDjId', djId);
+            localStorage.setItem('validatedPartyDjId', djId);
+          } catch (eStoreDj) {}
+        }
+
+        if (!djId) {
           console.error('❌ PWA-ERROR: djId fehlt - kann History nicht laden');
           historyLoading.style.display = 'none';
           historyEmpty.style.display = 'block';
           return;
         }
 
-        tracksPerPage = await vbLoadDjResultsPerPage(djId);
-        if (window.IS_DEBUG) console.log('🔍 PWA-DEBUG: tracksPerPage=' + tracksPerPage);
+        const seLive = typeof vbWishboxStartEndFromPartyData === 'function'
+          ? vbWishboxStartEndFromPartyData(partyData)
+          : { startDate: null };
+        if (seLive.startDate && new Date() < seLive.startDate) {
+          if (window.IS_DEBUG) console.log('⚠️ loadHistory: Party noch nicht gestartet');
+          historyLoading.style.display = 'none';
+          historyEmpty.style.display = 'block';
+          return;
+        }
+
+        void updateHistoryCache(currentPartyId);
+
+        tracksPerPage = VB_DEFAULT_RESULTS_PER_PAGE;
+        void vbLoadDjResultsPerPage(djId).then(function (n) {
+          if (typeof n === 'number' && n !== tracksPerPage) {
+            tracksPerPage = n;
+            if (allTracksCache.length > 0) renderHistoryPage();
+          }
+        });
         
         // Stoppe alten Listener falls vorhanden
         if (historyListener) {
@@ -7859,144 +8885,101 @@
         // Reset Cache und Seite
         allTracksCache = [];
         currentHistoryPage = page;
-        
-        // Erstelle Snapshot Listener für Sessions dieser Party
+
         const sessionsRef = window.firebaseCollection(window.firebaseDb, 'music_history');
-        // STRICT ISOLATION: Filtere nach djId UND partyId (lange ID)
-        // WICHTIG: isActive Filter entfernt - wir wollen ALLE Songs der Party sehen
-        if (!currentPartyId || currentPartyId === 'manual' || currentPartyId === '') {
-          if (window.IS_DEBUG) console.warn('⚠️ Keine gültige party_id für Sessions-Query');
-          return;
-        }
-        
-        // Filter: party_id (mit Unterstrich) – Collection music_history, Sub-Collection tracks
-        console.log('DEBUG [DJ-History]: Suche mit ID-Typ:', typeof currentPartyId, 'Wert:', currentPartyId);
+        if (window.IS_DEBUG) console.log('DEBUG [DJ-History]: Suche mit ID-Typ:', typeof currentPartyId, 'Wert:', currentPartyId);
         const sessionsQuery = window.firebaseQuery(
           sessionsRef,
           window.firebaseWhere('djId', '==', djId),
           window.firebaseWhere('party_id', '==', currentPartyId)
         );
-        
+
         if (window.IS_DEBUG) console.log('📊 PWA-DEBUG: Query erstellt mit djId=' + djId + ', partyId=' + currentPartyId);
-        
-        // Erstelle Wrapper-Objekt für Listener-Management
+
         const listenerWrapper = {
           unsubscribe: null,
           trackListeners: []
         };
-        
+
         listenerWrapper.unsubscribe = window.firebaseOnSnapshot(sessionsQuery, async (sessionsSnapshot) => {
           try {
-            // DEBUG-LOGGING: Zeige Anzahl gefundener Sessions
-            const snapshotSize = typeof sessionsSnapshot.size === 'number' ? sessionsSnapshot.size : (sessionsSnapshot.docs && sessionsSnapshot.docs.length);
+            const snapshotSize = typeof sessionsSnapshot.size === 'number'
+              ? sessionsSnapshot.size
+              : (sessionsSnapshot.docs && sessionsSnapshot.docs.length);
             console.log('DEBUG [DJ-History]: Snapshot erhalten, Dokumente:', snapshotSize);
             if (window.IS_DEBUG) console.log('📊 PWA-DEBUG: Gefundene Sessions: ' + sessionsSnapshot.docs.length);
-            if (sessionsSnapshot.docs.length > 0) {
-              const firstSession = sessionsSnapshot.docs[0];
-              if (window.IS_DEBUG) console.log('📊 PWA-DEBUG: Erste Session-ID: ' + firstSession.id);
-              if (window.IS_DEBUG) console.log('✅ Basisdaten geladen');
-            }
-            
-            // Stoppe alte Track-Listener falls vorhanden (bei Session-Update)
+
             if (listenerWrapper.trackListeners.length > 0) {
               listenerWrapper.trackListeners.forEach(unsubscribe => {
-                if (typeof unsubscribe === 'function') {
-                  unsubscribe();
-                }
+                if (typeof unsubscribe === 'function') unsubscribe();
               });
               listenerWrapper.trackListeners = [];
             }
-            
-            // Sammle alle Tracks und erstelle Realtime-Listener
+
             let tracksLoaded = 0;
-            const totalSessions = sessionsSnapshot.docs.length;
-            let previousTrackCount = allTracksCache.length; // Speichere vorherige Anzahl für Neuerkennung
-            
-            // Wenn keine Sessions vorhanden, zeige leere History
-            if (totalSessions === 0) {
-              if (window.IS_DEBUG) console.warn('⚠️ PWA-WARNING: Keine Sessions gefunden für djId=' + djId + ', partyId=' + currentPartyId);
-              historyLoading.style.display = 'none';
-              const historyEmpty = document.getElementById('historyEmpty');
-              if (historyEmpty) {
-                historyEmpty.style.display = 'block';
-              }
-              return;
-            }
-            
-            // Funktion zum Laden und Anzeigen der Tracks
-            const updateTracksAndRender = () => {
-              // Sortiere alle Tracks nach Timestamp (neueste zuerst)
-              allTracksCache.sort((a, b) => b.timestamp - a.timestamp);
-              
-              // Prüfe ob neuer Song hinzugekommen ist
-              const newTrackAdded = allTracksCache.length > previousTrackCount;
-              
-              // Wenn neuer Song hinzugekommen ist und wir auf Seite 1 sind, bleibe auf Seite 1
-              // (Neue Songs erscheinen oben, daher bleibt Seite 1 korrekt)
-              // Wenn wir auf einer anderen Seite sind, bleibe dort (Benutzer kann selbst wechseln)
-              if (newTrackAdded && currentHistoryPage === 1) {
-                // Bleibe auf Seite 1 - neuer Song erscheint oben
-                // currentHistoryPage bleibt 1
-              }
-              
-              // Aktualisiere vorherige Anzahl für nächsten Vergleich
-              previousTrackCount = allTracksCache.length;
-              
-              // Rendere die aktuelle Seite
-              renderHistoryPage();
-              
-              // Verstecke Loading nach erstem vollständigen Rendering
-              if (tracksLoaded >= totalSessions) {
-                historyLoading.style.display = 'none';
-              }
-            };
-            
-            // Erstelle onSnapshot-Listener für Tracks jeder Session
-            sessionsSnapshot.docs.forEach(sessionDoc => {
-              const sessionId = sessionDoc.id;
+            let previousTrackCount = allTracksCache.length;
+
+            const validSessions = sessionsSnapshot.docs.filter(sessionDoc => {
               const sessionData = sessionDoc.data();
               const sessionDjId = sessionData.djId;
               const sessionPartyId = sessionData.party_id || sessionData.partyId;
-              
-              // DEBUG-LOGGING: Zeige Session-Details
-              if (window.IS_DEBUG) console.log('🔍 PWA-DEBUG: Session ' + sessionId + ': djId=' + sessionDjId + ', party_id=' + sessionPartyId);
-              
-              // SICHERHEITS-PRÜFUNG: Nur Sessions mit korrekter djId und party_id
-              if (sessionDjId !== djId || sessionPartyId !== currentPartyId) {
-                if (window.IS_DEBUG) console.warn('⚠️ PWA-WARNING: Session ' + sessionId + ' übersprungen (djId oder party_id stimmt nicht)');
-                return;
-              }
-              
+              return sessionDjId === djId && sessionPartyId === currentPartyId;
+            }).sort(function (a, b) {
+              const ta = a.data().startTime && a.data().startTime.toMillis
+                ? a.data().startTime.toMillis()
+                : 0;
+              const tb = b.data().startTime && b.data().startTime.toMillis
+                ? b.data().startTime.toMillis()
+                : 0;
+              return tb - ta;
+            }).slice(0, 3);
+            const totalSessions = validSessions.length;
+
+            if (totalSessions === 0) {
+              if (window.IS_DEBUG) console.warn('⚠️ PWA-WARNING: Keine passenden Sessions für djId=' + djId + ', partyId=' + currentPartyId);
+              allTracksCache = [];
+              renderHistoryPage();
+              historyLoading.style.display = 'none';
+              const historyEmptyEl = document.getElementById('historyEmpty');
+              if (historyEmptyEl) historyEmptyEl.style.display = 'block';
+              return;
+            }
+
+            const updateTracksAndRender = () => {
+              allTracksCache.sort((a, b) => b.timestamp - a.timestamp);
+              previousTrackCount = allTracksCache.length;
+              renderHistoryPage();
+              historyLoading.style.display = 'none';
+            };
+
+            validSessions.forEach(sessionDoc => {
+              const sessionId = sessionDoc.id;
+              if (window.IS_DEBUG) console.log('🔍 PWA-DEBUG: Session ' + sessionId);
+
               const tracksRef = window.firebaseCollection(
                 window.firebaseDb,
                 `music_history/${sessionId}/tracks`
               );
-              
-              // Neueste Tracks zuerst; Cap pro Session reduziert erste Snapshot-Payload
+
               const tracksQuery = window.firebaseQuery(
                 tracksRef,
                 window.firebaseOrderBy('timestamp', 'desc'),
                 window.firebaseLimit(PWA_FS_HISTORY_UI_TRACKS_PER_SESSION)
               );
-              
-              // Verwende onSnapshot für Realtime-Updates der Tracks
+
               const trackUnsubscribe = window.firebaseOnSnapshot(tracksQuery, (tracksSnapshot) => {
-                if (window.IS_DEBUG) console.log('📥 PWA-DEBUG: Lade Tracks für Session ' + sessionId + '...');
-                if (window.IS_DEBUG) console.log('📊 PWA-DEBUG: Session ' + sessionId + ' hat ' + tracksSnapshot.docs.length + ' Tracks');
-                
-                // Entferne alte Tracks dieser Session
+                if (window.IS_DEBUG) console.log('📥 PWA-DEBUG: Tracks Session ' + sessionId + ': ' + tracksSnapshot.docs.length);
+
                 allTracksCache = allTracksCache.filter(t => t.sessionId !== sessionId);
-                
-                // Füge neue Tracks hinzu
+
                 tracksSnapshot.docs.forEach(trackDoc => {
                   const trackData = trackDoc.data();
                   const timestamp = trackData.timestamp;
-                  
+
                   if (timestamp) {
                     const trackTitle = (trackData.title || '').trim().toLowerCase();
                     const trackArtist = (trackData.artist || '').trim().toLowerCase();
-                    
-                    // ✅ Aktualisiere History-Cache beim Laden
+
                     if (trackTitle || trackArtist) {
                       if (!localHistoryCache.find(t => t.title === trackTitle && t.artist === trackArtist)) {
                         localHistoryCache.push({
@@ -8005,19 +8988,20 @@
                         });
                       }
                     }
-                    
+
                     allTracksCache.push({
                       id: trackDoc.id,
                       sessionId: sessionId,
                       title: unescapeHtml(trackData.title || ''),
                       artist: unescapeHtml(trackData.artist || ''),
+                      bpm: trackData.bpm,
+                      camelot: trackData.camelot || '',
+                      durationSec: trackData.durationSec || null,
                       timestamp: timestamp.toDate ? timestamp.toDate() : new Date(timestamp.seconds * 1000)
                     });
                   }
                 });
-                
-                if (window.IS_DEBUG) console.log('✅ PWA-DEBUG: Insgesamt ' + allTracksCache.length + ' Tracks im Cache');
-                
+
                 tracksLoaded++;
                 updateTracksAndRender();
               }, (trackError) => {
@@ -8025,10 +9009,10 @@
                 tracksLoaded++;
                 updateTracksAndRender();
               });
-              
+
               listenerWrapper.trackListeners.push(trackUnsubscribe);
             });
-            
+
           } catch (error) {
             console.error('Fehler beim Verarbeiten der History:', error);
             historyLoading.style.display = 'none';
@@ -8044,10 +9028,9 @@
           historyErrorText.textContent = t('history_error', 'Error loading history');
           historyEmpty.style.display = 'none';
         });
-        
-        // Speichere Listener-Wrapper
+
         historyListener = listenerWrapper;
-        
+
       } catch (error) {
         console.error('Fehler beim Laden der History:', error);
         historyLoading.style.display = 'none';
@@ -8068,6 +9051,8 @@
       
       // Prüfe ob Tracks vorhanden
       if (allTracksCache.length === 0) {
+        const historyLoadingEl = document.getElementById('historyLoading');
+        if (historyLoadingEl) historyLoadingEl.style.display = 'none';
         historyEmpty.style.display = 'block';
         historyList.innerHTML = '';
         historyPagination.style.display = 'none';
@@ -8099,12 +9084,30 @@
         const artistDiv = document.createElement('div');
         artistDiv.className = 'history-item-artist';
         artistDiv.textContent = track.artist || '';
+        const metaBits = [];
+        if (track.durationSec && Number(track.durationSec) > 0) {
+          const dur = Math.round(Number(track.durationSec));
+          const mm = Math.floor(dur / 60);
+          const ss = String(dur % 60).padStart(2, '0');
+          metaBits.push(mm + ':' + ss);
+        }
+        if (track.bpm && Number(track.bpm) > 0) {
+          const bpmNum = Number(track.bpm);
+          metaBits.push((Math.abs(bpmNum - Math.round(bpmNum)) < 0.05 ? String(Math.round(bpmNum)) : bpmNum.toFixed(1)) + ' BPM');
+        }
+        if (track.camelot) metaBits.push(String(track.camelot));
         const timeDiv = document.createElement('div');
         timeDiv.className = 'history-item-time';
         timeDiv.textContent = formatTime(track.timestamp);
         
         content.appendChild(titleDiv);
         content.appendChild(artistDiv);
+        if (metaBits.length) {
+          const metaDiv = document.createElement('div');
+          metaDiv.className = 'history-item-meta';
+          metaDiv.textContent = metaBits.join(' · ');
+          content.appendChild(metaDiv);
+        }
         content.appendChild(timeDiv);
         item.appendChild(content);
         historyList.appendChild(item);
@@ -8277,7 +9280,9 @@
       var preWishNavBlock = false;
       try {
         preWishNavBlock = (typeof isPreWishUiActive === 'function' && isPreWishUiActive()) ||
-          sessionStorage.getItem('guestPreWishSession') === '1';
+          sessionStorage.getItem('guestPreWishSession') === '1' ||
+          isPreWishesPausedMode ||
+          (typeof vbIsPrePartyWaitUiActive === 'function' && vbIsPrePartyWaitUiActive());
       } catch (e) {}
       if (pageId === 'history' && preWishNavBlock) {
         showPage('wunschbox');
@@ -8362,7 +9367,7 @@
       }
       
       // Wunschbox: vollständiger Status inkl. Block-Gate (kein Formular vor Freigabe)
-      if (pageId === 'wunschbox') {
+      if (pageId === 'wunschbox' && !window.__vbDeferWishboxStatusUntilBoot) {
         checkWishboxStatus();
       }
       
@@ -8455,11 +9460,17 @@
     function showNoPartyInfoScreen(pageId) {
       if (typeof window.vbGetSessionPartyCode8 === 'function' && window.vbGetSessionPartyCode8()) {
         if (window.IS_DEBUG) console.log('🔒 vb_session_party_code gesetzt — kein Redirect zur Root (pageId=' + (pageId || '') + ').');
+        showPage('wunschbox');
+        return;
+      }
+      if (vbIsOnWishboxPath()) {
+        if (window.IS_DEBUG) console.log('🔒 Keine Party-ID auf /vb/ — Wunschbox statt Root (pageId=' + (pageId || '') + ').');
+        showPage('wunschbox');
         return;
       }
       if (window.IS_DEBUG) console.log('🔒 Keine Party-ID – Umleitung zur Main PWA.');
       console.warn('DEBUG [Auto-Login]: Redirect zur Startseite wird ausgelöst! Grund: showNoPartyInfoScreen (keine Party-ID, pageId=' + (pageId || '') + ').');
-      window.location.replace('/');
+      vbRedirectToRootPwa('showNoPartyInfoScreen');
     }
     
     // ✅ Funktion zum Laden des DJ-Logos für Social-Media-Seite
@@ -8478,7 +9489,12 @@
         return;
       }
 
-      // ✅ Lade Party-Daten für dj_logo (wie in Wunschbox)
+      const cachedPartyData = window.__vbCachedPartyBrandingData;
+      if (cachedPartyData && vbApplyPartyDjLogo(logoContainer, logoImg, cachedPartyData)) {
+        return;
+      }
+
+      // ✅ Fallback: Party-Daten für dj_logo (nur wenn kein Cache)
       const savedPartyId = validatedPartyId;
       if (savedPartyId && savedPartyId !== 'manual' && savedPartyId !== '') {
         try {
@@ -8486,16 +9502,8 @@
           window.firebaseGetDoc(partyRef).then((partyDoc) => {
             if (partyDoc.exists()) {
               const partyData = partyDoc.data();
-              const planType = (sessionStorage.getItem('djPlanType') || '').toLowerCase();
-              const logoUrl = (planType === 'free') ? 'icon/vibesbox-logo.png' : (partyData.dj_logo || null);
-              
-              if (logoUrl && logoImg) {
-                logoImg.src = logoUrl;
-                logoImg.style.display = 'block';
-                logoContainer.style.display = 'flex';
-              } else {
-                logoContainer.style.display = 'none';
-              }
+              window.__vbCachedPartyBrandingData = partyData;
+              vbApplyPartyDjLogo(logoContainer, logoImg, partyData);
             } else {
               logoContainer.style.display = 'none';
             }
@@ -8623,45 +9631,19 @@
         return;
       }
 
-      // ✅ Datenquelle: DJ / Host aus Firestore – social_media_links/{createdByUid}
-      // In Party ohne Links → Hinweistext; ohne Party → VibesBox-Kanäle
-      let socialsData = null;
-      
-      if (validatedPartyId && validatedPartyId !== 'manual' && validatedPartyId !== '') {
-        try {
-          const partyRef = window.firebaseDoc(window.firebaseCollection(window.firebaseDb, 'parties'), validatedPartyId);
-          const partyDoc = await window.firebaseGetDoc(partyRef);
-          const createdByUid = partyDoc.exists() ? (partyDoc.data().created_by || null) : null;
-          
-          if (createdByUid) {
-            const socialsRef = window.firebaseDoc(window.firebaseCollection(window.firebaseDb, 'social_media_links'), createdByUid);
-            const socialsSnap = await window.firebaseGetDoc(socialsRef);
-            if (socialsSnap && socialsSnap.exists()) {
-              socialsData = socialsSnap.data();
-              // ✅ Unterstütze auch platforms-Array (wie admin_config) für Kompatibilität
-              if (socialsData.platforms && Array.isArray(socialsData.platforms) && socialsData.platforms.length > 0) {
-                const converted = { order: [] };
-                socialsData.platforms.forEach(function(p) {
-                  var id = (p.id || '').toLowerCase().trim();
-                  var url = (p.url || '').trim();
-                  if (id && url && (url.indexOf('http://') === 0 || url.indexOf('https://') === 0)) {
-                    converted[id] = url;
-                    converted.order.push(id);
-                  }
-                });
-                socialsData = converted;
-              }
-              if (window.IS_DEBUG) console.log('✅ DJ-Social aus social_media_links geladen:', socialsData.order || []);
-            }
-          }
-        } catch (e) {
-          if (window.IS_DEBUG) console.warn('social_media_links load failed', e);
-        }
+      // ✅ Datenquelle: zuerst Session-Cache (beim Join/Vorab bereits geladen), sonst 1× Remote
+      let socialsData = vbReadCachedDjSocials();
+      if (!socialsData || !vbSocialsHaveLinks(socialsData)) {
+        if (window.IS_DEBUG) console.log('🔗 Social-Cache leer — lade remote…');
+        const remoteSocials = await vbFetchRemoteDjSocials();
+        if (remoteSocials) socialsData = remoteSocials;
+      } else if (window.IS_DEBUG) {
+        console.log('✅ DJ-Social aus Session-Cache:', socialsData.order || []);
       }
       
       // ✅ Pro/Trial in Party ohne Links → Hinweis; ohne Party → VibesBox (Free-DJ-Party bereits oben)
       const order = socialsData && (socialsData.order || socialsData.socialOrder) ? socialsData.order || socialsData.socialOrder : [];
-      const hasLinks = order.length > 0 || (socialsData && Object.keys(socialsData).some(k => k !== 'order' && k !== 'socialOrder' && socialsData[k]));
+      const hasLinks = vbSocialsHaveLinks(socialsData);
       
       if (!socialsData || !hasLinks) {
         if (window.IS_DEBUG) console.log(inParty ? '⚠️ Keine DJ-Social-Links – Hinweis für Party-Gast (Pro/Trial)' : '⚠️ Keine Party – VibesBox-Fallback');
@@ -9041,8 +10023,8 @@
           
           // ✅ Ersetze Platzhalter {djName} mit tatsächlichem DJ-Namen; XSS-Schutz für DJ-Namen
           const safeDjName = typeof escapeHtml === 'function' ? escapeHtml(djName) : String(djName).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-          const finalText = introductionText.replace('{djName}', djName);
-          introductionElement.innerHTML = finalText.replace(djName, `<strong>${safeDjName}</strong>`);
+          const finalText = introductionText.replace('{djName}', `<strong>${safeDjName}</strong>`);
+          introductionElement.innerHTML = finalText;
           introductionElement.style.display = 'block';
           
           if (window.IS_DEBUG) console.log('✅ Social-Media-Einführung angezeigt für:', djName);
@@ -9120,14 +10102,14 @@
       if (!contentDiv) return;
       
       // Sprache bestimmen
-      let lang = 'de';
+      let lang = 'en';
       try {
         lang = localStorage.getItem('pwa_language') || localStorage.getItem('language') || 'en';
       } catch (e) {
-        lang = 'de';
+        lang = 'en';
       }
       
-      const langTranslations = translations[lang] || translations['de'];
+      const langTranslations = translations[lang] || translations['en'] || translations['de'] || {};
       
       let htmlContent = '';
       
@@ -9160,14 +10142,14 @@
       if (!contentDiv) return;
       
       // Sprache bestimmen für Hinweis
-      let lang = 'de';
+      let lang = 'en';
       try {
         lang = localStorage.getItem('pwa_language') || localStorage.getItem('language') || 'en';
       } catch (e) {
-        lang = 'de';
+        lang = 'en';
       }
       
-      const langTranslations = translations[lang] || translations['de'];
+      const langTranslations = translations[lang] || translations['en'] || translations['de'] || {};
       
       let htmlContent = '';
       
@@ -9196,13 +10178,13 @@
     function updateTermsContent() {
       const contentDiv = document.getElementById('terms-content');
       if (!contentDiv) return;
-      let lang = 'de';
+      let lang = 'en';
       try {
         lang = localStorage.getItem('pwa_language') || localStorage.getItem('language') || 'en';
       } catch (e) {
-        lang = 'de';
+        lang = 'en';
       }
-      const langTranslations = (typeof translations !== 'undefined' && translations[lang]) ? translations[lang] : (typeof translations !== 'undefined' ? translations['de'] : {});
+      const langTranslations = (typeof translations !== 'undefined' && translations[lang]) ? translations[lang] : (typeof translations !== 'undefined' ? (translations['en'] || translations['de'] || {}) : {});
       let htmlContent = (langTranslations && langTranslations['terms_html_content']) ? langTranslations['terms_html_content'] : '';
       
       // Copyright-Zeile am Ende hinzufügen (aus Session Storage)
@@ -9328,8 +10310,7 @@
                 if (typeof vbHandleGuestPartyEnded === 'function') {
                   void vbHandleGuestPartyEnded(partyData, partyId);
                 } else if (typeof runGuestPartyEndedWishboxFlow === 'function') runGuestPartyEndedWishboxFlow();
-                else if (typeof vbGoToRootPwaAfterPartyEnded === 'function') vbGoToRootPwaAfterPartyEnded();
-                else window.location.replace('/');
+                else if (typeof clearPartyData === 'function') clearPartyData(true);
                 return;
               }
               

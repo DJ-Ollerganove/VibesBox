@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 
+import '../l10n/app_localizations.dart';
 import '../utils/formatting_utils.dart';
 
 /// Widget für Shazam-History
@@ -12,6 +13,7 @@ class ShazamHistoryWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       return const SizedBox.shrink();
@@ -63,7 +65,7 @@ class ShazamHistoryWidget extends StatelessWidget {
                   return Padding(
                     padding: const EdgeInsets.all(16.0),
                     child: Text(
-                      'Fehler beim Laden: ${snapshot.error}',
+                      '${l.error_loading_prefix}: ${snapshot.error}',
                       style: const TextStyle(color: Colors.red),
                     ),
                   );
@@ -81,7 +83,7 @@ class ShazamHistoryWidget extends StatelessWidget {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Noch keine Songs erkannt',
+                          l.music_recognition_none_found,
                           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                 color: Colors.grey[600],
                               ),

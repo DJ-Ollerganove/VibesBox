@@ -1,0 +1,11 @@
+/* Info.plist localization – VibesBox */
+"NSLocalNetworkUsageDescription" = "قد تستخدم VibesBox الشبكة المحلية لأدوات التطوير ولاختياريًا لميزات الجهاز على نفس الشبكة.";
+"NSMicrophoneUsageDescription" = "تحتاج VibesBox إلى الميكروفون لتحليل الموسيقى قيد التشغيل والتعرف عليها.";
+"NSAppleMusicUsageDescription" = "قد تصل VibesBox إلى مكتبتك الإعلامية لربط التعرف على الموسيقى بميزات Apple Music.";
+"NSCameraUsageDescription" = "تحتاج VibesBox إلى الكاميرا لمسح رموز QR والتقاط الصور.";
+"NSPhotoLibraryUsageDescription" = "تحتاج VibesBox إلى مكتبة الصور لاختيار صورة الملف الشخصي.";
+"NSPhotoLibraryAddUsageDescription" = "تحفظ VibesBox الصور مثل رموز QR في مكتبتك عند اختيارك ذلك.";
+"NSLocationWhenInUseUsageDescription" = "نستخدم موقعك لتوسيط الخريطة على موقع الحفلة.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "نستخدم موقعك لتوسيط الخريطة على موقع الحفلة.";
+"NSCalendarsUsageDescription" = "مطلوب لتصدير مواعيد الحفلات إلى تقويمك.";
+"NSFaceIDUsageDescription" = "Face ID يحمي إعدادات المسؤول حتى لا يصل إليها سواك.";

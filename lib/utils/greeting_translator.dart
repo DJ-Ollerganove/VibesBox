@@ -134,8 +134,32 @@ class GreetingTranslator {
     return 'de';
   }
 
-  static String _normalizeLang(String code) =>
-      LocaleHelper.mapToSupportedOrEnglish(code);
+  static String? _detectSourceForApi(String text, String targetLanguage) {
+    final detected = _normalizeLang(_detectLanguage(text));
+    if (detected == targetLanguage) {
+      if (detected == 'de' &&
+          RegExp(r'^[a-zA-Z0-9\s.,!?\-]+$').hasMatch(text.trim()) &&
+          !RegExp(r'[äöüÄÖÜß]').hasMatch(text)) {
+        return null;
+      }
+      return detected;
+    }
+    return detected;
+  }
+
+  /// Sofort aus Session-Cache (kein erneuter API-Aufruf).
+  static String? peekTranslation(String greeting, String targetLanguage) {
+    final text = greeting.trim();
+    if (text.isEmpty) return null;
+    final key = '$text|$targetLanguage';
+    return _translationCache[key];
+  }
+
+  static String _normalizeLang(String code) {
+    final raw = code.trim().toLowerCase();
+    if (raw == 'ar' || raw.startsWith('ar')) return 'ar';
+    return LocaleHelper.mapToSupportedOrEnglish(code);
+  }
 
   /// Übersetzt einen Gruß in die Zielsprache, wenn nötig (Gemini via Cloud Function).
   /// Ziel-Locale aus [LocaleHelper] / [LanguageRegistry] (Quelle: l10n/languages.json).
@@ -181,10 +205,12 @@ class GreetingTranslator {
       debugLog('🌍 Übersetzung: Original-Gruß: "$greeting"');
       debugLog('🌍 Übersetzung: Ziel-Sprache (DJ): $targetLanguage');
 
-      final detectedLanguage = _normalizeLang(_detectLanguage(greeting));
-      debugLog('🌍 Übersetzung: Erkannte Sprache: $detectedLanguage');
+      final detectedLanguage = _detectSourceForApi(greeting, targetLanguage);
+      debugLog(
+        '🌍 Übersetzung: Erkannte Sprache: ${detectedLanguage ?? 'auto'}',
+      );
 
-      if (detectedLanguage == targetLanguage) {
+      if (detectedLanguage != null && detectedLanguage == targetLanguage) {
         debugLog('🌍 Übersetzung: Keine Übersetzung nötig (Sprachen stimmen überein)');
         return null;
       }
@@ -192,7 +218,7 @@ class GreetingTranslator {
       final cacheKey = '$greeting|$targetLanguage';
       if (_translationCache.containsKey(cacheKey)) {
         debugLog('🌍 Übersetzung: Aus Cache geladen');
-        return _translationCache[cacheKey]!;
+        return _translationCache[cacheKey];
       }
 
       if (FirebaseAuth.instance.currentUser == null) {
@@ -202,13 +228,13 @@ class GreetingTranslator {
 
       try {
         debugLog(
-          '🌍 Übersetzung: Gemini ($detectedLanguage → $targetLanguage)',
+          '🌍 Übersetzung: Gemini (${detectedLanguage ?? 'auto'} → $targetLanguage)',
         );
         final callable = _functions.httpsCallable('translateGreeting');
         final result = await callable.call<Map<String, dynamic>>({
           'text': greeting,
           'targetLanguage': targetLanguage,
-          'sourceLanguage': detectedLanguage,
+          if (detectedLanguage != null) 'sourceLanguage': detectedLanguage,
         });
         final data = result.data;
         if (data['skipped'] == true) {

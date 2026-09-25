@@ -1,15 +1,20 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'dart:ui' as ui;
 import '../l10n/app_localizations.dart';
 import '../models/song_request.dart';
-import '../utils/greeting_translator.dart';
 import '../utils/ui_constants.dart';
 import '../utils/relative_time_minutes.dart';
 import '../services/wish_management_service.dart';
 import '../services/user_blocking_service.dart';
 import '../services/active_party_service.dart';
 import '../utils/wish_paths.dart';
+import '../app_scaffold_messenger.dart';
+import '../services/dj_pro_session_service.dart';
+import '../services/dj_song_blacklist_service.dart';
+import '../models/dj_song_blacklist_entry.dart';
+import '../services/saved_tracks_service.dart';
 import '../services/user_service.dart';
 import '../pages/rejected_wish_detail_page.dart';
 import 'free_feature_locked.dart';
@@ -19,6 +24,7 @@ import '../utils/wish_grouping_helper.dart';
 import '../utils/formatting_utils.dart';
 import '../utils/pre_wish_helper.dart';
 import 'wish_greeting_display.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 /// Vereinheitlichtes Widget für die Anzeige von Musikwünschen
 /// Unterstützt die Modi: 'Offen', 'Gespielt', 'Abgelehnt'
@@ -75,6 +81,12 @@ class WishCard extends StatelessWidget {
   /// Vorab-Übersicht: Detail mit Publish/Löschen (ohne Gespielt/Ablehnen/Sperren).
   final bool isPreWishOverviewMode;
   final Function(BuildContext, List<String>)? onPublishPreWish;
+  /// Offen: Wunsch ist oben verankert (Pin).
+  final bool isPinned;
+  final VoidCallback? onTogglePin;
+  /// Offen: Song auf die Blacklist (Titel/Interpret-Haken).
+  /// [detailContext] ist der Wunsch-Detail-Dialog (nach Speichern [Navigator.pop]).
+  final Future<void> Function(BuildContext detailContext)? onBlacklist;
 
   const WishCard({
     super.key,
@@ -101,6 +113,9 @@ class WishCard extends StatelessWidget {
     this.listBorderColorOverride,
     this.isPreWishOverviewMode = false,
     this.onPublishPreWish,
+    this.isPinned = false,
+    this.onTogglePin,
+    this.onBlacklist,
   }) : assert(
           request != null || groupedData != null,
           'Mindestens request oder groupedData muss gesetzt sein',
@@ -109,7 +124,7 @@ class WishCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
 
     // Extrahiere Daten (nur Anzeige: HTML-Entities aus API/Firestore decodieren)
     final data = groupedData ?? _requestToMap(request!);
@@ -138,9 +153,24 @@ class WishCard extends StatelessWidget {
     final tsRejected = data['rejected_at'] as Timestamp? ?? data['rejectedAt'] as Timestamp?;
     final rejected = tsRejected?.toDate();
     final autoRejectedByBlock = data['auto_rejected_by_block'] as bool? ?? false;
+    final autoRejectedByBlacklist =
+        data['auto_rejected_by_blacklist'] == true ||
+            data['rejection_reason'] == 'song_blacklist';
+    final blacklistPrefs = DjSongBlacklistService.instance.prefsNotifier.value;
+    final blacklistHitOnOpen = type == WishCardType.offen &&
+        blacklistPrefs.enabled &&
+        DjSongBlacklistEntry.matches(
+          title: title,
+          artist: artist,
+          entries: blacklistPrefs.entries,
+        );
+    final showBlacklistBadge =
+        autoRejectedByBlacklist || blacklistHitOnOpen;
     final autoRecognized = data['auto_recognized'] as bool? ?? false;
     final isFavorite = (data['is_favorite'] as bool?) ?? false;
     final isDjWish = (data['is_dj_wish'] as bool?) ?? false;
+    final fromSetlist = data['from_setlist'] == true ||
+        requestedBy.contains(kFromSetlistMarker);
     final showPreWishMarker = data['is_pre_wish'] == true;
     /// In Offen freigegebene Vorab-Wünsche: eigene Zeitzeile + immer Lila-Rahmen.
     final isPublishedPreWishInOffen = type == WishCardType.offen &&
@@ -216,6 +246,7 @@ class WishCard extends StatelessWidget {
           isNew,
           autoRecognized,
           autoRejectedByBlock,
+          showBlacklistBadge,
           wishersList,
           title,
           artist,
@@ -235,7 +266,9 @@ class WishCard extends StatelessWidget {
                   color: listBorderColorOverride ??
                       (isPublishedPreWishInOffen
                           ? UIConstants.framePreWish
-                          : _getBorderColor(type, isNew, effectivelySeen)),
+                          : (type == WishCardType.offen && isPinned
+                              ? UIConstants.frameAbgelehnt
+                              : _getBorderColor(type, isNew, effectivelySeen))),
                   width: 2.5,
                 ),
               ),
@@ -263,6 +296,15 @@ class WishCard extends StatelessWidget {
                       docIds,
                       isPreWishOverviewMode: isPreWishOverviewMode,
                     ),
+                    if (showBlacklistBadge) ...[
+                      const SizedBox(height: 8),
+                      Align(
+                        alignment: isRtl
+                            ? Alignment.centerRight
+                            : Alignment.centerLeft,
+                        child: _blacklistBadge(l),
+                      ),
+                    ],
                     const SizedBox(height: 8),
                     _buildCompactMusicRow(
                       context,
@@ -275,6 +317,7 @@ class WishCard extends StatelessWidget {
                       pageAccent,
                       l,
                       isDjWish: isDjWish,
+                      fromSetlist: fromSetlist,
                       isPreWish: showPreWishMarker &&
                           !isPublishedPreWishInOverview,
                       preWishIconColor: isPreWishOverviewMode
@@ -307,7 +350,7 @@ class WishCard extends StatelessWidget {
                     if (titleVariants.isNotEmpty) ...[
                       const SizedBox(height: 4),
                       Text(
-                        'Gewünschte Versionen: ${titleVariants.join(", ")}',
+                        '${l.requested_versions}: ${titleVariants.join(", ")}',
                         style: const TextStyle(
                           fontSize: 11,
                           color: UIConstants.wishCardTranslationColor,
@@ -431,6 +474,36 @@ class WishCard extends StatelessWidget {
     );
   }
 
+  Widget _blacklistBadge(AppLocalizations l) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: UIConstants.colorSongBlacklistChip,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            Icons.playlist_remove,
+            color: UIConstants.colorSongBlacklistOnChip,
+            size: 16,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            l.translate('song_blacklist_title').toUpperCase(),
+            style: const TextStyle(
+              color: UIConstants.colorSongBlacklistOnChip,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.5,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Zeile 1: Kompakte Status-Zeile (Datum/Uhrzeit + Icons rechts)
   Widget _buildCompactStatusRow(
     BuildContext context,
@@ -458,6 +531,18 @@ class WishCard extends StatelessWidget {
     final showFavorite = type == WishCardType.offen &&
         docIds != null &&
         docIds.isNotEmpty &&
+        !isPreWishOverviewMode;
+    final bookmarkTitle = unescapeHtml(
+      (cardData['title'] ?? cardData['song'] ?? '') as String,
+    ).trim();
+    final bookmarkArtist =
+        unescapeHtml((cardData['artist'] ?? '') as String).trim();
+    final showBookmark = (type == WishCardType.offen ||
+            type == WishCardType.gespielt ||
+            type == WishCardType.abgelehnt) &&
+        (bookmarkTitle.isNotEmpty || bookmarkArtist.isNotEmpty);
+    final showAnchor = type == WishCardType.offen &&
+        onTogglePin != null &&
         !isPreWishOverviewMode;
     // Für Gespielt-Seite: Zweizeilige Anzeige (Weiß/Grün)
     Widget timeContent;
@@ -527,9 +612,10 @@ class WishCard extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
       );
     } else if (type == WishCardType.offen) {
-      timeContent = Row(
+      timeContent = Column(
+        crossAxisAlignment:
+            isRtl ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
-        textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
         children: [
           Text(
             _formatClockWithSuffixForLocale(context, summary.oldestWishDate, l),
@@ -544,6 +630,7 @@ class WishCard extends StatelessWidget {
             textStyle: TextStyle(fontSize: 12, color: dateTimeColor),
             isRtl: isRtl,
             l: l,
+            onOwnLine: true,
           ),
         ],
       );
@@ -600,8 +687,7 @@ class WishCard extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       textDirection: ui.TextDirection.ltr,
       children: [
-        if (type == WishCardType.offen &&
-            (showWishCount || hasGreeting || showFavorite))
+        if (showWishCount || hasGreeting || showFavorite || showBookmark || showAnchor)
           const SizedBox(width: 2),
         if (showWishCount)
           Container(
@@ -628,50 +714,70 @@ class WishCard extends StatelessWidget {
           ),
         if (hasGreeting && showFavorite) const SizedBox(width: 8),
         if (showFavorite)
-          Builder(
-            builder: (context) {
-              final isFree = UserService().currentUser.value?.isFree ?? true;
-              return Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: () {
-                    if (isFree) {
-                      FreeFeatureLockedDialog.show(
-                        context,
-                        title: l.free_feature_favorites_title,
-                        description:
-                            l.free_feature_favorites_description,
-                      );
-                      return;
-                    }
-                    _toggleFavorite(context, docIds!.first);
-                  },
-                  borderRadius: BorderRadius.circular(24),
-                  child: SizedBox(
-                    width: 34,
-                    height: 34,
-                    child: Center(
-                      child: Icon(
-                        isFavorite ? Icons.favorite : Icons.favorite_border,
-                        size: 20,
-                        color: isFree
-                            ? UIConstants.freeLimitBorderRed
-                            : (isFavorite
-                                  ? UIConstants.frameNoParty
-                                  : Colors.white70),
-                      ),
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () => _toggleFavorite(context, docIds!.first),
+              borderRadius: BorderRadius.circular(24),
+              child: SizedBox(
+                width: 34,
+                height: 34,
+                child: Center(
+                  child: Icon(
+                    isFavorite ? Icons.favorite : Icons.favorite_border,
+                    size: 20,
+                    color: isFavorite
+                        ? UIConstants.frameNoParty
+                        : Colors.white70,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        if (showFavorite && showBookmark) const SizedBox(width: 8),
+        if (showBookmark)
+          _buildBookmarkButton(
+            context: context,
+            l: l,
+            title: bookmarkTitle,
+            artist: bookmarkArtist,
+            data: cardData,
+            docIds: docIds,
+          ),
+        if (showBookmark && showAnchor) const SizedBox(width: 8),
+        if (showFavorite && showAnchor && !showBookmark) const SizedBox(width: 8),
+        if (showAnchor)
+          Tooltip(
+            message: isPinned
+                ? l.wish_anchor_remove_tooltip
+                : l.wish_anchor_tooltip,
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: onTogglePin,
+                borderRadius: BorderRadius.circular(24),
+                child: SizedBox(
+                  width: 34,
+                  height: 34,
+                  child: Center(
+                    child: Icon(
+                      Icons.anchor,
+                      size: 20,
+                      color: isPinned
+                          ? UIConstants.frameAbgelehnt
+                          : Colors.white70,
                     ),
                   ),
                 ),
-              );
-            },
+              ),
+            ),
           ),
       ],
     );
 
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      crossAxisAlignment: CrossAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Expanded(
           child: timeContent,
@@ -755,6 +861,7 @@ class WishCard extends StatelessWidget {
     Color valueColor,
     AppLocalizations l, {
     bool isDjWish = false,
+    bool fromSetlist = false,
     bool isPreWish = false,
     Color? preWishIconColor,
   }) {
@@ -777,7 +884,19 @@ class WishCard extends StatelessWidget {
           textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
           children: [
             // DJ-Wunsch-Icon (von DJ hinzugefügt)
-            if (isDjWish)
+            if (fromSetlist)
+              Padding(
+                padding: EdgeInsets.only(
+                  right: isRtl ? 0 : 6,
+                  left: isRtl ? 6 : 0,
+                ),
+                child: const Icon(
+                  Icons.queue_music,
+                  size: 14,
+                  color: UIConstants.colorDjSetlist,
+                ),
+              )
+            else if (isDjWish)
               Padding(
                 padding: EdgeInsets.only(
                   right: isRtl ? 0 : 6,
@@ -1038,6 +1157,7 @@ class WishCard extends StatelessWidget {
     bool isNew,
     bool autoRecognized,
     bool autoRejectedByBlock,
+    bool autoRejectedByBlacklist,
     List<Map<String, dynamic>> wishersList,
     String title,
     String artist,
@@ -1045,7 +1165,7 @@ class WishCard extends StatelessWidget {
     Color? borderColorOverride, {
     bool isPreWishOverviewMode = false,
   }) async {
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
     const textColor = Colors.white;
     const secondaryTextColor = Color(0xFFB0B0B0);
     final isPreWishInOffenDetail =
@@ -1097,19 +1217,24 @@ class WishCard extends StatelessWidget {
                         children: [
                           // Aktions-Leiste ganz oben (schmal)
                           if (type == WishCardType.offen && !autoRejectedByBlock)
-                          Align(
-                            alignment: isRtl ? Alignment.centerLeft : Alignment.centerRight,
-                            child: _buildDetailActionIconsRow(
-                              context,
-                              type,
-                              isRtl,
-                              l,
-                              title,
-                              artist,
-                              data,
-                              request,
-                              docIds,
-                              setModalState, // Füge setModalState hinzu für Updates
+                          SizedBox(
+                            width: double.infinity,
+                            child: Align(
+                              alignment: isRtl
+                                  ? Alignment.centerLeft
+                                  : Alignment.centerRight,
+                              child: _buildDetailActionIconsRow(
+                                context,
+                                type,
+                                isRtl,
+                                l,
+                                title,
+                                artist,
+                                data,
+                                request,
+                                docIds,
+                                setModalState, // Füge setModalState hinzu für Updates
+                              ),
                             ),
                           )
                     else if (autoRejectedByBlock)
@@ -1135,6 +1260,11 @@ class WishCard extends StatelessWidget {
                             ),
                           ],
                         ),
+                      )
+                    else if (autoRejectedByBlacklist)
+                      Align(
+                        alignment: isRtl ? Alignment.centerLeft : Alignment.centerRight,
+                        child: _blacklistBadge(l),
                       ),
                         // Status-Zeile (Eingang, Gespielt um, Abgelehnt) für Gespielt- und Abgelehnt-Ansicht
                         if (type == WishCardType.gespielt || type == WishCardType.abgelehnt) ...[
@@ -1192,7 +1322,11 @@ class WishCard extends StatelessWidget {
                           if (type == WishCardType.gespielt && onUndo != null) ...[
                             const SizedBox(height: 12),
                             _buildPlayedRestoreButton(context, isRtl, l, onUndo!),
-                          ] else if (type == WishCardType.abgelehnt && onRestore != null) ...[
+                          ] else if (type == WishCardType.abgelehnt &&
+                              onRestore != null &&
+                              !autoRejectedByBlock &&
+                              (data['rejection_reason'] as String?) !=
+                                  'user_blocked') ...[
                             const SizedBox(height: 12),
                             _buildRejectedRestoreToOpenButton(context, isRtl, l, onRestore!),
                           ],
@@ -1690,70 +1824,45 @@ class WishCard extends StatelessWidget {
               ),
               if (greeting.isNotEmpty) ...[
                 const SizedBox(height: 6),
-                FutureBuilder<String?>(
-                  future: GreetingTranslator.translateGreetingIfNeeded(greeting, context),
-                  builder: (context, snapshot) {
-                    final hasTranslation =
-                        snapshot.hasData && snapshot.data != null && snapshot.data != greeting;
-                    final translation = snapshot.data;
-
-                    return Column(
-                      crossAxisAlignment: isRtl ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        ClipPath(
-                          clipper: _ChatBubbleClipper(isRtl: isRtl),
-                          child: Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                            decoration: BoxDecoration(
-                              color: UIConstants.frameOffen.withValues(alpha: 0.15),
-                              border: Border.all(
-                                color: UIConstants.frameOffen.withValues(alpha: 0.5),
-                                width: 1.0,
-                              ),
-                            ),
-                            child: Text(
-                              greeting,
-                              style: const TextStyle(
-                                fontSize: 14,
-                                color: Colors.white,
-                              ),
-                              textAlign: isRtl ? TextAlign.right : TextAlign.left,
-                              textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
-                            ),
+                Column(
+                  crossAxisAlignment: isRtl ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ClipPath(
+                      clipper: _ChatBubbleClipper(isRtl: isRtl),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: UIConstants.frameOffen.withValues(alpha: 0.15),
+                          border: Border.all(
+                            color: UIConstants.frameOffen.withValues(alpha: 0.5),
+                            width: 1.0,
                           ),
                         ),
-                        if (hasTranslation && translation != null) ...[
-                          const SizedBox(height: 6),
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
-                            children: [
-                              Icon(
-                                Icons.translate,
-                                size: 12,
-                                color: secondaryTextColor.withValues(alpha: 0.7),
-                              ),
-                              const SizedBox(width: 4),
-                              Expanded(
-                                child: Text(
-                                  translation,
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    fontStyle: FontStyle.italic,
-                                    color: Colors.yellow,
-                                  ),
-                                  textAlign: isRtl ? TextAlign.right : TextAlign.left,
-                                  textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
-                                ),
-                              ),
-                            ],
+                        child: Text(
+                          greeting,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            color: Colors.white,
                           ),
-                        ],
-                      ],
-                    );
-                  },
+                          textAlign: isRtl ? TextAlign.right : TextAlign.left,
+                          textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
+                        ),
+                      ),
+                    ),
+                    WishGreetingTextWithTranslation(
+                      greeting: greeting,
+                      isRtl: isRtl,
+                      translationOnly: true,
+                      greetingStyle: const TextStyle(fontSize: 0, height: 0),
+                      translationStyle: TextStyle(
+                        fontSize: 12,
+                        fontStyle: FontStyle.italic,
+                        color: secondaryTextColor.withValues(alpha: 0.95),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ],
@@ -1866,180 +1975,221 @@ class WishCard extends StatelessWidget {
     final publishedPreWishInOverview = isPreWishOverviewMode &&
         PreWishHelper.isPublishedPreWish(data);
 
-    return Row(
-      mainAxisAlignment: isRtl ? MainAxisAlignment.start : MainAxisAlignment.end,
-                  mainAxisSize: MainAxisSize.min,
-      textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
-      children: [
-        // Lila Pfeil: In Offen (nur Vorab-Queue)
-        if (isPreWishOverviewMode &&
-            !publishedPreWishInOverview &&
-            onPublishPreWish != null)
-          IconButton(
-            onPressed: () {
-              final ids = isGrouped && docIds != null && docIds!.isNotEmpty
-                  ? docIds!
-                  : (request?.id != null ? [request!.id] : <String>[]);
-              if (ids.isEmpty) return;
-              onPublishPreWish!(context, ids);
-            },
-            icon: const Icon(
-              Icons.publish,
-              color: UIConstants.colorPreWish,
-              size: 24,
+    // Kompakte Icons: sonst läuft die letzte Aktion (Sperren) beim ersten
+    // Dialog-Layout oft rechts aus dem Viewport; nach Rotation passt es
+    // zufällig durch Relayout. FittedBox hält die Zeile immer in der Breite.
+    ButtonStyle detailIconStyle() => IconButton.styleFrom(
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          minimumSize: const Size(36, 36),
+          padding: EdgeInsets.zero,
+          visualDensity: VisualDensity.compact,
+        );
+
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: isRtl ? Alignment.centerLeft : Alignment.centerRight,
+      child: Row(
+        mainAxisAlignment:
+            isRtl ? MainAxisAlignment.start : MainAxisAlignment.end,
+        mainAxisSize: MainAxisSize.min,
+        textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
+        children: [
+          // Lila Pfeil: In Offen (nur Vorab-Queue)
+          if (isPreWishOverviewMode &&
+              !publishedPreWishInOverview &&
+              onPublishPreWish != null)
+            IconButton(
+              onPressed: () {
+                final ids = isGrouped && docIds != null && docIds!.isNotEmpty
+                    ? docIds!
+                    : (request?.id != null ? [request!.id] : <String>[]);
+                if (ids.isEmpty) return;
+                onPublishPreWish!(context, ids);
+              },
+              icon: const Icon(
+                Icons.publish,
+                color: UIConstants.colorPreWish,
+                size: 24,
+              ),
+              tooltip: l.pre_wish_publish_tooltip,
+              style: detailIconStyle(),
             ),
-            tooltip: l.pre_wish_publish_tooltip,
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
-          ),
-        if (isPreWishOverviewMode &&
-            !publishedPreWishInOverview &&
-            onPublishPreWish != null)
-          const SizedBox(width: 8),
-        // Grüner Haken: Als gespielt markieren (nur Icon)
-        if ((isGrouped && onPlay != null) || (!isGrouped && onPlaySingle != null))
-          IconButton(
-            onPressed: () {
-              // Extrahiere partyId aus data oder request
-              final partyId = data['party_id'] as String? ?? request?.partyId;
-              if (partyId == null || partyId.isEmpty) {
-                debugLog('⚠️ WishCard: keine party_id – Aktion übersprungen');
-                return;
-              }
-              
-              if (isGrouped && docIds != null && docIds!.isNotEmpty) {
-                WishManagementService.showConfirmUpdateGroupedStatusDialog(
-                  context,
-                  docIds!,
-                  'played',
-                  l.mark_as_played,
-                  displayText,
-                  partyId,
-                );
-              } else if (!isGrouped && request?.id != null) {
-                WishManagementService.showConfirmUpdateGroupedStatusDialog(
-                  context,
-                  [request!.id],
-                  'played',
-                  l.mark_as_played,
-                  displayText,
-                  partyId,
-                );
-              }
-            },
-            icon: const Icon(Icons.check_circle, color: UIConstants.frameGespielt, size: 24),
-            tooltip: l.played,
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
-          ),
-        if ((isGrouped && onPlay != null) || (!isGrouped && onPlaySingle != null))
-          const SizedBox(width: 8),
-        // Orange Cancel-Icon: Ablehnen
-        if ((isGrouped && onReject != null) || (!isGrouped && onRejectSingle != null))
-          IconButton(
-            onPressed: () {
-              debugLog('>>> UI-KLICK: Ablehnen-Button wurde gedrückt!');
-              // Extrahiere partyId aus data oder request
-              final partyId = data['party_id'] as String? ?? request?.partyId;
-              if (partyId == null || partyId.isEmpty) {
-                debugLog('⚠️ WishCard: keine party_id – Aktion übersprungen');
-                return;
-              }
-              
-              if (isGrouped && docIds != null && docIds!.isNotEmpty) {
-                WishManagementService.showConfirmUpdateGroupedStatusDialog(
-                  context,
-                  docIds!,
-                  'rejected',
-                  l.reject,
-                  displayText,
-                  partyId,
-                );
-              } else if (!isGrouped && request?.id != null) {
-                WishManagementService.showConfirmUpdateGroupedStatusDialog(
-                  context,
-                  [request!.id],
-                  'rejected',
-                  l.reject,
-                  displayText,
-                  partyId,
-                );
-              }
-            },
-            icon: const Icon(Icons.cancel, color: UIConstants.frameAbgelehnt, size: 24),
-            tooltip: l.reject,
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
-          ),
-        if ((isGrouped && onReject != null) || (!isGrouped && onRejectSingle != null))
-          const SizedBox(width: 8),
-        // Rotes Delete-Icon: Löschen
-        if ((isGrouped && onDelete != null) || (!isGrouped && onDeleteSingle != null))
-          IconButton(
-            onPressed: () {
-              debugLog('>>> UI-KLICK: Löschen-Button wurde gedrückt!');
-              // Extrahiere partyId aus data oder request
-              final partyId = data['party_id'] as String? ?? request?.partyId;
-              if (partyId == null || partyId.isEmpty) {
-                debugLog('⚠️ WishCard: keine party_id – Aktion übersprungen');
-                return;
-              }
-              
-              if (isGrouped && docIds != null && docIds!.isNotEmpty) {
-                WishManagementService.showConfirmDeleteGroupedDialog(
-                  context,
-                  docIds!,
-                  displayText,
-                  partyId,
-                );
-              } else if (!isGrouped && request?.id != null) {
-                WishManagementService.showConfirmDeleteGroupedDialog(
-                  context,
-                  [request!.id],
-                  displayText,
-                  partyId,
-                );
-              }
-            },
-            icon: const Icon(Icons.delete_forever, color: UIConstants.frameGesperrt, size: 24),
-            tooltip: l.delete,
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
-          ),
-        if ((isGrouped && onDelete != null) || (!isGrouped && onDeleteSingle != null))
-          const SizedBox(width: 8),
-        // Rote Sperrscheibe: Sperren (nur Icon) – für Free-DJs: Pro-Dialog mit Paywall-Hinweis
-        if ((isGrouped && onBlockGrouped != null) || (!isGrouped && onBlockSingle != null))
-          Builder(
-            builder: (context) {
-              final isFreeBlock = UserService().currentUser.value?.isFree ?? true;
-              return IconButton(
-                onPressed: () {
-                  if (isFreeBlock) {
-                    FreeFeatureLockedDialog.show(
-                      context,
-                      title: l.free_feature_guest_block_title,
-                      description: l.free_feature_guest_block_description,
-                    );
-                    return;
-                  }
-                  _showBlockDialog(
+          if (isPreWishOverviewMode &&
+              !publishedPreWishInOverview &&
+              onPublishPreWish != null)
+            const SizedBox(width: 4),
+          // Grüner Haken: Als gespielt markieren (nur Icon)
+          if ((isGrouped && onPlay != null) ||
+              (!isGrouped && onPlaySingle != null))
+            IconButton(
+              onPressed: () {
+                // Extrahiere partyId aus data oder request
+                final partyId =
+                    data['party_id'] as String? ?? request?.partyId;
+                if (partyId == null || partyId.isEmpty) {
+                  debugLog(
+                      '⚠️ WishCard: keine party_id – Aktion übersprungen');
+                  return;
+                }
+
+                if (isGrouped && docIds != null && docIds!.isNotEmpty) {
+                  WishManagementService.showConfirmUpdateGroupedStatusDialog(
                     context,
-                    firstRequest,
-                    data,
-                    docIds,
-                    isGrouped,
-                    l,
+                    docIds!,
+                    'played',
+                    l.mark_as_played,
+                    displayText,
+                    partyId,
                   );
-                },
-                icon: const Icon(Icons.block, color: UIConstants.frameGesperrt, size: 24),
-                tooltip: l.block,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-              );
-            },
-          ),
-      ],
+                } else if (!isGrouped && request?.id != null) {
+                  WishManagementService.showConfirmUpdateGroupedStatusDialog(
+                    context,
+                    [request!.id],
+                    'played',
+                    l.mark_as_played,
+                    displayText,
+                    partyId,
+                  );
+                }
+              },
+              icon: const Icon(Icons.check_circle,
+                  color: UIConstants.frameGespielt, size: 24),
+              tooltip: l.played,
+              style: detailIconStyle(),
+            ),
+          if ((isGrouped && onPlay != null) ||
+              (!isGrouped && onPlaySingle != null))
+            const SizedBox(width: 4),
+          // Orange Cancel-Icon: Ablehnen
+          if ((isGrouped && onReject != null) ||
+              (!isGrouped && onRejectSingle != null))
+            IconButton(
+              onPressed: () {
+                debugLog('>>> UI-KLICK: Ablehnen-Button wurde gedrückt!');
+                // Extrahiere partyId aus data oder request
+                final partyId =
+                    data['party_id'] as String? ?? request?.partyId;
+                if (partyId == null || partyId.isEmpty) {
+                  debugLog(
+                      '⚠️ WishCard: keine party_id – Aktion übersprungen');
+                  return;
+                }
+
+                if (isGrouped && docIds != null && docIds!.isNotEmpty) {
+                  WishManagementService.showConfirmUpdateGroupedStatusDialog(
+                    context,
+                    docIds!,
+                    'rejected',
+                    l.reject,
+                    displayText,
+                    partyId,
+                  );
+                } else if (!isGrouped && request?.id != null) {
+                  WishManagementService.showConfirmUpdateGroupedStatusDialog(
+                    context,
+                    [request!.id],
+                    'rejected',
+                    l.reject,
+                    displayText,
+                    partyId,
+                  );
+                }
+              },
+              icon: const Icon(Icons.cancel,
+                  color: UIConstants.frameAbgelehnt, size: 24),
+              tooltip: l.reject,
+              style: detailIconStyle(),
+            ),
+          if ((isGrouped && onReject != null) ||
+              (!isGrouped && onRejectSingle != null))
+            const SizedBox(width: 4),
+          if (type == WishCardType.offen && onBlacklist != null)
+            IconButton(
+              onPressed: () => onBlacklist!(context),
+              icon: const Icon(
+                Icons.playlist_remove,
+                color: UIConstants.colorSongBlacklist,
+                size: 24,
+              ),
+              tooltip: l.translate('song_blacklist_title'),
+              style: detailIconStyle(),
+            ),
+          if (type == WishCardType.offen && onBlacklist != null)
+            const SizedBox(width: 4),
+          // Rotes Delete-Icon: Löschen
+          if ((isGrouped && onDelete != null) ||
+              (!isGrouped && onDeleteSingle != null))
+            IconButton(
+              onPressed: () {
+                debugLog('>>> UI-KLICK: Löschen-Button wurde gedrückt!');
+                // Extrahiere partyId aus data oder request
+                final partyId =
+                    data['party_id'] as String? ?? request?.partyId;
+                if (partyId == null || partyId.isEmpty) {
+                  debugLog(
+                      '⚠️ WishCard: keine party_id – Aktion übersprungen');
+                  return;
+                }
+
+                if (isGrouped && docIds != null && docIds!.isNotEmpty) {
+                  WishManagementService.showConfirmDeleteGroupedDialog(
+                    context,
+                    docIds!,
+                    displayText,
+                    partyId,
+                  );
+                } else if (!isGrouped && request?.id != null) {
+                  WishManagementService.showConfirmDeleteGroupedDialog(
+                    context,
+                    [request!.id],
+                    displayText,
+                    partyId,
+                  );
+                }
+              },
+              icon: const Icon(Icons.delete_forever,
+                  color: UIConstants.frameGesperrt, size: 24),
+              tooltip: l.delete,
+              style: detailIconStyle(),
+            ),
+          if ((isGrouped && onDelete != null) ||
+              (!isGrouped && onDeleteSingle != null))
+            const SizedBox(width: 4),
+          // Rote Sperrscheibe: Sperren (nur Icon) – für Free-DJs: Pro-Dialog mit Paywall-Hinweis
+          if ((isGrouped && onBlockGrouped != null) ||
+              (!isGrouped && onBlockSingle != null))
+            Builder(
+              builder: (context) {
+                final isFreeBlock =
+                    UserService().currentUser.value?.isFree ?? true;
+                return IconButton(
+                  onPressed: () {
+                    if (isFreeBlock) {
+                      FreeFeatureLockedDialog.show(
+                        context,
+                        title: l.free_feature_guest_block_title,
+                        description: l.free_feature_guest_block_description,
+                      );
+                      return;
+                    }
+                    _showBlockDialog(
+                      context,
+                      firstRequest,
+                      data,
+                      docIds,
+                      isGrouped,
+                      l,
+                    );
+                  },
+                  icon: const Icon(Icons.block,
+                      color: UIConstants.frameGesperrt, size: 24),
+                  tooltip: l.block,
+                  style: detailIconStyle(),
+                );
+              },
+            ),
+        ],
+      ),
     );
   }
 
@@ -2309,7 +2459,7 @@ class WishCard extends StatelessWidget {
     final greeting = (data['greeting'] ?? '') as String;
 
     // Wenn mehr als 1 Wünscher: Zeige Auswahlmenü
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
     if (effectiveNames.length > 1) {
       final remainingGreetings = List<Map<String, dynamic>>.from(greetings);
       final selectEntries = effectiveNames.map((n) {
@@ -2482,15 +2632,18 @@ class WishCard extends StatelessWidget {
       }
       debugLog('🚪 FENSTER-MANAGEMENT: $popCount Dialog(e) geschlossen');
       
-      // Direkt blockUser aufrufen mit clientId und partyId aus firstRequest
+      // Party-ID: Wunsch → Gruppendaten → laufende Party (nicht nur firstRequest.partyId —
+      // Subcollection-Wünsche ohne party_id-Feld würden sonst falsch/gar nicht in Gesperrt landen).
       final clientId = firstRequest.clientId;
-      final partyId = firstRequest.partyId;
+      final partyId = UserBlockingService.resolveBlockPartyId(
+        fromRequest: firstRequest.partyId,
+        fromGroupedData: data,
+      );
       final userId = firstRequest.userId;
       final name = firstRequest.name ?? userName;
       
-      debugLog('📡 ONE-CLICK: Direkte Sperre');
+      debugLog('📡 ONE-CLICK: Direkte Sperre party=$partyId');
       
-      // Rufe blockUser direkt auf (ohne zweiten Dialog)
       await UserBlockingService.blockUser(
         context,
         userId,
@@ -2559,9 +2712,11 @@ class WishCard extends StatelessWidget {
       'played_at': request.playedAt,
       'rejected_at': request.rejectedAt,
       'auto_rejected_by_block': request.autoRejectedByBlock ?? false,
+      'auto_rejected_by_blacklist': request.autoRejectedByBlacklist ?? false,
       'auto_recognized': request.autoRecognized ?? false,
       'isSeen': request.isSeen, // ✅ FIX: isSeen Feld für Read-Status-Logik
       'is_dj_wish': request.isDjWish ?? false,
+      'from_setlist': request.fromSetlist ?? false,
       'is_pre_wish': request.isPreWish == true,
       'pre_wish_published': request.preWishPublished == true,
     };
@@ -2733,76 +2888,19 @@ class WishCard extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(height: 4),
-                        // Original-Grußtext
-                        Align(
-                          alignment: isRtl ? Alignment.centerRight : Alignment.centerLeft,
-                          child: Text(
-                            wisherGreeting,
-                            style: const TextStyle(
-                              fontSize: 14,
-                              color: Color(0xFFB0B0B0),
-                              fontStyle: FontStyle.italic,
-                            ),
-                            textAlign: isRtl ? TextAlign.right : TextAlign.left,
-                            textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
+                        WishGreetingTextWithTranslation(
+                          greeting: wisherGreeting,
+                          isRtl: isRtl,
+                          greetingStyle: const TextStyle(
+                            fontSize: 14,
+                            color: Color(0xFFB0B0B0),
+                            fontStyle: FontStyle.italic,
                           ),
-                        ),
-                        // Übersetzung (asynchron geladen)
-                        FutureBuilder<String?>(
-                          future: GreetingTranslator.translateGreetingIfNeeded(wisherGreeting, context),
-                          builder: (context, snapshot) {
-                            if (snapshot.connectionState == ConnectionState.waiting) {
-                              // Minimaler Lade-Indikator
-                              return const Padding(
-                                padding: EdgeInsets.only(top: 4),
-                                child: SizedBox(
-                                  height: 12,
-                                  width: 12,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 1.5,
-                                    color: Color(0xFFB0B0B0),
-                                  ),
-                                ),
-                              );
-                            }
-                            
-                            if (snapshot.hasData && snapshot.data != null) {
-                              // Übersetzung vorhanden
-                              return Padding(
-                                padding: const EdgeInsets.only(top: 6),
-                                child: Align(
-                                  alignment: isRtl ? Alignment.centerRight : Alignment.centerLeft,
-                                  child: Row(
-                                    textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(
-                                        Icons.translate,
-                                        size: 14,
-                                        color: const Color(0xFFB0B0B0).withValues(alpha: 0.7),
-                                      ),
-                                      const SizedBox(width: 4),
-                                      Flexible(
-                                        child: Text(
-                                          snapshot.data!,
-                                          style: TextStyle(
-                                            fontSize: 13,
-                                            color: const Color(0xFFB0B0B0).withValues(alpha: 0.8),
-                                            fontStyle: FontStyle.italic,
-                                          ),
-                                          textAlign: isRtl ? TextAlign.right : TextAlign.left,
-                                          textDirection: isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              );
-                            }
-                            
-                            // Keine Übersetzung nötig oder Fehler
-                            return const SizedBox.shrink();
-                          },
+                          translationStyle: TextStyle(
+                            fontSize: 13,
+                            color: const Color(0xFFB0B0B0).withValues(alpha: 0.8),
+                            fontStyle: FontStyle.italic,
+                          ),
                         ),
                       ],
                     ),
@@ -2864,6 +2962,134 @@ class WishCard extends StatelessWidget {
       return UIConstants.frameGespielt;
     }
     return UIConstants.frameOffen;
+  }
+
+  Widget _buildBookmarkButton({
+    required BuildContext context,
+    required AppLocalizations l,
+    required String title,
+    required String artist,
+    required Map<String, dynamic> data,
+    List<String>? docIds,
+    double iconSize = 20,
+    double tapTarget = 34,
+  }) {
+    return ValueListenableBuilder<Set<String>>(
+      valueListenable: SavedTracksService.savedDedupeKeys,
+      builder: (context, savedKeys, _) {
+        final isSaved =
+            savedKeys.contains(SavedTracksService.dedupeKey(title, artist));
+        final isFree = DjProSessionService.instance.isFreeDj;
+        final tooltip = isSaved
+            ? l.saved_tracks_remove_tooltip
+            : l.saved_tracks_bookmark_tooltip;
+        return Tooltip(
+          message: tooltip,
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () {
+                if (isFree) {
+                  FreeFeatureLockedDialog.show(
+                    context,
+                    title: l.free_feature_saved_tracks_title,
+                    description: l.free_feature_saved_tracks_description,
+                  );
+                  return;
+                }
+                unawaited(
+                  _toggleBookmarkTrack(
+                    context,
+                    title: title,
+                    artist: artist,
+                    data: data,
+                    docIds: docIds,
+                    isSaved: isSaved,
+                  ),
+                );
+              },
+              borderRadius: BorderRadius.circular(24),
+              child: SizedBox(
+                width: tapTarget,
+                height: tapTarget,
+                child: Center(
+                  child: Icon(
+                    isSaved ? Icons.bookmark : Icons.bookmark_border,
+                    size: iconSize,
+                    color: isFree
+                        ? UIConstants.freeLimitBorderRed
+                        : (isSaved
+                              ? UIConstants.appOrange
+                              : Colors.white70),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  static Future<void> _toggleBookmarkTrack(
+    BuildContext context, {
+    required String title,
+    required String artist,
+    required Map<String, dynamic> data,
+    List<String>? docIds,
+    required bool isSaved,
+  }) async {
+    final l = AppLocalizations.of(context)!;
+    try {
+      if (isSaved) {
+        await SavedTracksService.removeTrack(title: title, artist: artist);
+        if (!context.mounted) return;
+        showVibesSnackBar(
+          context,
+          SnackBar(
+            content: Text(l.saved_tracks_removed_snackbar),
+            backgroundColor: UIConstants.appGreenSuccess,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      final partyId = (data['party_id'] as String?) ??
+          ActivePartyService.getStoredSession()?.partyId;
+      final result = await SavedTracksService.addTrack(
+        title: title,
+        artist: artist,
+        partyId: partyId,
+        sourceWishId:
+            docIds != null && docIds.isNotEmpty ? docIds.first : null,
+      );
+      if (!context.mounted) return;
+      final message = result == SavedTrackAddResult.alreadyExists
+          ? l.saved_tracks_already_saved_snackbar
+          : l.saved_tracks_added_snackbar;
+      showVibesSnackBar(
+        context,
+        SnackBar(
+          content: Text(message),
+          backgroundColor: result == SavedTrackAddResult.alreadyExists
+              ? UIConstants.appOrange
+              : UIConstants.appGreenSuccess,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (e) {
+      debugLog('❌ WishCard Merkliste: $e');
+      if (!context.mounted) return;
+      showVibesSnackBar(
+        context,
+        SnackBar(
+          content: Text(l.saved_tracks_save_error),
+          backgroundColor: UIConstants.frameNoParty,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   /// Toggelt das is_favorite Feld für einen Wunsch
@@ -2959,12 +3185,14 @@ class _SinceTimeDisplay extends StatefulWidget {
   final TextStyle textStyle;
   final bool isRtl;
   final AppLocalizations l;
+  final bool onOwnLine;
 
   const _SinceTimeDisplay({
     required this.wishDate,
     required this.textStyle,
     required this.isRtl,
     required this.l,
+    this.onOwnLine = false,
   });
 
   @override
@@ -3003,7 +3231,7 @@ class _SinceTimeDisplayState extends State<_SinceTimeDisplay> {
           text = widget.l.wishSinceHoursMinutes(totalHours, minutes);
         }
         return Text(
-          ' ($text)',
+          widget.onOwnLine ? text : ' ($text)',
           style: widget.textStyle,
           textAlign: widget.isRtl ? TextAlign.right : TextAlign.left,
           textDirection: widget.isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,

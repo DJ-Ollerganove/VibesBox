@@ -1,4 +1,5 @@
-import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kDebugMode, kIsWeb;
 import 'package:purchases_flutter/purchases_flutter.dart';
 
 import '../utils/debug_log.dart';
@@ -22,15 +23,26 @@ class RevenueCatBootstrap {
   static Future<void> _configure() async {
     try {
       await Future<void>.delayed(const Duration(milliseconds: 150));
+      // Debug: StoreKit-/Product-Fehler sichtbar (LogLevel.error versteckt die Ursache).
       if (kDebugMode) {
-        await Purchases.setLogLevel(LogLevel.error);
+        await Purchases.setLogLevel(LogLevel.debug);
       }
       final apiKey = revenue_cat_api_key.resolveRevenueCatApiKey();
-      await Purchases.configure(
-        PurchasesConfiguration(apiKey),
-      );
-      debugLog('💳 RevenueCat initialisiert');
+      final config = PurchasesConfiguration(apiKey);
+      // StoreKit 2 ohne In-App-Purchase-Key in RC liefert oft leere Packages.
+      // StoreKit 1 ist auf physischen Geräten/TestFlight robuster.
+      if (defaultTargetPlatform == TargetPlatform.iOS) {
+        config.storeKitVersion = StoreKitVersion.storeKit1;
+      }
+      await Purchases.configure(config);
+      final keyKind = apiKey.startsWith('appl_')
+          ? 'appl'
+          : apiKey.startsWith('goog_')
+              ? 'goog'
+              : 'other';
+      debugLog('💳 RevenueCat initialisiert (key=$keyKind)');
     } catch (e) {
+      // Nicht rethrowen: Main startet configure unawaited; Paywall sieht Folgefehler.
       debugLog('💳 RevenueCat Initialisierung fehlgeschlagen: $e');
     }
   }

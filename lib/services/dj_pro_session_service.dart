@@ -9,12 +9,14 @@ class SessionProStatus {
   final DateTime? proUntil;
   final bool isLifetime;
   final ProFreeStatus status;
+  final bool isDjB2b;
 
   const SessionProStatus({
     required this.isActive,
     this.proUntil,
     this.isLifetime = false,
     required this.status,
+    this.isDjB2b = false,
   });
 
   @override
@@ -24,11 +26,12 @@ class SessionProStatus {
         isActive == other.isActive &&
         proUntil == other.proUntil &&
         isLifetime == other.isLifetime &&
-        status == other.status;
+        status == other.status &&
+        isDjB2b == other.isDjB2b;
   }
 
   @override
-  int get hashCode => Object.hash(isActive, proUntil, isLifetime, status);
+  int get hashCode => Object.hash(isActive, proUntil, isLifetime, status, isDjB2b);
 }
 
 /// Zentrale Echtzeit-Session: Pro / Trial / Free — überall dieselbe Wahrheit.
@@ -65,6 +68,7 @@ class DjProSessionService {
       proUntil: result.displayDate,
       isLifetime: result.status == ProFreeStatus.PRO_LIFE,
       status: result.status,
+      isDjB2b: result.status == ProFreeStatus.DJ_B2B,
     );
     if (sessionProStatus.value == next) return;
     sessionProStatus.value = next;

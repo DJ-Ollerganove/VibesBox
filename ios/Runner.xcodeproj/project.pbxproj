@@ -20,6 +20,7 @@
 		B7F9E8022CF9000F007C11AA /* ShazamKitChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7F9E8012CF9000F007C11AA /* ShazamKitChannel.swift */; };
 		B7F9E8042CF9000F007C11AA /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = B7F9E8032CF9000F007C11AA /* GoogleService-Info.plist */; };
 		D73BE9222F112233004455AA /* notification.caf in Resources */ = {isa = PBXBuildFile; fileRef = D73BE9212F112233004455AA /* notification.caf */; };
+		A1B2C3D52CF9000F007C11IP /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D42CF9000F007C11IP /* InfoPlist.strings */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -75,6 +76,26 @@
 		B7F9E8032CF9000F007C11AA /* GoogleService-Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
 		C8DE01002CF9019500438501 /* Profile.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Profile.xcconfig; path = Flutter/Profile.xcconfig; sourceTree = "<group>"; };
 		D73BE9212F112233004455AA /* notification.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = notification.caf; sourceTree = "<group>"; };
+		A1B2C3002CF9000F007C11IP /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A1B2C3012CF9000F007C11IP /* ar */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ar; path = ar.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A1B2C3022CF9000F007C11IP /* cs */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = cs; path = cs.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A1B2C3032CF9000F007C11IP /* de */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = de; path = de.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A1B2C3042CF9000F007C11IP /* el */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = el; path = el.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A1B2C3052CF9000F007C11IP /* es */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = es; path = es.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A1B2C3062CF9000F007C11IP /* fr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = fr; path = fr.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A1B2C3072CF9000F007C11IP /* hi */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = hi; path = hi.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A1B2C3082CF9000F007C11IP /* it */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = it; path = it.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A1B2C3092CF9000F007C11IP /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A1B2C30A2CF9000F007C11IP /* nl */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = nl; path = nl.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A1B2C30B2CF9000F007C11IP /* pl */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = pl; path = pl.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A1B2C30C2CF9000F007C11IP /* pt */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = pt; path = pt.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A1B2C30D2CF9000F007C11IP /* ru */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ru; path = ru.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A1B2C30E2CF9000F007C11IP /* sq */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = sq; path = sq.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A1B2C30F2CF9000F007C11IP /* th */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = th; path = th.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A1B2C3102CF9000F007C11IP /* tr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = tr; path = tr.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A1B2C3112CF9000F007C11IP /* uk */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = uk; path = uk.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A1B2C3122CF9000F007C11IP /* vi */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = vi; path = vi.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A1B2C3132CF9000F007C11IP /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = zh-Hans; path = zh-Hans.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -155,6 +176,7 @@
 				97C146FD1CF9000F007C117D /* Assets.xcassets */,
 				97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */,
 				97C147021CF9000F007C117D /* Info.plist */,
+				A1B2C3D42CF9000F007C11IP /* InfoPlist.strings */,
 				1498D2321E8E86230040F4C2 /* GeneratedPluginRegistrant.h */,
 				1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */,
 				74858FAE1ED2DC5600515810 /* AppDelegate.swift */,
@@ -241,6 +263,14 @@
 					97C146ED1CF9000F007C117D = {
 						CreatedOnToolsVersion = 7.3.1;
 						LastSwiftMigration = 1100;
+						SystemCapabilities = {
+							com.apple.BackgroundModes = {
+								enabled = 1;
+							};
+							com.apple.Push = {
+								enabled = 1;
+							};
+						};
 					};
 				};
 			};
@@ -251,6 +281,25 @@
 			knownRegions = (
 				en,
 				Base,
+				ar,
+				cs,
+				de,
+				el,
+				es,
+				fr,
+				hi,
+				it,
+				ja,
+				nl,
+				pl,
+				pt,
+				ru,
+				sq,
+				th,
+				tr,
+				uk,
+				vi,
+				zh-Hans,
 			);
 			mainGroup = 97C146E51CF9000F007C117D;
 			productRefGroup = 97C146EF1CF9000F007C117D /* Products */;
@@ -281,6 +330,7 @@
 				97C146FC1CF9000F007C117D /* Main.storyboard in Resources */,
 				B7F9E8042CF9000F007C11AA /* GoogleService-Info.plist in Resources */,
 				D73BE9222F112233004455AA /* notification.caf in Resources */,
+				A1B2C3D52CF9000F007C11IP /* InfoPlist.strings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -442,6 +492,33 @@
 				97C147001CF9000F007C117D /* Base */,
 			);
 			name = LaunchScreen.storyboard;
+			sourceTree = "<group>";
+		};
+		A1B2C3D42CF9000F007C11IP /* InfoPlist.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				A1B2C3002CF9000F007C11IP /* en */,
+				A1B2C3012CF9000F007C11IP /* ar */,
+				A1B2C3022CF9000F007C11IP /* cs */,
+				A1B2C3032CF9000F007C11IP /* de */,
+				A1B2C3042CF9000F007C11IP /* el */,
+				A1B2C3052CF9000F007C11IP /* es */,
+				A1B2C3062CF9000F007C11IP /* fr */,
+				A1B2C3072CF9000F007C11IP /* hi */,
+				A1B2C3082CF9000F007C11IP /* it */,
+				A1B2C3092CF9000F007C11IP /* ja */,
+				A1B2C30A2CF9000F007C11IP /* nl */,
+				A1B2C30B2CF9000F007C11IP /* pl */,
+				A1B2C30C2CF9000F007C11IP /* pt */,
+				A1B2C30D2CF9000F007C11IP /* ru */,
+				A1B2C30E2CF9000F007C11IP /* sq */,
+				A1B2C30F2CF9000F007C11IP /* th */,
+				A1B2C3102CF9000F007C11IP /* tr */,
+				A1B2C3112CF9000F007C11IP /* uk */,
+				A1B2C3122CF9000F007C11IP /* vi */,
+				A1B2C3132CF9000F007C11IP /* zh-Hans */,
+			);
+			name = InfoPlist.strings;
 			sourceTree = "<group>";
 		};
 /* End PBXVariantGroup section */
@@ -720,7 +797,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
-				CODE_SIGN_ENTITLEMENTS = "$(PROJECT_DIR)/Runner/Runner.entitlements";
+				CODE_SIGN_ENTITLEMENTS = "$(PROJECT_DIR)/Runner/Runner-Release.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";

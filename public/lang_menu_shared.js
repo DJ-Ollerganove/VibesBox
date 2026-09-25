@@ -6,24 +6,46 @@
 (function () {
   'use strict';
 
+  window.PWA_LANG_ASSET_V = '20260909l10n';
+
+  window.pwaSelectLanguageLabel = function () {
+    var key = 'select_language';
+    try {
+      if (typeof window.djBrowserT === 'function') {
+        var d = window.djBrowserT(key);
+        if (d) return d;
+      }
+      if (typeof window.getTranslation === 'function') {
+        var s = window.getTranslation(key);
+        if (s && s !== key) return s;
+      }
+      var lang = (typeof window.getEffectiveLangForMenu === 'function')
+        ? window.getEffectiveLangForMenu()
+        : 'en';
+      var pack = (window.translations && (window.translations[lang] || window.translations.en)) || {};
+      if (pack[key]) return pack[key];
+    } catch (eLbl) {}
+    return 'Select language';
+  };
+
   var PERMANENT_LOCALE_KEY = 'permanent_user_locale';
   /** Session: von Root (/) mitgegebene Sprache für /vb/ — gleiche Browser-Sitzung, auch ohne ?lang= in jeder Navigation. */
   var VB_ENTRY_LANG_KEY = 'vb_entry_lang';
   /** Muss mit default-pwa-languages.js übereinstimmen — URL-Sprache gilt auch wenn codes noch leer. */
-  var STATIC_PWA_LANG_CODES = ['de', 'en', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi', 'ja', 'el', 'nl', 'pl', 'cs'];
-  var REGION_TO_LANG = { de: 'de', at: 'de', ch: 'de', fr: 'fr', es: 'es', it: 'it', ru: 'ru', tr: 'tr', pt: 'pt', br: 'pt', zh: 'zh', cn: 'zh', tw: 'zh', ua: 'uk', in: 'hi', al: 'sq', vn: 'vi', jp: 'ja', ja: 'ja', gr: 'el', el: 'el', nl: 'nl', pl: 'pl', cs: 'cs', cz: 'cs', ar: 'ar', sa: 'ar', eg: 'ar' };
+  var STATIC_PWA_LANG_CODES = ['de', 'en', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi', 'ja', 'el', 'nl', 'pl', 'cs', 'th', 'ar'];
+  var REGION_TO_LANG = { de: 'de', at: 'de', ch: 'de', fr: 'fr', es: 'es', it: 'it', ru: 'ru', tr: 'tr', pt: 'pt', br: 'pt', zh: 'zh', cn: 'zh', tw: 'zh', ua: 'uk', in: 'hi', al: 'sq', vn: 'vi', jp: 'ja', ja: 'ja', gr: 'el', el: 'el', nl: 'nl', pl: 'pl', cs: 'cs', cz: 'cs', th: 'th', ar: 'ar', sa: 'ar', eg: 'ar' };
 
   function setVbPreferredLangForSession(code) {
     if (!code) return;
     try {
       var c = String(code).trim().toLowerCase();
-      if (c && c !== 'ar') window.sessionStorage.setItem(VB_ENTRY_LANG_KEY, c);
+      if (c) window.sessionStorage.setItem(VB_ENTRY_LANG_KEY, c);
     } catch (e) {}
   }
 
   function normalizeUrlLangCode(raw) {
     var v = String(raw || '').trim().toLowerCase();
-    if (!v || v === 'ar') return '';
+    if (!v) return '';
     if (v.length > 2 && v.charAt(2) === '-') v = v.slice(0, 2);
     return v;
   }
@@ -150,7 +172,6 @@
   function readManualStoredLanguageIfValid(codes) {
     if (!isManualLanguageLocked()) return '';
     var s = readStoredLanguage();
-    if (s === 'ar') return '';
     if (s && codes.indexOf(s) !== -1) return s;
     return '';
   }
@@ -161,7 +182,7 @@
       var keys = ['pwa_language', 'language', PERMANENT_LOCALE_KEY];
       for (var i = 0; i < keys.length; i++) {
         var v = (window.localStorage.getItem(keys[i]) || '').trim();
-        if (v && v !== 'ar' && codes.indexOf(v) !== -1) return v;
+        if (v && codes.indexOf(v) !== -1) return v;
       }
     } catch (e) {}
     return '';
@@ -175,7 +196,6 @@
    */
   function resolvePwaLanguage(codes) {
     var live = readPwaUrlLangParam();
-    if (live === 'ar') live = '';
     if (live && urlLangSupportedForPwa(live, codes)) {
       persistUrlLanguageToAllStorage(live);
       return live;
@@ -189,12 +209,11 @@
 
     try {
       var fromRoot = (window.sessionStorage.getItem(VB_ENTRY_LANG_KEY) || '').trim().toLowerCase();
-      if (fromRoot === 'ar') fromRoot = '';
       if (fromRoot && codes.indexOf(fromRoot) !== -1) return fromRoot;
     } catch (e) {}
 
     var autoStored = readStoredLanguage();
-    if (autoStored && autoStored !== 'ar' && codes.indexOf(autoStored) !== -1) {
+    if (autoStored && codes.indexOf(autoStored) !== -1) {
       return autoStored;
     }
 
@@ -224,16 +243,21 @@
       window.localStorage.setItem('pwa_language_manual', '1');
       window.sessionStorage.setItem('pwa_language_manual', '1');
       setVbPreferredLangForSession(code);
+      if (typeof window.pwaApplyTextDirection === 'function') {
+        window.pwaApplyTextDirection(code);
+      } else if (typeof window.djApplyTextDirection === 'function') {
+        window.djApplyTextDirection(code);
+      }
     } catch (e) {}
   }
 
   function effectiveCodesForMenu() {
     var list = window.pwaAvailableLanguages && window.pwaAvailableLanguages.length ? window.pwaAvailableLanguages : [];
-    list = list.filter(function (e) { return e && e.code && e.code !== 'ar'; });
+    list = list.filter(function (e) { return e && e.code; });
     if (list.length) return list.map(function (e) { return e.code; });
     var d = window.DEFAULT_PWA_LANGUAGES;
     if (d && d.length) return d.map(function (e) { return e.code; });
-    return ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi', 'ja', 'el', 'nl', 'pl', 'cs'];
+    return ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi', 'ja', 'el', 'nl', 'pl', 'cs', 'th', 'ar'];
   }
 
   function getEffectiveLangForMenu() {
@@ -246,11 +270,29 @@
     return iconRaw !== '' ? iconRaw : (entry.code ? String(entry.code).trim() : 'globe');
   }
 
-  /** Baut das Sprachmenü aus window.pwaAvailableLanguages. containerId = z. B. 'langSwitcher' (Root) oder 'languageModalGrid' (VB Modal). isModal = true im Drawer/Modal. */
-  function buildDatabaseLangMenu(containerId, isModal) {
+  function resolveBrowserLanguageForPwa(codes) {
+    var list = codes || effectiveCodesForMenu();
+    var pick =
+      typeof window.pickBestLangFromNavigatorCodes === 'function'
+        ? window.pickBestLangFromNavigatorCodes(list)
+        : pickBestLangFromNavigatorCodesLocal(list);
+    if (pick) return pick;
+    return list.indexOf('en') !== -1 ? 'en' : (list[0] || 'en');
+  }
+
+  function isPwaManualLanguageLocked() {
+    return isManualLanguageLocked();
+  }
+
+  function readValidatedManualPwaLanguage(codes) {
+    return readManualStoredLanguageIfValid(codes || effectiveCodesForMenu());
+  }
+
+  /** Baut das Sprachmenü aus window.pwaAvailableLanguages. containerId = z. B. 'langSwitcher' (Root) oder 'languageModalGrid' (VB Modal). isModal = true im Drawer/Modal. resolveCurrentLang optional (z. B. DJ: nur Browser). */
+  function buildDatabaseLangMenu(containerId, isModal, resolveCurrentLang) {
     var list = window.pwaAvailableLanguages;
     if (!list || !list.length) return;
-    list = list.filter(function (e) { return e && e.code && e.code !== 'ar'; });
+    list = list.filter(function (e) { return e && e.code; });
     if (!list.length) return;
     list = typeof window.sortLanguageMenuList === 'function'
       ? window.sortLanguageMenuList(list)
@@ -258,7 +300,9 @@
     var container = document.getElementById(containerId);
     if (!container) return;
     container.innerHTML = '';
-    var current = getEffectiveLangForMenu();
+    var current = typeof resolveCurrentLang === 'function'
+      ? resolveCurrentLang()
+      : getEffectiveLangForMenu();
 
     function addOption(entry, parent, optionClass, nameClass) {
       var code = entry.code;
@@ -305,6 +349,7 @@
           if (btn) btn.setAttribute('aria-expanded', 'false');
         }
         var apply = function () {
+          if (typeof window.onPwaLanguageChanged === 'function') window.onPwaLanguageChanged(code);
           if (typeof window.updateMainContent === 'function') window.updateMainContent();
           if (typeof window.updatePageTitle === 'function') window.updatePageTitle();
           if (typeof window.translatePage === 'function') window.translatePage();
@@ -340,7 +385,7 @@
       btn.type = 'button';
       btn.className = 'main-lang-btn';
       btn.id = 'mainLangBtn';
-      btn.setAttribute('aria-label', 'Sprache wählen');
+      btn.setAttribute('aria-label', window.pwaSelectLanguageLabel());
       btn.setAttribute('aria-haspopup', 'true');
       btn.setAttribute('aria-expanded', 'false');
       btn.textContent = '\uD83C\uDF10';
@@ -405,7 +450,7 @@
     window.persistUrlLanguageToAllStorage = persistUrlLanguageToAllStorage;
     try {
       var _seed = readPwaUrlLangParam();
-      if (_seed && _seed !== 'ar') {
+      if (_seed) {
         var _codesBoot = effectiveCodesForMenu();
         if (urlLangSupportedForPwa(_seed, _codesBoot)) {
           persistUrlLanguageToAllStorage(_seed);
@@ -414,6 +459,10 @@
     } catch (eSeed) {}
     window.resolvePwaLanguage = resolvePwaLanguage;
     window.getEffectiveLangForMenu = getEffectiveLangForMenu;
+    window.getPwaEffectiveLangCodes = effectiveCodesForMenu;
+    window.resolveBrowserLanguageForPwa = resolveBrowserLanguageForPwa;
+    window.isPwaManualLanguageLocked = isPwaManualLanguageLocked;
+    window.readValidatedManualPwaLanguage = readValidatedManualPwaLanguage;
     window.setVbPreferredLangForSession = setVbPreferredLangForSession;
     window.buildDatabaseLangMenu = buildDatabaseLangMenu;
     if (typeof window.pickBestLangFromNavigatorCodes !== 'function') {

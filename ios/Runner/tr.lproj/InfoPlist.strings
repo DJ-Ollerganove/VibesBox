@@ -1,10 +1,11 @@
-/* Info.plist yerelleştirmesi – VibesBox */
-"NSLocalNetworkUsageDescription" = "Flutter ve Xcode’un uygulamaya bağlanabilmesi (geliştirirken örneğin Hot Reload için) VibesBox’un yerel ağınızdaki cihazlara erişmesi gerekir.";
+/* Info.plist localization – VibesBox */
+"NSLocalNetworkUsageDescription" = "VibesBox may use the local network so development tools can connect during testing, and for optional device features on the same Wi‑Fi.";
 "NSMicrophoneUsageDescription" = "VibesBox, çalan müziği analiz etmek ve tanımak için mikrofona ihtiyaç duyar.";
-"NSAppleMusicUsageDescription" = "VibesBox, müzik tanımayı Apple Music ile ilişkilendirmek için medya kitaplığınıza erişebilir.";
+"NSAppleMusicUsageDescription" = "VibesBox may access your media library to link music recognition with Apple Music features.";
 "NSCameraUsageDescription" = "VibesBox QR kodları taramak ve fotoğraf çekmek için kameraya ihtiyaç duyar.";
-"NSPhotoLibraryUsageDescription" = "Profil fotoğrafı seçmeniz ve parti görsellerini kullanabilmeniz için fotoğraflarınıza erişmemiz gerekir.";
-"NSPhotoLibraryAddUsageDescription" = "İsterseniz QR kodları veya parti fotoğrafları gibi görselleri galerinize kaydederiz.";
-"NSLocationWhenInUseUsageDescription" = "Haritayı parti konumunuz üzerinde ortalamak için konumunuzu kullanırız.";
-"NSCalendarsUsageDescription" = "Parti tarihlerini takviminize aktarmak için gereklidir.";
-"NSFaceIDUsageDescription" = "Face ID yönetici ayarlarını korur; hassas seçeniklere yalnızca siz erişebilirsiniz.";
+"NSPhotoLibraryUsageDescription" = "VibesBox needs photo library access so you can choose a profile picture.";
+"NSPhotoLibraryAddUsageDescription" = "VibesBox saves images such as QR codes to your library when you choose to.";
+"NSLocationWhenInUseUsageDescription" = "Parti konumunu haritada ortalamak için konumunuz kullanılır.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "Parti konumunu haritada ortalamak için konumunuz kullanılır.";
+"NSCalendarsUsageDescription" = "Needed to export party dates to your calendar.";
+"NSFaceIDUsageDescription" = "Face ID protects admin settings so only you can access sensitive options.";

@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -52,9 +52,18 @@ class AppDiagnosticLogService with WidgetsBindingObserver {
     if (!_captureEnabled) return false;
     if (Firebase.apps.isEmpty) return false;
     final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return false;
+    final model = UserService().currentUser.value;
+    if (model != null &&
+        model.id == user.uid &&
+        AppConfig.isAdminRole(model)) {
+      return true;
+    }
     final adminUid = AppConfig.adminDjId;
-    if (user == null || adminUid == null || adminUid.isEmpty) return false;
-    return user.uid == adminUid;
+    if (adminUid != null && adminUid.isNotEmpty && user.uid == adminUid) {
+      return true;
+    }
+    return false;
   }
 
   bool get captureEnabledPreference => _captureEnabled;
@@ -119,6 +128,116 @@ class AppDiagnosticLogService with WidgetsBindingObserver {
 
   void log(String level, Object? message) {
     _recordInternal(level, message?.toString() ?? '');
+  }
+
+  /// Alle SnackBars (besonders rote Fehler) ins Diagnose-Log.
+  void recordSnackBar(
+    SnackBar bar, {
+    String? tag,
+    Object? error,
+    StackTrace? stackTrace,
+  }) {
+    if (!_shouldCaptureForCurrentUser()) return;
+
+    final text = _extractSnackBarText(bar.content);
+    final isError = _isErrorSnackBar(bar);
+    final level = isError ? 'SNACKBAR' : 'SNACKBAR_INFO';
+
+    final buf = StringBuffer();
+    buf.writeln('${isError ? 'FEHLER' : 'Info'}${tag != null ? ' [$tag]' : ''}');
+    buf.writeln('Text: $text');
+    if (bar.backgroundColor != null) {
+      buf.writeln('Hintergrund: ${bar.backgroundColor}');
+    }
+    final duration = bar.duration;
+    if (duration != null) {
+      buf.writeln('Dauer: ${duration.inSeconds}s');
+    }
+    if (error != null) {
+      buf.writeln('Exception: $error');
+    }
+    if (stackTrace != null) {
+      buf.writeln('Stack: $stackTrace');
+    }
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) {
+      buf.writeln('UID: $uid');
+    }
+
+    _recordInternal(level, buf.toString());
+  }
+
+  /// Detailliertes Party-Speichern-Protokoll (Admin).
+  void recordPartySaveFailure({
+    required String step,
+    required Object error,
+    StackTrace? stackTrace,
+    Map<String, Object?> context = const {},
+  }) {
+    final buf = StringBuffer();
+    buf.writeln('Party-Speichern fehlgeschlagen');
+    buf.writeln('Schritt: $step');
+    buf.writeln('Fehler: $error');
+    for (final entry in context.entries) {
+      buf.writeln('${entry.key}: ${entry.value}');
+    }
+    if (stackTrace != null) {
+      buf.writeln('Stack: $stackTrace');
+    }
+    _recordInternal('PARTY', buf.toString());
+  }
+
+  String _extractSnackBarText(Widget content) {
+    if (content is Text) {
+      return content.data ?? content.textSpan?.toPlainText() ?? '';
+    }
+    if (content is RichText) {
+      return content.text.toPlainText();
+    }
+    if (content is Row || content is Column) {
+      final children = content is Row
+          ? content.children
+          : (content as Column).children;
+      return children
+          .map(_extractSnackBarText)
+          .where((s) => s.trim().isNotEmpty)
+          .join(' | ');
+    }
+    return content.toString();
+  }
+
+  bool _isErrorSnackBar(SnackBar bar) {
+    final bg = bar.backgroundColor;
+    if (bg != null) {
+      if (bg == Colors.red ||
+          bg == Colors.redAccent ||
+          bg.value == 0xFFE53935 ||
+          bg.value == 0xFFD32F2F) {
+        return true;
+      }
+      final r = bg.r;
+      final g = bg.g;
+      final b = bg.b;
+      if (r > 0.65 && g < 0.35 && b < 0.35) return true;
+    }
+    final text = _extractSnackBarText(bar.content).toLowerCase();
+    const markers = [
+      'fehlgeschlagen',
+      'fehler',
+      'error',
+      'verweigert',
+      'denied',
+      'nicht möglich',
+      'nicht moeglich',
+      'ungültig',
+      'ungueltig',
+    ];
+    for (final m in markers) {
+      if (text.contains(m)) return true;
+    }
+    final duration = bar.duration;
+    if (duration != null && duration.inSeconds >= 6) return true;
+    return false;
   }
 
   void _recordInternal(String level, String message) {

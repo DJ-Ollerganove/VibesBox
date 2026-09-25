@@ -33,6 +33,7 @@ class _ProStatusCardState extends State<ProStatusCard> {
 
         final isActive = session?.isActive ?? (userModel.isPremiumActive || userModel.isLifetime);
         final isLifetime = session?.isLifetime ?? userModel.isLifetime;
+        final isDjB2b = session?.isDjB2b ?? userModel.isDjB2bActive;
         final expiryDate = session?.proUntil;
 
         if (isActive && _paywallOpen) {
@@ -97,9 +98,13 @@ class _ProStatusCardState extends State<ProStatusCard> {
                         Text(
                           isLifetime
                               ? (loc.vibesbox_pro_life)
-                              : (isActive ? (loc.vibesbox_pro) : (loc.vibesbox_free)),
+                              : (isDjB2b
+                                  ? loc.vibesbox_pro_dj_b2b
+                                  : (isActive ? (loc.vibesbox_pro) : (loc.vibesbox_free))),
                           style: TextStyle(
-                            color: isLifetime ? const Color(0xFFFFD700) : (isActive ? UIConstants.appGreen : Colors.red),
+                            color: isLifetime
+                                ? const Color(0xFFFFD700)
+                                : (isActive ? UIConstants.appGreen : Colors.red),
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
                           ),

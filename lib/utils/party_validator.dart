@@ -5,7 +5,7 @@ import '../l10n/app_localizations.dart';
 /// Zentrale Validierungsklasse für Party-Zeiten
 /// 
 /// Diese Klasse stellt Methoden zur Validierung von Party-Zeiten bereit:
-/// - Dauer-Check (5 Min bis 23:55 Std)
+/// - Dauer-Check (5 Min bis 23:55 Std; Pro bis 14 Tage)
 /// - Überschneidungs-Check mit anderen Partys
 /// 
 /// Vorbereitet für zukünftige DJ-spezifische Limits (z.B. für Free-Accounts)
@@ -13,8 +13,21 @@ class PartyValidator {
   /// Minimale Partydauer: 5 Minuten
   static const Duration minDuration = Duration(minutes: 5);
   
-  /// Maximale Partydauer: 23 Stunden und 55 Minuten
+  /// Maximale Partydauer (Free / Standard): 23 Stunden und 55 Minuten
   static const Duration maxDuration = Duration(hours: 23, minutes: 55);
+
+  /// Maximale Partydauer für VibesBox Pro (Apple-Review / lange Events): 14 Tage
+  static const Duration maxDurationPro = Duration(days: 14);
+
+  /// UI-/Validierungs-Obergrenze je Plan. Admins: kein hartes Cap in [validate].
+  static Duration maxDurationFor({
+    bool isAdmin = false,
+    bool isPro = false,
+    bool allowExtendedDuration = false,
+  }) {
+    if (isAdmin || isPro || allowExtendedDuration) return maxDurationPro;
+    return maxDuration;
+  }
   
   /// Maximale Vorlaufzeit für Party-Planung: 6 Monate
   static const int maxMonthsInAdvance = 6;
@@ -27,12 +40,16 @@ class PartyValidator {
   /// [startDateTime] - Startzeit der Party
   /// [endDateTime] - Endzeit der Party
   /// [context] - BuildContext für Lokalisierung (optional)
+  /// [isPro] - Pro-User: bis [maxDurationPro]
+  /// [allowExtendedDuration] - z. B. Apple-Review-Test-DJ (Free, aber bis 14 Tage)
   /// 
   /// Returns: Fehlermeldung oder null
   static String? validateDuration(
     DateTime startDateTime,
     DateTime endDateTime, {
     BuildContext? context,
+    bool isPro = false,
+    bool allowExtendedDuration = false,
   }) {
     // Prüfe: Endzeit muss nach Startzeit sein
     if (endDateTime.isBefore(startDateTime) || 
@@ -41,6 +58,11 @@ class PartyValidator {
     }
 
     final duration = endDateTime.difference(startDateTime);
+    final extended = isPro || allowExtendedDuration;
+    final maxAllowed = maxDurationFor(
+      isPro: isPro,
+      allowExtendedDuration: allowExtendedDuration,
+    );
 
     // Prüfe: Mindestdauer 5 Minuten
     if (duration < minDuration) {
@@ -49,8 +71,13 @@ class PartyValidator {
           : 'Die Partydauer muss mindestens 5 Minuten betragen.';
     }
 
-    // Prüfe: Maximaldauer 23:55 Stunden
-    if (duration > maxDuration) {
+    // Prüfe: Maximaldauer (Free 23:55 / Pro bzw. Review-Test 14 Tage)
+    if (duration > maxAllowed) {
+      if (extended) {
+        return context != null
+            ? AppLocalizations.of(context)!.party_validation_duration_too_long_pro
+            : 'Die Partydauer darf maximal 14 Tage betragen.';
+      }
       return context != null
           ? AppLocalizations.of(context)!.party_validation_duration_too_long
           : 'Die Partydauer darf maximal 23 Stunden und 55 Minuten betragen.';
@@ -189,6 +216,8 @@ class PartyValidator {
   /// [allParties] - Liste aller Partys des DJs (optional)
   /// [currentPartyId] - ID der aktuellen Party (optional, für Bearbeitung)
   /// [isAdmin] - true wenn der aktuelle User ein Admin ist (optional, default: false)
+  /// [isPro] - true wenn VibesBox Pro (optional, default: false) — dann bis 14 Tage
+  /// [allowExtendedDuration] - Free-Ausnahme (z. B. Apple-Review-Test-DJ)
   /// [context] - BuildContext für Lokalisierung (optional)
   /// 
   /// Returns: Fehlermeldung oder null
@@ -198,6 +227,8 @@ class PartyValidator {
     List<QueryDocumentSnapshot>? allParties,
     String? currentPartyId,
     bool isAdmin = false,
+    bool isPro = false,
+    bool allowExtendedDuration = false,
     BuildContext? context,
   }) {
     // 1. Prüfe Maximal-Vorlaufzeit (6 Monate) - gilt für alle (auch Admins)
@@ -209,7 +240,13 @@ class PartyValidator {
     // 2. Prüfe Dauer (nur für Nicht-Admins)
     // Admins können Partys mit beliebiger Dauer erstellen
     if (!isAdmin) {
-      final durationError = validateDuration(startDateTime, endDateTime, context: context);
+      final durationError = validateDuration(
+        startDateTime,
+        endDateTime,
+        context: context,
+        isPro: isPro,
+        allowExtendedDuration: allowExtendedDuration,
+      );
       if (durationError != null) {
         return durationError;
       }

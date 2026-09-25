@@ -2,6 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../l10n/app_localizations.dart';
 import '../utils/debug_log.dart';
 
@@ -11,6 +13,32 @@ import '../utils/debug_log.dart';
 /// Pro App-Start wird die Datenbankabfrage nur einmal ausgeführt (Session-Schutz).
 class GlobalAnnouncementPopupService {
   static bool _hasCheckedThisSession = false;
+  static const String _localReadPrefsKey = 'global_announcement_read_ids_v1';
+
+  static void resetSessionForLogout() {
+    _hasCheckedThisSession = false;
+  }
+
+  static Future<List<String>> _localReadIds() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getStringList(_localReadPrefsKey) ?? const [];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  static Future<void> _markReadLocally(String id) async {
+    if (id.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = List<String>.from(await _localReadIds());
+      if (!list.contains(id)) {
+        list.add(id);
+        await prefs.setStringList(_localReadPrefsKey, list);
+      }
+    } catch (_) {}
+  }
 
   /// translations aus Firestore: immer als Map auslesen (Sprachcode -> {subject, message}). Kein List-Cast.
   static Map<String, dynamic> _safeTranslationsMap(Map<String, dynamic>? data) {
@@ -80,12 +108,14 @@ class GlobalAnnouncementPopupService {
 
       final userDoc = await FirebaseFirestore.instance.collection('users').doc(userId).get();
       final readList = _readAnnouncementIds(userDoc.data());
+      final localRead = await _localReadIds();
 
       final allDocs = snapshot.docs;
       final unreadDocs = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
       for (final doc in allDocs) {
         final data = doc.data();
-        final isRead = readList.contains(doc.id);
+        final isRead =
+            readList.contains(doc.id) || localRead.contains(doc.id);
         final isTarget = _isTargetForDj(data);
         debugLog('DEBUG [Popup]: Prüfe Ankündigung ID: ${doc.id}');
         debugLog('DEBUG [Popup]: Ist bereits gelesen? $isRead');
@@ -165,9 +195,14 @@ class GlobalAnnouncementPopupService {
     );
 
     if (userClickedOk == true) {
-      await FirebaseFirestore.instance.collection('users').doc(userId).set({
-        'read_announcements': FieldValue.arrayUnion([id]),
-      }, SetOptions(merge: true));
+      await _markReadLocally(id);
+      try {
+        await FirebaseFirestore.instance.collection('users').doc(userId).set({
+          'read_announcements': FieldValue.arrayUnion([id]),
+        }, SetOptions(merge: true));
+      } catch (e) {
+        debugLog('DEBUG [Popup]: read_announcements Firestore-Fehler (lokal gespeichert): $e');
+      }
     }
 
     if (!context.mounted) return;

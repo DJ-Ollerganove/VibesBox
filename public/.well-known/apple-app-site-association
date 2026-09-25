@@ -5,15 +5,20 @@
       {
         "appID": "ZMJK572375.com.vibesbox.dj",
         "paths": [
+          "NOT /vb/verify.html",
+          "NOT /vb/verify.html*",
+          "NOT /auth/reset*",
           "/",
           "/verify",
           "/verify/*",
-          "/vb/*",
+          "/invite",
+          "/invite/*",
+          "/vb",
+          "/vb/",
           "/vb/p/*",
           "/vb/party/*",
           "/p/*",
-          "/party/*",
-          "*"
+          "/party/*"
         ]
       }
     ]

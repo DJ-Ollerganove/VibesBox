@@ -70,7 +70,9 @@ abstract final class DjHomeWidgetId {
 
   /// Nicht per Schalter deaktivierbar (Free: immer an wenn sichtbar).
   static bool isToggleLocked(String id) =>
-      id == proPromotion || id == proTrialBanner;
+      id == proPromotion ||
+      id == proTrialBanner ||
+      id == statsLogins;
 
   /// Widgets, die im Bearbeiten-Fenster nicht erscheinen.
   static Set<String> hiddenInEditSheet({
@@ -156,11 +158,16 @@ class DjHomeLayoutConfig {
     required bool isFreeDj,
     required bool trialUsed,
     bool showPreWishesWidget = false,
+    bool showLiveStatsWidget = false,
   }) =>
       order.where((id) {
         if (DjHomeWidgetId.fixedOutsideEdit.contains(id)) return false;
+        if (id == DjHomeWidgetId.statsLogins) return true;
         if (enabled[id] != true) return false;
         if (id == DjHomeWidgetId.preWishesCount && !showPreWishesWidget) {
+          return false;
+        }
+        if (id == DjHomeWidgetId.statsLive && !showLiveStatsWidget) {
           return false;
         }
         if (id == DjHomeWidgetId.proPromotion && !isFreeDj) return false;
@@ -200,13 +207,14 @@ class DjHomeLayoutConfig {
     return copyWith(order: o, enabled: en);
   }
 
-  /// Speichern: Free-Widgets mit festem An-Status.
+  /// Speichern: Free-Widgets mit festem An-Status; Login-Statistik immer an.
   DjHomeLayoutConfig normalizedForSave({
     required bool isFreeDj,
     required bool trialUsed,
   }) {
-    if (!isFreeDj) return this;
     final en = Map<String, bool>.from(enabled);
+    en[DjHomeWidgetId.statsLogins] = true;
+    if (!isFreeDj) return copyWith(enabled: en);
     en[DjHomeWidgetId.proPromotion] = true;
     if (!trialUsed) {
       en[DjHomeWidgetId.proTrialBanner] = true;
@@ -292,6 +300,7 @@ class DjHomeLayoutConfig {
       final v = rawEnabled[id];
       enabled[id] = v is bool ? v : defaults().enabled[id] ?? false;
     }
+    enabled[DjHomeWidgetId.statsLogins] = true;
     return DjHomeLayoutConfig(order: order, enabled: enabled);
   }
 }

@@ -9,6 +9,7 @@ import 'package:printing/printing.dart';
 import 'package:flutter/material.dart' show Locale;
 
 import '../config/app_config.dart';
+import 'export_font_service.dart';
 import '../l10n/locale_helper.dart';
 import '../utils/formatting_utils.dart';
 import '../utils/party_code_utils.dart';
@@ -17,15 +18,6 @@ import '../utils/debug_log.dart';
 
 /// Service für die Generierung von Party-PDFs
 class PartyPdfService {
-  /// Gecachte Unicode-Schriftart für Latin/Cyrillic (Roboto, kleiner).
-  static pw.ThemeData? _cachedThemeLatin;
-
-  /// Gecachte Theme für Chinesisch (Noto Sans SC als Basis).
-  static pw.ThemeData? _cachedThemeZh;
-
-  /// Gecachte Theme für Arabisch (Noto Sans Arabic als Basis).
-  static pw.ThemeData? _cachedThemeAr;
-
   /// Gecachte Grafik-Icons: Schwarz (#000) für Kontaktblock (transparenter Hintergrund, Briefumschlag/Hörer).
   static pw.ImageProvider? _cachedIconEmail;
   static pw.ImageProvider? _cachedIconPhone;
@@ -112,81 +104,15 @@ class PartyPdfService {
     } catch (_) {}
   }
 
-  /// Prüft, ob für die Locale die volle Unicode-Schrift (CJK, Arabic) nötig ist.
-  static bool _needsFullUnicodeFont(String? localeCode) =>
-      localeCode == 'zh' || localeCode == 'ar';
-
-  /// Lädt die PDF-Theme inkl. Unicode-Schrift. Nutzt Cache, lädt nur wenn nötig.
-  static Future<pw.ThemeData?> _loadPdfTheme({String? localeLanguageCode}) async {
-    if (localeLanguageCode == 'zh' && _cachedThemeZh != null) return _cachedThemeZh;
-    if (localeLanguageCode == 'ar' && _cachedThemeAr != null) return _cachedThemeAr;
-    if (!_needsFullUnicodeFont(localeLanguageCode) && _cachedThemeLatin != null) {
-      return _cachedThemeLatin;
-    }
-
-    try {
-      if (localeLanguageCode == 'zh') {
-        final baseFont = await PdfGoogleFonts.notoSansSCRegular();
-        final boldFont = await PdfGoogleFonts.notoSansSCBold();
-        final fallbacks = <pw.Font>[];
-        try {
-          fallbacks.add(await PdfGoogleFonts.notoSansArabicRegular());
-          fallbacks.add(await PdfGoogleFonts.notoSansArabicBold());
-        } catch (_) {}
-        try {
-          fallbacks.add(await PdfGoogleFonts.notoSansRegular());
-          fallbacks.add(await PdfGoogleFonts.notoSansBold());
-        } catch (_) {}
-        _cachedThemeZh = pw.ThemeData.withFont(
-          base: baseFont,
-          bold: boldFont,
-          fontFallback: fallbacks.isEmpty ? null : fallbacks,
-        );
-        return _cachedThemeZh;
-      } else if (localeLanguageCode == 'ar') {
-        final baseFont = await PdfGoogleFonts.notoSansArabicRegular();
-        final boldFont = await PdfGoogleFonts.notoSansArabicBold();
-        final fallbacks = <pw.Font>[];
-        try {
-          fallbacks.add(await PdfGoogleFonts.notoSansSCRegular());
-          fallbacks.add(await PdfGoogleFonts.notoSansSCBold());
-        } catch (_) {}
-        try {
-          fallbacks.add(await PdfGoogleFonts.notoSansRegular());
-          fallbacks.add(await PdfGoogleFonts.notoSansBold());
-        } catch (_) {}
-        _cachedThemeAr = pw.ThemeData.withFont(
-          base: baseFont,
-          bold: boldFont,
-          fontFallback: fallbacks.isEmpty ? null : fallbacks,
-        );
-        return _cachedThemeAr;
-      } else {
-        final baseFont = await PdfGoogleFonts.robotoRegular();
-        final boldFont = await PdfGoogleFonts.robotoBold();
-        _cachedThemeLatin = pw.ThemeData.withFont(base: baseFont, bold: boldFont);
-        return _cachedThemeLatin;
-      }
-    } catch (e) {
-      try {
-        final baseFont = await PdfGoogleFonts.robotoRegular();
-        final boldFont = await PdfGoogleFonts.robotoBold();
-        final theme = pw.ThemeData.withFont(base: baseFont, bold: boldFont);
-        _cachedThemeLatin ??= theme;
-        return theme;
-      } catch (e2) {
-        debugLog('⚠️ PDF: Schriftart konnte nicht geladen werden: $e');
-        return null;
-      }
-    }
-  }
-
   /// Lädt das PDF-Theme (Fonts) für die angegebene Locale. Wird vom QR-Dialog
   /// vor der PDF-Generierung aufgerufen, damit der Font-Lade-Status getrennt angezeigt werden kann.
   static Future<void> ensurePdfThemeLoaded({String? localeLanguageCode}) async {
-    await _loadPdfTheme(localeLanguageCode: localeLanguageCode);
+    await ExportFontService.loadPdfTheme(localeLanguageCode: localeLanguageCode);
     await _loadContactIcons();
   }
+
+  static Future<pw.ThemeData?> _loadPdfTheme({String? localeLanguageCode}) =>
+      ExportFontService.loadPdfTheme(localeLanguageCode: localeLanguageCode);
 
   /// PDF-/Export-Strings für [localeLanguageCode] (gleiche Keys wie App-Übersetzungen).
   static Map<String, String> _pdfLocaleStrings(String? localeLanguageCode) {
@@ -278,30 +204,51 @@ class PartyPdfService {
   static String _protectDjNameLineBreak(String djName) =>
       djName.replaceAll(' ', '\u00A0');
 
-  /// Entfernt doppelte "Party-Code:"-Labels (z. B. "Party-Code: Party-Code: 530 166" -> "Party-Code: 530 166").
-  static String _deduplicatePartyCodeLabel(String raw) {
-    return raw.replaceAllMapped(
-      RegExp(r'(Party-Code:\s*)+', caseSensitive: false),
-      (_) => 'Party-Code: ',
-    ).trim();
-  }
-
-  /// PDF-Anzeige: Rohcode aus DB → „Party-Code: 1234 5678“ (kein Speichern mit Leerzeichen).
-  static String _partyCodeLineForPdf(String? partyCodeDisplay, String partyCode) {
+  /// PDF-Anzeige: Rohcode aus DB → „{label} 1234 5678“ (l10n-Label, kein Speichern mit Leerzeichen).
+  static String _partyCodeLineForPdf(
+    String? partyCodeDisplay,
+    String partyCode,
+    String partyCodeLabel,
+  ) {
+    final label = partyCodeLabel.trim();
+    final labelStem = label.replaceAll(RegExp(r':\s*$'), '').trim();
     final combined = (partyCodeDisplay != null && partyCodeDisplay.trim().isNotEmpty)
         ? partyCodeDisplay.trim()
         : partyCode.trim();
-    final withoutLabel = combined.replaceAllMapped(
-      RegExp(r'party-code:\s*', caseSensitive: false),
-      (_) => '',
-    ).trim();
+    var withoutLabel = combined;
+    if (labelStem.isNotEmpty) {
+      withoutLabel = combined
+          .replaceAll(
+            RegExp('(?:${RegExp.escape(labelStem)}:?\\s*)+', caseSensitive: false),
+            '',
+          )
+          .trim();
+    }
     var digits = withoutLabel.replaceAll(RegExp(r'[^0-9]'), '');
     if (digits.isEmpty) {
       digits = PartyCodeUtils.normalizeDigits(partyCode);
     }
     final visual = PartyCodeUtils.formatForDisplay(digits.isNotEmpty ? digits : partyCode);
-    if (visual.isEmpty) return _deduplicatePartyCodeLabel(combined);
-    return _deduplicatePartyCodeLabel('Party-Code: $visual');
+    if (visual.isEmpty) {
+      return label.isNotEmpty ? '$label $combined'.trim() : combined;
+    }
+    final prefix = label.endsWith(':') ? '$label ' : (label.isNotEmpty ? '$label: ' : '');
+    return '$prefix$visual'.trim();
+  }
+
+  static bool _nonEmpty(String? value) =>
+      value != null && value.trim().isNotEmpty;
+
+  static bool _hasVenueExport({
+    String? venueLocationName,
+    String? venueLocationAddress,
+    String? venueLocation,
+    String? venueLine,
+  }) {
+    return _nonEmpty(venueLocationName) ||
+        _nonEmpty(venueLocationAddress) ||
+        _nonEmpty(venueLocation) ||
+        _nonEmpty(venueLine);
   }
 
   /// Universelle Layout-Funktion: pw.Column mit start, Header isoliert + Spacer unten.
@@ -328,6 +275,8 @@ class PartyPdfService {
     String? venueLabel,
     String? venueLocation,
     String? venueLine,
+    String? venueLocationName,
+    String? venueLocationAddress,
     bool showVenue = false,
     bool useFullIntro = false,
     pw.ImageProvider? brandingLogo, // DJ Logo
@@ -369,14 +318,21 @@ class PartyPdfService {
         : (logoHeight * 1.5).clamp(80.0, (maxWidth * 0.55).clamp(80.0, 280.0));
     final startLabelStyle = pw.TextStyle(fontSize: bodyFontSize, fontWeight: pw.FontWeight.bold, color: PdfColors.grey800);
     final headerDateStyle = pw.TextStyle(fontSize: bodyFontSize, color: PdfColors.grey700);
-    final hasLocation = showVenue &&
-        ((venueLocation != null && venueLocation.isNotEmpty) || (venueLine != null && venueLine.isNotEmpty));
-    // Nur Ortsname / Kartentext – kein „Veranstaltungsort“-Label (alle Sprachen)
-    final locationText = (venueLocation != null && venueLocation.isNotEmpty)
+    final showStartInfo = dateTimeText.trim().isNotEmpty;
+    final hasLocationName =
+        venueLocationName != null && venueLocationName.trim().isNotEmpty;
+    final hasLocationAddress =
+        venueLocationAddress != null && venueLocationAddress.trim().isNotEmpty;
+    final legacyLocationText = (venueLocation != null && venueLocation.isNotEmpty)
         ? venueLocation
         : (venueLine ?? '');
+    final hasLocation = showVenue &&
+        (hasLocationName ||
+            hasLocationAddress ||
+            legacyLocationText.isNotEmpty);
     final qrSizeScaled = qrSize * (isFlyerLayout ? 0.60 : 0.75);
-    final codeDisplay = _partyCodeLineForPdf(partyCodeDisplay, partyCode);
+    final partyCodeLabel = LocaleHelper.tr(exportMap, 'party_code_label');
+    final codeDisplay = _partyCodeLineForPdf(partyCodeDisplay, partyCode, partyCodeLabel);
     final hasContactBlock = contactBlockUnderQr != null && contactBlockUnderQr.isNotEmpty;
     final contactHeaderStyle = pw.TextStyle(fontSize: bodyFontSize, fontWeight: pw.FontWeight.bold, color: PdfColors.grey800);
     final contactDjNameStyle = pw.TextStyle(fontSize: bodyFontSize + 2, fontWeight: pw.FontWeight.bold, color: PdfColors.grey800);
@@ -422,23 +378,25 @@ class PartyPdfService {
                           ? pw.Text(brandingText!, style: pw.TextStyle(fontSize: bodyFontSize + 6, fontWeight: pw.FontWeight.bold, color: PdfColors.black), textAlign: pw.TextAlign.center)
                           : pw.SizedBox.shrink(),
                 ),
-                pw.SizedBox(width: 25),
-                pw.Column(
-                  crossAxisAlignment: pw.CrossAxisAlignment.end,
-                  mainAxisSize: pw.MainAxisSize.min,
-                  children: [
-                    pw.Text(resolvedStartTimeLabel, style: startLabelStyle, textAlign: pw.TextAlign.right, textDirection: ltr),
-                    pw.SizedBox(height: 2),
-                    pw.Text(dateTimeText, style: headerDateStyle, textAlign: pw.TextAlign.right, textDirection: ltr),
-                  ],
-                ),
+                if (showStartInfo) ...[
+                  pw.SizedBox(width: 25),
+                  pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.end,
+                    mainAxisSize: pw.MainAxisSize.min,
+                    children: [
+                      pw.Text(resolvedStartTimeLabel, style: startLabelStyle, textAlign: pw.TextAlign.right, textDirection: ltr),
+                      pw.SizedBox(height: 2),
+                      pw.Text(dateTimeText, style: headerDateStyle, textAlign: pw.TextAlign.right, textDirection: ltr),
+                    ],
+                  ),
+                ],
               ],
             ),
           ],
         ),
         // 2. MITTELTEIL (Location optional, QR, Party-Code) – feste Abstände
         pw.SizedBox(height: gapLarge),
-        if (hasLocation && locationText.isNotEmpty) ...[
+        if (hasLocation) ...[
           pw.Container(
             width: maxWidth,
             decoration: const pw.BoxDecoration(
@@ -448,17 +406,54 @@ class PartyPdfService {
               ),
             ),
             padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 8),
-            child: pw.Text(
-              locationText,
-              style: pw.TextStyle(fontSize: bodyFontSize - 1, color: PdfColors.grey700),
-              textAlign: pw.TextAlign.center,
-              textDirection: ltr,
-              maxLines: 1,
+            child: pw.Column(
+              mainAxisSize: pw.MainAxisSize.min,
+              crossAxisAlignment: pw.CrossAxisAlignment.center,
+              children: [
+                if (hasLocationName)
+                  pw.Text(
+                    venueLocationName!.trim(),
+                    style: pw.TextStyle(
+                      fontSize: bodyFontSize - 1,
+                      color: PdfColors.grey700,
+                      fontWeight: pw.FontWeight.bold,
+                    ),
+                    textAlign: pw.TextAlign.center,
+                    textDirection: ltr,
+                    maxLines: 2,
+                  ),
+                if (hasLocationName && hasLocationAddress)
+                  pw.SizedBox(height: 3),
+                if (hasLocationAddress)
+                  pw.Text(
+                    venueLocationAddress!.trim(),
+                    style: pw.TextStyle(
+                      fontSize: bodyFontSize - 1,
+                      color: PdfColors.grey700,
+                    ),
+                    textAlign: pw.TextAlign.center,
+                    textDirection: ltr,
+                    maxLines: 2,
+                  ),
+                if (!hasLocationName &&
+                    !hasLocationAddress &&
+                    legacyLocationText.isNotEmpty)
+                  pw.Text(
+                    legacyLocationText,
+                    style: pw.TextStyle(
+                      fontSize: bodyFontSize - 1,
+                      color: PdfColors.grey700,
+                    ),
+                    textAlign: pw.TextAlign.center,
+                    textDirection: ltr,
+                    maxLines: 2,
+                  ),
+              ],
             ),
           ),
           pw.SizedBox(height: gapLarge),
         ],
-        if (!hasLocation || locationText.isEmpty) pw.SizedBox(height: gapLarge),
+        if (!hasLocation) pw.SizedBox(height: gapLarge),
         // Musikwunsch-Text (L10n, zentriert, zweizeilig)
         pw.SizedBox(height: gapLarge),
         if (scanLine1 != null && scanLine1.isNotEmpty)
@@ -623,6 +618,8 @@ class PartyPdfService {
     String? venueLine,
     String? venueLabel,
     String? venueLocation,
+    String? venueLocationName,
+    String? venueLocationAddress,
     bool isArabicLocale = false,
     String? scanLine1,
     String? scanLine2,
@@ -655,12 +652,19 @@ class PartyPdfService {
           venueLine: venueLine,
           venueLabel: venueLabel,
           venueLocation: venueLocation,
+          venueLocationName: venueLocationName,
+          venueLocationAddress: venueLocationAddress,
           brandingLogo: brandingLogo,
           brandingText: brandingText,
           footerLogoImage: djWbLogoImage,
           footerText: footerText ?? _defaultPdfFooterText,
           useFullIntro: useFullIntro,
-          showVenue: (venueLocation != null && venueLocation.isNotEmpty) || (venueLine != null && venueLine.isNotEmpty),
+          showVenue: _hasVenueExport(
+            venueLocationName: venueLocationName,
+            venueLocationAddress: venueLocationAddress,
+            venueLocation: venueLocation,
+            venueLine: venueLine,
+          ),
           isArabicLocale: isArabicLocale,
           scanLine1: scanLine1,
           scanLine2: scanLine2,
@@ -686,6 +690,8 @@ class PartyPdfService {
     String? venueLine,
     String? venueLabel,
     String? venueLocation,
+    String? venueLocationName,
+    String? venueLocationAddress,
     String? partyCodeDisplay,
     List<String>? contactBlockUnderQr,
     String? scanLine1,
@@ -751,11 +757,11 @@ class PartyPdfService {
                   mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
                   crossAxisAlignment: pw.CrossAxisAlignment.stretch,
                   children: [
-                    _buildPartyColumn(partyName: partyName, startDate: startDate, pwaUrl: pwaUrl, partyCode: partyCode, partyCodeDisplay: partyCodeDisplay, contactBlockUnderQr: contactBlockUnderQr, brandingLogo: brandingLogo, brandingText: djName, djWbLogoImage: djWbLogoImage, pdfText: pdfText, dateText: startTimeFormatted ?? dateText, startTimeLabel: startTimeLabel, footerText: footerText, introBefore: introBefore, djName: djName, introAfter: introAfter, venueLine: venueLine, venueLabel: venueLabel, venueLocation: venueLocation, isArabicLocale: isAr, scanLine1: scanLine1, scanLine2: scanLine2, localeLanguageCode: localeLanguageCode),
+                    _buildPartyColumn(partyName: partyName, startDate: startDate, pwaUrl: pwaUrl, partyCode: partyCode, partyCodeDisplay: partyCodeDisplay, contactBlockUnderQr: contactBlockUnderQr, brandingLogo: brandingLogo, brandingText: djName, djWbLogoImage: djWbLogoImage, pdfText: pdfText, dateText: startTimeFormatted ?? dateText, startTimeLabel: startTimeLabel, footerText: footerText, introBefore: introBefore, djName: djName, introAfter: introAfter, venueLine: venueLine, venueLabel: venueLabel, venueLocation: venueLocation, venueLocationName: venueLocationName, venueLocationAddress: venueLocationAddress, isArabicLocale: isAr, scanLine1: scanLine1, scanLine2: scanLine2, localeLanguageCode: localeLanguageCode),
                     foldLine(),
-                    _buildPartyColumn(partyName: partyName, startDate: startDate, pwaUrl: pwaUrl, partyCode: partyCode, partyCodeDisplay: partyCodeDisplay, contactBlockUnderQr: contactBlockUnderQr, brandingLogo: brandingLogo, brandingText: djName, djWbLogoImage: djWbLogoImage, pdfText: pdfText, dateText: startTimeFormatted ?? dateText, startTimeLabel: startTimeLabel, footerText: footerText, introBefore: introBefore, djName: djName, introAfter: introAfter, venueLine: venueLine, venueLabel: venueLabel, venueLocation: venueLocation, isArabicLocale: isAr, scanLine1: scanLine1, scanLine2: scanLine2, localeLanguageCode: localeLanguageCode),
+                    _buildPartyColumn(partyName: partyName, startDate: startDate, pwaUrl: pwaUrl, partyCode: partyCode, partyCodeDisplay: partyCodeDisplay, contactBlockUnderQr: contactBlockUnderQr, brandingLogo: brandingLogo, brandingText: djName, djWbLogoImage: djWbLogoImage, pdfText: pdfText, dateText: startTimeFormatted ?? dateText, startTimeLabel: startTimeLabel, footerText: footerText, introBefore: introBefore, djName: djName, introAfter: introAfter, venueLine: venueLine, venueLabel: venueLabel, venueLocation: venueLocation, venueLocationName: venueLocationName, venueLocationAddress: venueLocationAddress, isArabicLocale: isAr, scanLine1: scanLine1, scanLine2: scanLine2, localeLanguageCode: localeLanguageCode),
                     foldLine(),
-                    _buildPartyColumn(partyName: partyName, startDate: startDate, pwaUrl: pwaUrl, partyCode: partyCode, partyCodeDisplay: partyCodeDisplay, contactBlockUnderQr: contactBlockUnderQr, brandingLogo: brandingLogo, brandingText: djName, djWbLogoImage: djWbLogoImage, pdfText: pdfText, dateText: startTimeFormatted ?? dateText, startTimeLabel: startTimeLabel, footerText: footerText, introBefore: introBefore, djName: djName, introAfter: introAfter, venueLine: venueLine, venueLabel: venueLabel, venueLocation: venueLocation, isArabicLocale: isAr, scanLine1: scanLine1, scanLine2: scanLine2, localeLanguageCode: localeLanguageCode),
+                    _buildPartyColumn(partyName: partyName, startDate: startDate, pwaUrl: pwaUrl, partyCode: partyCode, partyCodeDisplay: partyCodeDisplay, contactBlockUnderQr: contactBlockUnderQr, brandingLogo: brandingLogo, brandingText: djName, djWbLogoImage: djWbLogoImage, pdfText: pdfText, dateText: startTimeFormatted ?? dateText, startTimeLabel: startTimeLabel, footerText: footerText, introBefore: introBefore, djName: djName, introAfter: introAfter, venueLine: venueLine, venueLabel: venueLabel, venueLocation: venueLocation, venueLocationName: venueLocationName, venueLocationAddress: venueLocationAddress, isArabicLocale: isAr, scanLine1: scanLine1, scanLine2: scanLine2, localeLanguageCode: localeLanguageCode),
                   ],
                 ),
               ),
@@ -795,6 +801,8 @@ class PartyPdfService {
     String? venueLine,
     String? venueLabel,
     String? venueLocation,
+    String? venueLocationName,
+    String? venueLocationAddress,
     String? partyCodeDisplay,
     List<String>? contactBlockUnderQr,
     String? scanLine1,
@@ -847,7 +855,14 @@ class PartyPdfService {
       venueLine: venueLine,
       venueLabel: venueLabel,
       venueLocation: venueLocation,
-      showVenue: (venueLocation != null && venueLocation.isNotEmpty) || (venueLine != null && venueLine.isNotEmpty),
+      venueLocationName: venueLocationName,
+      venueLocationAddress: venueLocationAddress,
+      showVenue: _hasVenueExport(
+        venueLocationName: venueLocationName,
+        venueLocationAddress: venueLocationAddress,
+        venueLocation: venueLocation,
+        venueLine: venueLine,
+      ),
       useFullIntro: true,
       brandingLogo: brandingLogo,
       brandingText: djName,
@@ -910,6 +925,8 @@ class PartyPdfService {
     String? venueLine,
     String? venueLabel,
     String? venueLocation,
+    String? venueLocationName,
+    String? venueLocationAddress,
     String? partyCodeDisplay,
     List<String>? contactBlockUnderQr,
     String? startTimeFormatted,
@@ -962,7 +979,14 @@ class PartyPdfService {
       venueLine: venueLine,
       venueLabel: venueLabel,
       venueLocation: venueLocation,
-      showVenue: (venueLocation != null && venueLocation.isNotEmpty) || (venueLine != null && venueLine.isNotEmpty),
+      venueLocationName: venueLocationName,
+      venueLocationAddress: venueLocationAddress,
+      showVenue: _hasVenueExport(
+        venueLocationName: venueLocationName,
+        venueLocationAddress: venueLocationAddress,
+        venueLocation: venueLocation,
+        venueLine: venueLine,
+      ),
       useFullIntro: true,
       brandingLogo: brandingLogo,
       brandingText: djName,
@@ -1027,6 +1051,8 @@ class PartyPdfService {
     String? venueLine,
     String? venueLabel,
     String? venueLocation,
+    String? venueLocationName,
+    String? venueLocationAddress,
     String? partyCodeDisplay,
     List<String>? contactBlockUnderQr,
     String? startTimeFormatted,
@@ -1087,7 +1113,14 @@ class PartyPdfService {
             venueLine: venueLine,
             venueLabel: venueLabel,
             venueLocation: venueLocation,
-            showVenue: (venueLocation != null && venueLocation.isNotEmpty) || (venueLine != null && venueLine.isNotEmpty),
+            venueLocationName: venueLocationName,
+            venueLocationAddress: venueLocationAddress,
+            showVenue: _hasVenueExport(
+              venueLocationName: venueLocationName,
+              venueLocationAddress: venueLocationAddress,
+              venueLocation: venueLocation,
+              venueLine: venueLine,
+            ),
             useFullIntro: true,
             brandingLogo: brandingLogo,
             brandingText: djName,

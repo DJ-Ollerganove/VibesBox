@@ -12,6 +12,7 @@ import '../utils/party_code_utils.dart';
 import '../utils/ui_constants.dart';
 import '../utils/party_export_filename_helper.dart';
 import '../config/app_config.dart';
+import '../app_scaffold_messenger.dart';
 
 /// Daten für die Anzeige des QR-Code-Dialogs (Party-Infos für show()).
 class Party {
@@ -20,7 +21,8 @@ class Party {
   final DateTime endDate;
   final String? partyCode;
   final String? partyId;
-  final String? partyLocation;
+  final String? locationName;
+  final String? locationAddress;
   final String? locationUrl;
 
   const Party({
@@ -29,7 +31,8 @@ class Party {
     required this.endDate,
     this.partyCode,
     this.partyId,
-    this.partyLocation,
+    this.locationName,
+    this.locationAddress,
     this.locationUrl,
   });
 }
@@ -77,7 +80,7 @@ class PartyQrCodeDialog extends StatefulWidget {
     final partyCode = party.partyCode;
     if (partyCode == null || partyCode.isEmpty) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(AppLocalizations.of(context)!.no_party_code_available),
             backgroundColor: Colors.orange,
@@ -102,11 +105,13 @@ class PartyQrCodeDialog extends StatefulWidget {
 }
 
 class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
-  /// Schalter: welche Felder im PDF/Bild angezeigt werden (werden aus SharedPreferences geladen)
-  bool _showLocation = true;
+  bool _showLocationName = true;
+  bool _showLocationAddress = true;
   bool _showPhone = true;
   bool _showEmail = true;
   bool _showAlternativeEmail = true;
+  bool _showStartDate = true;
+  bool _showStartTime = true;
   /// Gewählte Sprache für den Bild-Export (Standard: aktuelle App-Sprache)
   late Locale _exportLocale;
   /// Lade-Status während PDF-Schriftarten-Download
@@ -116,12 +121,22 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
 
   String get _pwaUrl => AppConfig.buildPwaUrlWithCode(widget.party.partyCode!);
 
-  /// true, wenn Party einen echten Ort hat (partyLocation oder locationUrl nicht null/leer)
-  bool get _hasLocation {
-    final loc = widget.party.partyLocation?.trim();
-    final hasMaps = widget.party.locationUrl != null && widget.party.locationUrl!.trim().isNotEmpty;
-    return (loc != null && loc.isNotEmpty) || hasMaps;
+  bool get _hasLocationName {
+    final n = widget.party.locationName?.trim();
+    return n != null && n.isNotEmpty;
   }
+
+  bool get _hasLocationAddress {
+    final a = widget.party.locationAddress?.trim();
+    return a != null && a.isNotEmpty;
+  }
+
+  String? get _exportLocationName =>
+      _showLocationName && _hasLocationName ? widget.party.locationName!.trim() : null;
+
+  String? get _exportLocationAddress => _showLocationAddress && _hasLocationAddress
+      ? widget.party.locationAddress!.trim()
+      : null;
 
   bool get _hasPhone => (widget.djPhone?.trim().isEmpty ?? true) == false;
   bool get _hasEmail => (widget.djEmail?.trim().isNotEmpty ?? false);
@@ -142,20 +157,35 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
     final opts = await QrDialogOptionsService().load();
     if (!mounted) return;
     setState(() {
-      _showLocation = opts.showLocation && _hasLocation;
+      _showLocationName = opts.showLocationName && _hasLocationName;
+      _showLocationAddress = opts.showLocationAddress && _hasLocationAddress;
       _showPhone = opts.showPhone && _hasPhone;
       _showEmail = opts.showEmail && _hasEmail;
       _showAlternativeEmail = opts.showAlternativeEmail && _hasAlternativeEmail;
+      _showStartDate = opts.showStartDate;
+      _showStartTime = opts.showStartTime;
     });
   }
 
   /// Speichert die aktuellen Optionen sofort in SharedPreferences.
   void _persistQrDialogOptions() {
     QrDialogOptionsService().save(
-      showLocation: _showLocation,
+      showLocationName: _showLocationName,
+      showLocationAddress: _showLocationAddress,
       showPhone: _showPhone,
       showEmail: _showEmail,
       showAlternativeEmail: _showAlternativeEmail,
+      showStartDate: _showStartDate,
+      showStartTime: _showStartTime,
+    );
+  }
+
+  String _formatStartForExport(Locale locale) {
+    return FormattingUtils.formatStartTimeForExport(
+      widget.party.startDate,
+      locale,
+      includeDate: _showStartDate,
+      includeTime: _showStartTime,
     );
   }
 
@@ -190,32 +220,21 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
           LocaleHelper.tr(exportTranslations, 'party_pdf_single_intro_before');
       final introAfter =
           LocaleHelper.tr(exportTranslations, 'party_pdf_single_intro_after');
-      final venueLabel = LocaleHelper.tr(exportTranslations, 'party_pdf_venue');
-      final startTimeFormatted = FormattingUtils.formatStartTimeForExport(widget.party.startDate, _exportLocale);
+      final startTimeFormatted = _formatStartForExport(_exportLocale);
       final pdfText = localizations.party_pdf_text;
       final djExportName = (widget.djName != null && widget.djName!.trim().isNotEmpty)
           ? widget.djName!
           : LocaleHelper.tr(exportTranslations, 'party_export_dj_placeholder');
 
-      String? venueLine;
-      String? venueLocation;
-      if (_showLocation && _hasLocation) {
-        final locTrim = widget.party.partyLocation?.trim();
-        final hasMapsUrl = widget.party.locationUrl != null && widget.party.locationUrl!.trim().isNotEmpty;
-        final locationDisplay = (locTrim != null && locTrim.isNotEmpty)
-            ? locTrim
-            : (hasMapsUrl ? LocaleHelper.tr(exportTranslations, 'location_on_map') : null);
-        if (locationDisplay != null && locationDisplay.isNotEmpty) {
-          // PDF: nur Ortsname (ohne statisches Label wie „Veranstaltungsort“)
-          venueLine = locationDisplay;
-          venueLocation = locationDisplay;
-        }
-      }
+      final venueLocationName = _exportLocationName;
+      final venueLocationAddress = _exportLocationAddress;
 
       // Party Code Display, Kontakt, Startzeit-Label (l10n)
       final partyCodeLabel = LocaleHelper.tr(exportTranslations, 'party_code_label');
       final contactLabel = LocaleHelper.tr(exportTranslations, 'contact_label');
-      final startTimeLabel = LocaleHelper.tr(exportTranslations, 'party_start_label');
+      final startTimeLabel = startTimeFormatted.isEmpty
+          ? ''
+          : LocaleHelper.tr(exportTranslations, 'party_start_label');
       final scanLine1 = LocaleHelper.tr(exportTranslations, 'scan_qr_code_line1');
       final scanLine2 = LocaleHelper.tr(exportTranslations, 'scan_qr_code_line2');
       final code = widget.party.partyCode ?? '';
@@ -254,9 +273,8 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
             introBefore: introBefore,
             djName: djExportName,
             introAfter: introAfter,
-            venueLine: venueLine,
-            venueLabel: venueLabel,
-            venueLocation: venueLocation,
+            venueLocationName: venueLocationName,
+            venueLocationAddress: venueLocationAddress,
             partyCodeDisplay: partyCodeDisplay,
             contactBlockUnderQr: contactBlockUnderQr,
             startTimeFormatted: startTimeFormatted,
@@ -282,9 +300,8 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
             introBefore: introBefore,
             djName: djExportName,
             introAfter: introAfter,
-            venueLine: venueLine,
-            venueLabel: venueLabel,
-            venueLocation: venueLocation,
+            venueLocationName: venueLocationName,
+            venueLocationAddress: venueLocationAddress,
             partyCodeDisplay: partyCodeDisplay,
             contactBlockUnderQr: contactBlockUnderQr,
             scanLine1: scanLine1,
@@ -305,9 +322,8 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
             introBefore: introBefore,
             djName: djExportName,
             introAfter: introAfter,
-            venueLine: venueLine,
-            venueLabel: venueLabel,
-            venueLocation: venueLocation,
+            venueLocationName: venueLocationName,
+            venueLocationAddress: venueLocationAddress,
             partyCodeDisplay: partyCodeDisplay,
             contactBlockUnderQr: contactBlockUnderQr,
             startTimeFormatted: startTimeFormatted,
@@ -330,9 +346,8 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
             introBefore: introBefore,
             djName: djExportName,
             introAfter: introAfter,
-            venueLine: venueLine,
-            venueLabel: venueLabel,
-            venueLocation: venueLocation,
+            venueLocationName: venueLocationName,
+            venueLocationAddress: venueLocationAddress,
             partyCodeDisplay: partyCodeDisplay,
             contactBlockUnderQr: contactBlockUnderQr,
             startTimeFormatted: startTimeFormatted,
@@ -349,7 +364,7 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
       }
     } catch (e) {
       if (mounted && context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(
               '${AppLocalizations.of(context)!.pdf_generation_error} $e',
@@ -436,14 +451,11 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
                 child: Builder(
               builder: (context) {
                 final l10n = AppLocalizations.of(context)!;
-                final locTrim = widget.party.partyLocation?.trim();
-                final hasMapsUrl = widget.party.locationUrl != null && widget.party.locationUrl!.trim().isNotEmpty;
-                final locationDisplay = (locTrim != null && locTrim.isNotEmpty)
-                    ? locTrim
-                    : (hasMapsUrl ? l10n.location_on_map : null);
+                final previewName = _exportLocationName;
+                final previewAddress = _exportLocationAddress;
 
-                final exportTranslations = LocaleHelper.getTranslations(_exportLocale);
-                final startTimeFormatted = FormattingUtils.formatStartTimeForExport(widget.party.startDate, _exportLocale);
+                final previewLocale = Localizations.localeOf(context);
+                final startTimeFormatted = _formatStartForExport(previewLocale);
 
                 return Column(
                   mainAxisSize: MainAxisSize.min,
@@ -465,10 +477,23 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
-                          if (_showLocation && locationDisplay != null && locationDisplay.isNotEmpty) ...[
+                          if (previewName != null) ...[
                             const SizedBox(height: 4),
                             Text(
-                              locationDisplay,
+                              previewName,
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: UIConstants.colorWhite.withValues(alpha: 0.85),
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                          if (previewAddress != null) ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              previewAddress,
                               style: TextStyle(
                                 fontSize: 12,
                                 color: UIConstants.colorWhite.withValues(alpha: 0.7),
@@ -478,13 +503,14 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
                             ),
                           ],
                           const SizedBox(height: 4),
-                          Text(
-                            startTimeFormatted,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: UIConstants.colorWhite.withValues(alpha: 0.7),
+                          if (startTimeFormatted.isNotEmpty)
+                            Text(
+                              startTimeFormatted,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: UIConstants.colorWhite.withValues(alpha: 0.7),
+                              ),
                             ),
-                          ),
                         ],
                       ),
                     ),
@@ -509,7 +535,7 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
                           Icon(Icons.language, size: 22, color: UIConstants.colorWhite.withValues(alpha: 0.9)),
                           const SizedBox(width: 8),
                           Text(
-                            l10n.language,
+                            l10n.qr_export_language_label,
                             style: TextStyle(fontSize: 12, color: UIConstants.colorWhite.withValues(alpha: 0.9)),
                           ),
                         ],
@@ -526,37 +552,101 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              _buildPdfCheckbox(
-                                value: _showLocation,
-                                onChanged: _hasLocation ? (v) { setState(() => _showLocation = v ?? false); _persistQrDialogOptions(); } : null,
-                                label: l10n.pdf_checkbox_location,
-                              ),
-                              _buildPdfCheckbox(
-                                value: _showPhone,
-                                onChanged: _hasPhone ? (v) { setState(() => _showPhone = v ?? false); _persistQrDialogOptions(); } : null,
-                                label: l10n.pdf_checkbox_phone,
-                              ),
-                            ],
+                          child: _buildPdfCheckbox(
+                            value: _showLocationName,
+                            onChanged: _hasLocationName
+                                ? (v) {
+                                    setState(() => _showLocationName = v ?? false);
+                                    _persistQrDialogOptions();
+                                  }
+                                : null,
+                            label: l10n.pdf_checkbox_location_name,
                           ),
                         ),
+                        const SizedBox(width: 8),
                         Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              _buildPdfCheckbox(
-                                value: _showEmail,
-                                onChanged: _hasEmail ? (v) { setState(() => _showEmail = v ?? false); _persistQrDialogOptions(); } : null,
-                                label: l10n.pdf_checkbox_email,
-                              ),
-                              _buildPdfCheckbox(
-                                value: _showAlternativeEmail,
-                                onChanged: _hasAlternativeEmail ? (v) { setState(() => _showAlternativeEmail = v ?? false); _persistQrDialogOptions(); } : null,
-                                label: l10n.pdf_checkbox_alternative_email,
-                              ),
-                            ],
+                          child: _buildPdfCheckbox(
+                            value: _showLocationAddress,
+                            onChanged: _hasLocationAddress
+                                ? (v) {
+                                    setState(() => _showLocationAddress = v ?? false);
+                                    _persistQrDialogOptions();
+                                  }
+                                : null,
+                            label: l10n.pdf_checkbox_location_address,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: _buildPdfCheckbox(
+                            value: _showPhone,
+                            onChanged: _hasPhone
+                                ? (v) {
+                                    setState(() => _showPhone = v ?? false);
+                                    _persistQrDialogOptions();
+                                  }
+                                : null,
+                            label: l10n.pdf_checkbox_phone,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _buildPdfCheckbox(
+                            value: _showEmail,
+                            onChanged: _hasEmail
+                                ? (v) {
+                                    setState(() => _showEmail = v ?? false);
+                                    _persistQrDialogOptions();
+                                  }
+                                : null,
+                            label: l10n.pdf_checkbox_email,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _buildPdfCheckbox(
+                            value: _showAlternativeEmail,
+                            onChanged: _hasAlternativeEmail
+                                ? (v) {
+                                    setState(
+                                      () => _showAlternativeEmail = v ?? false,
+                                    );
+                                    _persistQrDialogOptions();
+                                  }
+                                : null,
+                            label: l10n.pdf_checkbox_alternative_email,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: _buildPdfCheckbox(
+                            value: _showStartDate,
+                            onChanged: (v) {
+                              setState(() => _showStartDate = v ?? false);
+                              _persistQrDialogOptions();
+                            },
+                            label: l10n.pdf_checkbox_start_date,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _buildPdfCheckbox(
+                            value: _showStartTime,
+                            onChanged: (v) {
+                              setState(() => _showStartTime = v ?? false);
+                              _persistQrDialogOptions();
+                            },
+                            label: l10n.pdf_checkbox_start_time,
                           ),
                         ),
                       ],
@@ -619,11 +709,11 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
                 Builder(
                   builder: (innerContext) {
                     final dialogL10n = AppLocalizations.of(innerContext)!;
-                    final partyCodeLabel = LocaleHelper.tr(exportTranslations, 'party_code_label');
-                    final contactLabel = LocaleHelper.tr(exportTranslations, 'contact_label');
+                    final partyCodeLabel = dialogL10n.party_code_label;
+                    final contactLabel = dialogL10n.contact_label;
                     final djDisplayQr = (widget.djName != null && widget.djName!.trim().isNotEmpty)
                         ? widget.djName!
-                        : LocaleHelper.tr(exportTranslations, 'party_export_dj_placeholder');
+                        : dialogL10n.translate('party_export_dj_placeholder');
                     final code = widget.party.partyCode ?? '';
                     final formattedCode = PartyCodeUtils.formatForDisplay(code);
                     // Nur Felder anzeigen, die ausgefüllt UND per Checkbox aktiviert sind (mit Icons)
@@ -642,7 +732,7 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
                           onTap: () async {
                             await Clipboard.setData(ClipboardData(text: _pwaUrl));
                             if (innerContext.mounted) {
-                              ScaffoldMessenger.of(innerContext).showSnackBar(
+                              showVibesSnackBar(innerContext, 
                                 SnackBar(
                                   content: Text(dialogL10n.pwa_link_copied),
                                   backgroundColor: Colors.green,
@@ -713,7 +803,7 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
                             onTap: () async {
                               await Clipboard.setData(ClipboardData(text: _pwaUrl));
                               if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
+                                showVibesSnackBar(context, 
                                   SnackBar(
                                     content: Text(l10n.pwa_link_copied),
                                     backgroundColor: Colors.green,
@@ -836,18 +926,22 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
                             locale: _exportLocale,
                             fromLabel: fromLabelExport,
                             djName: widget.djName,
-                            partyLocation: widget.party.partyLocation,
-                            showLocationInExport: _showLocation,
+                            partyLocationName: widget.party.locationName,
+                            partyLocationAddress: widget.party.locationAddress,
+                            showLocationNameInExport: _showLocationName,
+                            showLocationAddressInExport: _showLocationAddress,
                             djEmail: widget.djEmail,
                             djPhone: widget.djPhone,
                             djAlternativeEmail: widget.djAlternativeEmail,
                             showEmailInExport: _showEmail,
                             showPhoneInExport: _showPhone,
                             showAlternativeEmailInExport: _showAlternativeEmail,
+                            showStartDateInExport: _showStartDate,
+                            showStartTimeInExport: _showStartTime,
                             exportFileName: imageFileName,
                           );
                           if (success && context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
+                            showVibesSnackBar(context, 
                               SnackBar(
                                 content: Text(AppLocalizations.of(context)!.party_qr_saved),
                                 backgroundColor: Colors.green,
@@ -857,7 +951,7 @@ class _PartyQrCodeDialogState extends State<PartyQrCodeDialog> {
                           }
                         } catch (e) {
                           if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
+                            showVibesSnackBar(context, 
                               SnackBar(
                                 content: Text(
                                   '${AppLocalizations.of(context)!.party_error_saving_qr} $e',

@@ -1,8 +1,6 @@
 {
   "sourceLanguage": "de",
-  "excludeFromMenu": [
-    "ar"
-  ],
+  "excludeFromMenu": [],
   "languages": [
     {
       "code": "de",
@@ -13,7 +11,8 @@
       "langKey": "lang_german",
       "arbKey": "german",
       "time_suffix": " Uhr",
-      "time_style": "colon_suffix"
+      "time_style": "colon_suffix",
+      "text_direction": "ltr"
     },
     {
       "code": "en",
@@ -25,7 +24,8 @@
       "langKey": "lang_english",
       "arbKey": "english",
       "time_suffix": "",
-      "time_style": "intl_12"
+      "time_style": "intl_12",
+      "text_direction": "ltr"
     },
     {
       "code": "fr",
@@ -36,7 +36,8 @@
       "langKey": "lang_french",
       "arbKey": "french",
       "time_suffix": "",
-      "time_style": "fr_h"
+      "time_style": "fr_h",
+      "text_direction": "ltr"
     },
     {
       "code": "ru",
@@ -47,7 +48,8 @@
       "langKey": "lang_russian",
       "arbKey": "russian",
       "time_suffix": "",
-      "time_style": "colon_suffix"
+      "time_style": "colon_suffix",
+      "text_direction": "ltr"
     },
     {
       "code": "zh",
@@ -58,7 +60,8 @@
       "langKey": "lang_chinese",
       "arbKey": "chinese",
       "time_suffix": "",
-      "time_style": "colon_suffix"
+      "time_style": "colon_suffix",
+      "text_direction": "ltr"
     },
     {
       "code": "es",
@@ -69,7 +72,8 @@
       "langKey": "lang_spanish",
       "arbKey": "spanish",
       "time_suffix": " h",
-      "time_style": "colon_suffix"
+      "time_style": "colon_suffix",
+      "text_direction": "ltr"
     },
     {
       "code": "tr",
@@ -80,7 +84,8 @@
       "langKey": "lang_turkish",
       "arbKey": "turkish",
       "time_suffix": "",
-      "time_style": "colon_suffix"
+      "time_style": "colon_suffix",
+      "text_direction": "ltr"
     },
     {
       "code": "pt",
@@ -91,7 +96,8 @@
       "langKey": "lang_portuguese",
       "arbKey": "portuguese",
       "time_suffix": "",
-      "time_style": "h_compact"
+      "time_style": "h_compact",
+      "text_direction": "ltr"
     },
     {
       "code": "it",
@@ -102,7 +108,8 @@
       "langKey": "lang_italian",
       "arbKey": "italian",
       "time_suffix": "",
-      "time_style": "h_compact"
+      "time_style": "h_compact",
+      "text_direction": "ltr"
     },
     {
       "code": "uk",
@@ -113,7 +120,8 @@
       "langKey": "lang_ukrainian",
       "arbKey": "ukrainian",
       "time_suffix": "",
-      "time_style": "colon_suffix"
+      "time_style": "colon_suffix",
+      "text_direction": "ltr"
     },
     {
       "code": "hi",
@@ -125,7 +133,8 @@
       "arbKey": "hindi",
       "time_suffix": "",
       "time_style": "intl_12",
-      "hour12": true
+      "hour12": true,
+      "text_direction": "ltr"
     },
     {
       "code": "sq",
@@ -136,7 +145,8 @@
       "langKey": "lang_albanian",
       "arbKey": "albanian",
       "time_suffix": "",
-      "time_style": "colon_suffix"
+      "time_style": "colon_suffix",
+      "text_direction": "ltr"
     },
     {
       "code": "vi",
@@ -147,7 +157,8 @@
       "langKey": "lang_vietnamese",
       "arbKey": "vietnamese",
       "time_suffix": "",
-      "time_style": "colon_suffix"
+      "time_style": "colon_suffix",
+      "text_direction": "ltr"
     },
     {
       "code": "ja",
@@ -158,7 +169,8 @@
       "langKey": "lang_japanese",
       "arbKey": "japanese",
       "time_suffix": "",
-      "time_style": "ja_kanji"
+      "time_style": "ja_kanji",
+      "text_direction": "ltr"
     },
     {
       "code": "el",
@@ -169,7 +181,8 @@
       "langKey": "lang_greek",
       "arbKey": "greek",
       "time_suffix": "",
-      "time_style": "colon_suffix"
+      "time_style": "colon_suffix",
+      "text_direction": "ltr"
     },
     {
       "code": "nl",
@@ -180,7 +193,8 @@
       "langKey": "lang_dutch",
       "arbKey": "dutch",
       "time_suffix": " uur",
-      "time_style": "colon_suffix"
+      "time_style": "colon_suffix",
+      "text_direction": "ltr"
     },
     {
       "code": "pl",
@@ -191,7 +205,8 @@
       "langKey": "lang_polish",
       "arbKey": "polish",
       "time_suffix": "",
-      "time_style": "colon_suffix"
+      "time_style": "colon_suffix",
+      "text_direction": "ltr"
     },
     {
       "code": "cs",
@@ -202,7 +217,20 @@
       "langKey": "lang_czech",
       "arbKey": "czech",
       "time_suffix": "",
-      "time_style": "colon_suffix"
+      "time_style": "colon_suffix",
+      "text_direction": "ltr"
+    },
+    {
+      "code": "th",
+      "intl_locale": "th-TH",
+      "name": "Thai",
+      "flag": "🇹🇭",
+      "icon": "th",
+      "langKey": "lang_thai",
+      "arbKey": "thai",
+      "time_suffix": "",
+      "time_style": "colon_suffix",
+      "text_direction": "ltr"
     },
     {
       "code": "ar",
@@ -212,7 +240,7 @@
       "icon": "ar",
       "langKey": "lang_arabic",
       "arbKey": "arabic",
-      "appMenu": false,
+      "text_direction": "rtl",
       "time_suffix": "",
       "time_style": "intl_12",
       "hour12": true

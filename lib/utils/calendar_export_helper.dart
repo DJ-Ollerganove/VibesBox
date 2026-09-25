@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../l10n/app_localizations.dart';
 import 'formatting_utils.dart';
 import '../utils/debug_log.dart';
+import '../app_scaffold_messenger.dart';
 
 /// Helper für den Kalender-Export von Partys
 class CalendarExportHelper {
@@ -61,7 +62,7 @@ class CalendarExportHelper {
       // Validierung: Start- und Endzeit müssen vorhanden sein
       if (startTimePosix == null || startTimePosix <= 0) {
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(l.calendar_error_start_time_unknown),
               backgroundColor: Colors.red,
@@ -74,7 +75,7 @@ class CalendarExportHelper {
 
       if (endTimePosix == null || endTimePosix <= 0) {
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(l.calendar_error_end_time_unknown),
               backgroundColor: Colors.red,
@@ -252,7 +253,7 @@ class CalendarExportHelper {
       debugLog('❌ Fehler beim Kalender-Export: $e');
       if (context.mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${l.calendar_export_error} $e'),
             backgroundColor: Colors.red,

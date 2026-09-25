@@ -267,7 +267,21 @@ class ProComparisonTable extends StatelessWidget {
         termFontSize: _termFontSize,
       ),
       _TableRowData.icon(
-        term: l.pro_comparison_favorites,
+        term: l.pro_comparison_saved_tracks,
+        freeHasCheck: false,
+        cellPaddingV: _cellPaddingVertical,
+        cellPaddingH: _cellPaddingHorizontal,
+        termFontSize: _termFontSize,
+      ),
+      _TableRowData.icon(
+        term: l.pro_comparison_song_rec,
+        freeHasCheck: false,
+        cellPaddingV: _cellPaddingVertical,
+        cellPaddingH: _cellPaddingHorizontal,
+        termFontSize: _termFontSize,
+      ),
+      _TableRowData.icon(
+        term: l.pro_comparison_dj_setlist,
         freeHasCheck: false,
         cellPaddingV: _cellPaddingVertical,
         cellPaddingH: _cellPaddingHorizontal,

@@ -52,6 +52,7 @@ class LocationPicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final loc = AppLocalizations.of(context)!;
     return PwaWidgetCell(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -61,10 +62,10 @@ class LocationPicker extends StatelessWidget {
             children: [
               const Icon(Icons.location_on, color: UIConstants.appOrange, size: 24),
               const SizedBox(width: 12),
-              const Expanded(
+              Expanded(
                 child: Text(
-                  'Gespeicherte Locations',
-                  style: TextStyle(
+                  loc.location_picker_title,
+                  style: const TextStyle(
                     color: Colors.white,
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
@@ -84,7 +85,7 @@ class LocationPicker extends StatelessWidget {
                 ? Padding(
                     padding: const EdgeInsets.all(32.0),
                     child: Text(
-                      'Keine gespeicherten Locations vorhanden',
+                      loc.location_picker_empty,
                       style: TextStyle(color: Colors.grey.shade400),
                       textAlign: TextAlign.center,
                     ),

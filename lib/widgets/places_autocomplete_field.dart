@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../l10n/app_localizations.dart';
 import '../models/location_result.dart';
 import '../services/google_places_service.dart';
 import '../utils/ui_constants.dart';
@@ -210,6 +211,7 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     return CompositedTransformTarget(
       link: _layerLink,
       child: TextFormField(
@@ -218,8 +220,8 @@ class _PlacesAutocompleteFieldState extends State<PlacesAutocompleteField> {
         enabled: widget.enabled,
         style: const TextStyle(color: Colors.white),
         decoration: InputDecoration(
-          labelText: 'Location suchen',
-          hintText: 'z.B. Marsa Alam, Club XYZ, Wüste, Strand',
+          labelText: l.location_search_label,
+          hintText: l.location_search_hint,
           hintStyle: TextStyle(color: Colors.grey.shade600),
           labelStyle: const TextStyle(color: Colors.white70),
           prefixIcon: _isLoading

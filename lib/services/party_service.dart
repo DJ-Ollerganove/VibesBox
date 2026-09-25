@@ -2,8 +2,10 @@ import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/user_model.dart';
 import '../utils/party_code_utils.dart';
+import 'party_code_index_service.dart';
 import 'limit_service.dart';
 import '../utils/debug_log.dart';
+import 'public_location_service.dart';
 
 /// Service für Party-Code-Generierung und Location-Verwaltung
 class PartyService {
@@ -16,6 +18,10 @@ class PartyService {
 
   /// [parties]: [party_code] (String oder Zahl) oder optionale Felder [short_code]/[partyCode]/[shortCode].
   static Future<bool> isPartyCodeTakenInParties(String code) async {
+    if (await PartyCodeIndexService.instance.isCodeReserved(code)) {
+      return true;
+    }
+
     final col = FirebaseFirestore.instance.collection('parties');
     final asStr = await col.where('party_code', isEqualTo: code).limit(1).get();
     if (asStr.docs.isNotEmpty) return true;
@@ -24,6 +30,16 @@ class PartyService {
       final asNum = await col.where('party_code', isEqualTo: n).limit(1).get();
       if (asNum.docs.isNotEmpty) return true;
     }
+
+    final fixedStr =
+        await col.where('fixed_party_code', isEqualTo: code).limit(1).get();
+    if (fixedStr.docs.isNotEmpty) return true;
+    if (n != null) {
+      final fixedNum =
+          await col.where('fixed_party_code', isEqualTo: n).limit(1).get();
+      if (fixedNum.docs.isNotEmpty) return true;
+    }
+
     for (final field in ['short_code', 'partyCode', 'shortCode']) {
       try {
         final q = await col.where(field, isEqualTo: code).limit(1).get();
@@ -133,55 +149,70 @@ class PartyService {
     required String createdBy,
     String? fixedPartyCode,
     bool updateExisting = true,
+    bool isPublic = false,
   }) async {
     // Validierung: timezoneId ist Pflichtfeld
     if (timezoneId.isEmpty) {
       throw Exception('timezone_id ist ein Pflichtfeld und darf nicht leer sein');
     }
 
-    // Prüfe ob Location bereits existiert (case-insensitive)
+    // Öffentlicher Ort: bestehende globale Location wiederverwenden (kein Duplikat)
+    if (isPublic && latitude != null && longitude != null) {
+      final existingPublic = await PublicLocationService()
+          .findMatchingPublicLocation(latitude: latitude, longitude: longitude);
+      if (existingPublic != null) {
+        debugLog(
+          '✅ Bestehende öffentliche Location übernommen: ${existingPublic.id}',
+        );
+        return existingPublic.id;
+      }
+    }
+
+    // Prüfe ob der DJ bereits eine Location mit diesem Namen hat
     final normalizedName = locationName.trim().toLowerCase();
     final existingLocations = await FirebaseFirestore.instance
         .collection('locations')
+        .where('created_by', isEqualTo: createdBy)
+        .limit(100)
         .get();
 
     String? existingLocationId;
     for (var doc in existingLocations.docs) {
       final data = doc.data();
-      final existingName = (data['location_name'] ?? '').toString().trim().toLowerCase();
+      final existingName =
+          (data['location_name'] ?? '').toString().trim().toLowerCase();
       if (existingName == normalizedName) {
         existingLocationId = doc.id;
         break;
       }
     }
 
-    final locationData = {
+    final locationData = <String, dynamic>{
       'location_name': locationName.trim(),
       if (address != null && address.isNotEmpty) 'address': address,
       if (latitude != null) 'latitude': latitude,
       if (longitude != null) 'longitude': longitude,
-      'timezone_id': timezoneId, // Pflichtfeld
-      if (fixedPartyCode != null && fixedPartyCode.isNotEmpty) 'fixed_party_code': fixedPartyCode,
+      'timezone_id': timezoneId,
       'created_by': createdBy,
       'created_at': Timestamp.now(),
+      if (isPublic) 'is_public': true,
     };
+    if (fixedPartyCode != null && fixedPartyCode.isNotEmpty) {
+      locationData['fixed_party_code'] = fixedPartyCode;
+    }
 
     if (existingLocationId != null && updateExisting) {
-      // Aktualisiere bestehende Location
       await FirebaseFirestore.instance
           .collection('locations')
           .doc(existingLocationId)
           .update(locationData);
-      
+
       debugLog('✅ Location aktualisiert: $existingLocationId');
       return existingLocationId;
     } else if (existingLocationId != null && !updateExisting) {
-      // Location existiert bereits, aber updateExisting ist false -> gib ID zurück
       debugLog('✅ Location existiert bereits: $existingLocationId');
       return existingLocationId;
     } else {
-      // Erstelle neue Location
-      // Wenn kein fixedPartyCode übergeben wurde, generiere einen
       if (fixedPartyCode == null || fixedPartyCode.isEmpty) {
         fixedPartyCode = await generatePartyCode(
           isFixedCode: true,
@@ -193,8 +224,11 @@ class PartyService {
       final locationRef = await FirebaseFirestore.instance
           .collection('locations')
           .add(locationData);
-      
-      debugLog('✅ Neue Location erstellt: ${locationRef.id} mit fixed_party_code: $fixedPartyCode');
+
+      debugLog(
+        '✅ Neue Location erstellt: ${locationRef.id} '
+        '(öffentlich: $isPublic, Code: $fixedPartyCode)',
+      );
       return locationRef.id;
     }
   }

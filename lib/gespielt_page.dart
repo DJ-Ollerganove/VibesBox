@@ -14,8 +14,9 @@ import '../services/duplicate_check_service.dart';
 import '../services/results_per_page_service.dart';
 import '../services/history_pagination_service.dart';
 import '../utils/wish_grouping_helper.dart';
-import '../services/wish_management_service.dart';
+import '../utils/wish_paths.dart';
 import '../utils/wish_party_filter.dart';
+import '../utils/free_list_pro_promo.dart';
 import 'utils/debug_log.dart';
 
 class GespieltPage extends StatefulWidget {
@@ -27,10 +28,13 @@ class GespieltPage extends StatefulWidget {
   State<GespieltPage> createState() => _GespieltPageState();
 }
 
-class _GespieltPageState extends State<GespieltPage> {
+class _GespieltPageState extends State<GespieltPage>
+    with AutomaticKeepAliveClientMixin {
   int _currentPage = 1;
   int _resultsPerPage = ResultsPerPageService.defaultResultsPerPage;
-  String? _currentPartyId;
+
+  @override
+  bool get wantKeepAlive => true;
 
   String? _cachedPlayedStreamPartyId;
   Stream<QuerySnapshot>? _cachedPlayedWishesStream;
@@ -38,10 +42,16 @@ class _GespieltPageState extends State<GespieltPage> {
   Stream<QuerySnapshot> _playedWishesStreamForParty(String partyId) {
     if (_cachedPlayedStreamPartyId != partyId) {
       _cachedPlayedStreamPartyId = partyId;
-      _cachedPlayedWishesStream =
-          WishManagementService.getWishesStream(partyId, 'played');
+      _cachedPlayedWishesStream = _watchPlayedWishes(partyId);
     }
     return _cachedPlayedWishesStream!;
+  }
+
+  Stream<QuerySnapshot> _watchPlayedWishes(String partyId) async* {
+    final query =
+        WishPaths.partyWishes(partyId).where('status', isEqualTo: 'played');
+    yield await query.get();
+    yield* query.snapshots();
   }
 
 
@@ -56,20 +66,14 @@ class _GespieltPageState extends State<GespieltPage> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     return StickyPaginationLayout(
                 currentPage: _currentPage > 0 ? _currentPage : 1,
                 totalPages: 1,
                 onPrevious: null,
                 onNext: null,
                 child: DjWishPartyScope(
-                  builder: (context, activePartyId) {
-                    if (activePartyId != _currentPartyId) {
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (mounted) {
-                          setState(() => _currentPartyId = activePartyId);
-                        }
-                      });
-                    }
+                  builder: (context, activePartyId, visibility) {
                     return StreamBuilder<QuerySnapshot>(
                       stream: _playedWishesStreamForParty(activePartyId),
                       builder: (context, snapshot) =>
@@ -99,7 +103,11 @@ class _GespieltPageState extends State<GespieltPage> {
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 const SizedBox(height: 24),
-                                EmptyListMessage(),
+                                const Center(
+                                  child: CircularProgressIndicator(
+                                    color: UIConstants.appOrange,
+                                  ),
+                                ),
                                 const SizedBox(height: UIConstants.kFooterPadding * 2),
                               ],
                             ),
@@ -111,7 +119,7 @@ class _GespieltPageState extends State<GespieltPage> {
                           debugLog('❌❌❌ STREAM FEHLER in gespielt_page.dart ❌❌❌');
                           debugLog('   Error: ${snapshot.error}');
                           debugLog('   Error Type: ${snapshot.error.runtimeType}');
-                          debugLog('   Party ID: $_currentPartyId');
+                          debugLog('   Party ID: $partyId');
                           if (snapshot.error is Error) {
                             debugLog('   Stack Trace: ${(snapshot.error as Error).stackTrace}');
                           }
@@ -249,21 +257,26 @@ class _GespieltPageState extends State<GespieltPage> {
                                   itemCount: () {
                                     final len = paginatedGroupedList.length;
                                     final isFree = UserService().sessionProStatus.value?.isActive != true;
-                                    return isFree ? len + (len / 5).floor() : len;
+                                    return FreeListProPromo.itemCount(len, isFree: isFree);
                                   }(),
                                   separatorBuilder: (_, i) {
+                                    final len = paginatedGroupedList.length;
                                     final isFree = UserService().sessionProStatus.value?.isActive != true;
                                     if (!isFree) return const Divider(height: 1);
-                                    if (i % 6 != 5 && (i + 1) % 6 != 5) return const Divider(height: 1);
-                                    return const SizedBox.shrink();
+                                    if (FreeListProPromo.isPromoIndex(i, len, isFree: true) ||
+                                        FreeListProPromo.isPromoIndex(i + 1, len, isFree: true)) {
+                                      return const SizedBox.shrink();
+                                    }
+                                    return const Divider(height: 1);
                                   },
                                   itemBuilder: (context, index) {
+                                    final len = paginatedGroupedList.length;
                                     final isFree = UserService().sessionProStatus.value?.isActive != true;
-                                    if (isFree && index % 6 == 5) {
+                                    if (FreeListProPromo.isPromoIndex(index, len, isFree: isFree)) {
                                       return const ProPromotionBanner();
                                     }
                                     final dataIndex =
-                                        isFree ? index - (index ~/ 6) : index;
+                                        FreeListProPromo.dataIndex(index, len, isFree: isFree);
                                     final groupEntry = paginatedGroupedList[dataIndex];
                                     final groupKey = groupEntry['key'] as String;
                                     final data = groupEntry['data'] as Map<String, dynamic>;

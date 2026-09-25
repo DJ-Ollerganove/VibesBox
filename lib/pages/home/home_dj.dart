@@ -11,7 +11,7 @@ import '../../utils/admin_dj_bridge.dart';
 import '../../settings_party_card_widget.dart';
 import '../../settings_party_edit_dialog.dart';
 import '../../settings_party_delete_dialog.dart';
-import '../../widgets/party_qr_code_dialog.dart' show Party, PartyQrCodeDialog;
+import '../../utils/party_qr_launch_helper.dart';
 import '../../l10n/app_localizations.dart';
 import '../../utils/formatting_utils.dart';
 import '../../utils/ui_constants.dart';
@@ -21,10 +21,16 @@ import '../../services/limit_service.dart';
 import '../../services/party_autostart_service.dart';
 import '../../services/user_service.dart';
 import '../../utils/party_grace_period_helper.dart';
+import '../../services/app_update_service.dart';
 import '../../services/dj_home_layout_service.dart';
+import '../../services/dj_quickstart_onboarding_service.dart';
+import '../../services/user_self_settings_service.dart';
 import 'dj/dj_home_edit_sheet.dart';
 import 'dj/dj_home_party_resolver.dart';
 import 'dj/dj_home_widget_host.dart';
+import '../../utils/debug_log.dart';
+import '../../app_scaffold_messenger.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 class HomeDj extends StatefulWidget {
   final Widget Function(BuildContext context, Widget child) cardBuilder;
@@ -48,7 +54,10 @@ class _HomeDjState extends State<HomeDj> {
   Timer? _timeTimer;
   Timer? _secondTickTimer;
   StreamSubscription<QuerySnapshot>? _partySubscription;
-  List<QueryDocumentSnapshot>? _cachedParties;
+  final ValueNotifier<List<QueryDocumentSnapshot>> _partiesNotifier =
+      ValueNotifier<List<QueryDocumentSnapshot>>(const []);
+  List<QueryDocumentSnapshot>? get _cachedParties =>
+      _partiesNotifier.value.isEmpty ? null : _partiesNotifier.value;
   String? _lastDisplaySignature;
   int _timerIntervalSeconds = 60;
   int _gracePeriodMinutes = GracePeriodSettingsService.defaultGracePeriodMinutes;
@@ -56,10 +65,11 @@ class _HomeDjState extends State<HomeDj> {
 
   static const int _thresholdSecondsForMinuteTick = 120;
 
-  /// Gleicher Index wie [MainPage] DJ-Shell: Tab „Quickstart“ (ohne Admin-Dashboard-Variante).
-  static const int _djQuickstartTabIndex = 9;
+  /// Gleicher Index wie [MainPage] DJ-Shell: Tab „Quickstart“.
+  static const int _djQuickstartTabIndex = 11;
 
   bool _quickstartOnboardingDialogScheduled = false;
+  bool _quickstartDismissedLocally = false;
   VoidCallback? _quickstartUserListener;
   VoidCallback? _sessionProListener;
   bool? _lastSessionProActive;
@@ -94,6 +104,9 @@ class _HomeDjState extends State<HomeDj> {
         UserService().sessionProStatus.value?.isActive == true;
     _sessionProListener = _onSessionProStatusChanged;
     UserService().sessionProStatus.addListener(_sessionProListener!);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(AppUpdateService.logUserAppVersionFromHomeShell(area: 'dj'));
+    });
   }
 
   void _onSessionProStatusChanged() {
@@ -113,7 +126,7 @@ class _HomeDjState extends State<HomeDj> {
         .where('created_by', isEqualTo: _effectiveDjId!)
         .snapshots()
         .listen((snapshot) {
-      _cachedParties = snapshot.docs;
+      _partiesNotifier.value = snapshot.docs;
     });
     _gracePeriodSub?.cancel();
     _gracePeriodSub =
@@ -227,6 +240,7 @@ class _HomeDjState extends State<HomeDj> {
     }
     _secondTickTimer?.cancel();
     _partySubscription?.cancel();
+    _partiesNotifier.dispose();
     _gracePeriodSub?.cancel();
     _timeTimer?.cancel();
     _timeController?.close();
@@ -248,27 +262,40 @@ class _HomeDjState extends State<HomeDj> {
   }
 
   void _tryScheduleQuickstartOnboarding() {
+    unawaited(_tryScheduleQuickstartOnboardingAsync());
+  }
+
+  Future<void> _tryScheduleQuickstartOnboardingAsync() async {
     if (_quickstartOnboardingDialogScheduled || !mounted) return;
     final authUser = FirebaseAuth.instance.currentUser;
     if (authUser == null) return;
     final um = UserService().currentUser.value;
     if (um == null) return;
-    if (um.hasSeenQuickstart) {
-      if (_quickstartUserListener != null) {
-        UserService().currentUser.removeListener(_quickstartUserListener!);
-        _quickstartUserListener = null;
-      }
+    if (um.hasSeenQuickstart || _quickstartDismissedLocally) {
+      _clearQuickstartUserListener();
+      return;
+    }
+    final localDismissed =
+        await DjQuickstartOnboardingService.isDismissedLocally(authUser.uid);
+    if (!mounted) return;
+    if (localDismissed) {
+      setState(() => _quickstartDismissedLocally = true);
+      _clearQuickstartUserListener();
       return;
     }
     _quickstartOnboardingDialogScheduled = true;
-    if (_quickstartUserListener != null) {
-      UserService().currentUser.removeListener(_quickstartUserListener!);
-      _quickstartUserListener = null;
-    }
+    _clearQuickstartUserListener();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       unawaited(_showQuickstartOnboardingDialog());
     });
+  }
+
+  void _clearQuickstartUserListener() {
+    if (_quickstartUserListener != null) {
+      UserService().currentUser.removeListener(_quickstartUserListener!);
+      _quickstartUserListener = null;
+    }
   }
 
   Future<void> _showQuickstartOnboardingDialog() async {
@@ -307,15 +334,7 @@ class _HomeDjState extends State<HomeDj> {
             ),
             onPressed: () async {
               Navigator.of(ctx).pop();
-              try {
-                await FirebaseFirestore.instance
-                    .collection('users')
-                    .doc(user.uid)
-                    .set(
-                      {'hasSeenQuickstart': true},
-                      SetOptions(merge: true),
-                    );
-              } catch (_) {}
+              await _markQuickstartOnboardingSeen(user.uid);
               if (!mounted) return;
               NavigationService().setTabIndex(_djQuickstartTabIndex);
             },
@@ -324,6 +343,27 @@ class _HomeDjState extends State<HomeDj> {
         ],
       ),
     );
+  }
+
+  Future<void> _markQuickstartOnboardingSeen(String uid) async {
+    final cur = UserService().currentUser.value;
+    if (cur != null && cur.id == uid) {
+      UserService().applyLocalUserPatch(
+        (u) => u.copyWith(hasSeenQuickstart: true),
+      );
+    }
+    if (mounted) {
+      setState(() => _quickstartDismissedLocally = true);
+    }
+    await DjQuickstartOnboardingService.markDismissedLocally(uid);
+    try {
+      await UserSelfSettingsService.instance.write(
+        {'hasSeenQuickstart': true},
+        userId: uid,
+      );
+    } catch (e) {
+      debugLog('History/Quickstart: hasSeenQuickstart speichern: $e');
+    }
   }
 
   Future<void> _loadEffectiveDjId() async {
@@ -428,7 +468,7 @@ class _HomeDjState extends State<HomeDj> {
       });
       if (mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(l.snackbar_party_started),
             backgroundColor: Colors.green,
@@ -439,7 +479,7 @@ class _HomeDjState extends State<HomeDj> {
     } catch (e) {
       if (mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${l.snackbar_error_starting_party} $e'),
             backgroundColor: Colors.red,
@@ -472,7 +512,7 @@ class _HomeDjState extends State<HomeDj> {
       });
       if (mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(newPauseState ? l.wishbox_paused : l.wishbox_resumed),
             backgroundColor: Colors.green,
@@ -483,7 +523,7 @@ class _HomeDjState extends State<HomeDj> {
     } catch (e) {
       if (mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${l.snackbar_error_pausing_wishbox} $e'),
             backgroundColor: Colors.red,
@@ -589,7 +629,7 @@ class _HomeDjState extends State<HomeDj> {
       if (mounted) {
         setState(() {});
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(l.snackbar_party_ended_success),
             backgroundColor: Colors.green,
@@ -600,7 +640,7 @@ class _HomeDjState extends State<HomeDj> {
     } catch (e) {
       if (mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${l.snackbar_error_ending_party} $e'),
             backgroundColor: Colors.red,
@@ -653,6 +693,9 @@ class _HomeDjState extends State<HomeDj> {
     return SettingsPartyCard(
       partyId: partyId,
       partyName: partyName,
+      partyType: data['party_type'] as String?,
+      floorKey: data['floor_key'] as String?,
+      floorLabel: data['floor_label'] as String?,
       startDate: startDate,
       endDate: endDate,
       partyCode: partyCode,
@@ -850,6 +893,9 @@ class _HomeDjState extends State<HomeDj> {
               return SettingsPartyCard(
                 partyId: partyId,
                 partyName: partyName,
+                partyType: data['party_type'] as String?,
+                floorKey: data['floor_key'] as String?,
+                floorLabel: data['floor_label'] as String?,
                 startDate: startDate,
                 endDate: endDate,
                 partyCode: partyCode,
@@ -912,83 +958,11 @@ class _HomeDjState extends State<HomeDj> {
                         )
                     : null,
                 onQrCode: partyCode != null && partyCode.isNotEmpty
-                    ? () async {
-                        final locName = locationName?.trim();
-                        final street = locationStreet?.trim();
-                        final zip = locationZip?.trim();
-                        final city = locationCity?.trim();
-                        final zipCityPart = [
-                          if (zip != null && zip.isNotEmpty) zip,
-                          if (city != null && city.isNotEmpty) city,
-                        ].join(' ').trim();
-                        final addressPart = [
-                          if (street != null && street.isNotEmpty) street,
-                          if (zipCityPart.isNotEmpty) zipCityPart,
-                        ].join(', ');
-                        final isExplicitName = locName != null &&
-                            locName.isNotEmpty &&
-                            (street == null ||
-                                street.isEmpty ||
-                                locName.toLowerCase() !=
-                                    street.toLowerCase()) &&
-                            (city == null ||
-                                city.isEmpty ||
-                                locName.toLowerCase() != city.toLowerCase());
-                        final locationDisplay = addressPart.isNotEmpty
-                            ? (isExplicitName
-                                ? '$locName · $addressPart'
-                                : addressPart)
-                            : (locName != null && locName.isNotEmpty
-                                ? locName
-                                : null);
-                        final mapsUrl = (latitude != null && longitude != null)
-                            ? 'https://www.google.com/maps/search/?api=1&query=$latitude,$longitude'
-                            : null;
-
-                        String? djLogoUrl;
-                        String? profileImageUrl;
-                        String? djEmail;
-                        String? djPhone;
-                        String? djAlternativeEmail;
-                        try {
-                          final userDoc = await FirebaseFirestore.instance
-                              .collection('users')
-                              .doc(user.uid)
-                              .get();
-                          final userData = userDoc.data();
-                          djLogoUrl = userData?['djLogoUrl'];
-                          profileImageUrl =
-                              userData?['profileImageUrl'] ?? user.photoURL;
-                          djEmail = user.email ?? userData?['email'] as String?;
-                          djPhone = userData?['phoneNumber'] as String?;
-                          if (userData?['useAlternativeEmail'] == true) {
-                            djAlternativeEmail =
-                                userData?['alternativeEmail'] as String?;
-                          }
-                        } catch (_) {}
-
-                        if (context.mounted) {
-                          PartyQrCodeDialog.show(
-                            context: context,
-                            party: Party(
-                              partyName: partyName,
-                              startDate: startDate,
-                              endDate: endDate,
-                              partyCode: partyCode,
-                              partyId: partyId,
-                              partyLocation: locationDisplay,
-                              locationUrl: mapsUrl,
-                            ),
-                            djName:
-                                FirebaseAuth.instance.currentUser?.displayName,
-                            djLogoUrl: djLogoUrl,
-                            profileImageUrl: profileImageUrl,
-                            djEmail: djEmail,
-                            djPhone: djPhone,
-                            djAlternativeEmail: djAlternativeEmail,
-                          );
-                        }
-                      }
+                    ? () => PartyQrLaunchHelper.showForPartyData(
+                          context: context,
+                          partyId: partyId,
+                          data: data,
+                        )
                     : () {},
               );
             },
@@ -1078,7 +1052,7 @@ class _HomeDjState extends State<HomeDj> {
     if (user == null) return const SizedBox.shrink();
 
     // RTL-Support: Dynamische Textrichtung basierend auf der aktuellen Sprache
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
     final textDirection = isRtl ? TextDirection.rtl : TextDirection.ltr;
 
     return Directionality(
@@ -1102,17 +1076,22 @@ class _HomeDjState extends State<HomeDj> {
                 final isFreeDj = session?.isActive != true;
                 final trialUsed =
                     UserScope.userOf(context)?.trialUsed ?? true;
-                final visibleIds = layout.modularVisibleOrderForSession(
-                  isFreeDj: isFreeDj,
-                  trialUsed: trialUsed,
-                  showPreWishesWidget:
-                      activeSession?.hasQueuedPreWishes == true,
-                );
+                final storedSession = ActivePartyService.getStoredSession();
 
                 Widget buildWidgets(List<QueryDocumentSnapshot> parties) {
                   final partySnap = DjHomePartySnapshot.resolve(
                     parties,
                     gracePeriodMinutes: _gracePeriodMinutes,
+                  );
+                  final visibleIds = layout.modularVisibleOrderForSession(
+                    isFreeDj: isFreeDj,
+                    trialUsed: trialUsed,
+                    showPreWishesWidget:
+                        (activeSession ?? storedSession)?.hasQueuedPreWishes ==
+                            true,
+                    showLiveStatsWidget:
+                        partySnap.activeParty != null ||
+                        partySnap.graceParty != null,
                   );
                   final deps = DjHomeWidgetDeps(
                     effectiveDjId: _effectiveDjId,
@@ -1153,15 +1132,10 @@ class _HomeDjState extends State<HomeDj> {
                   return buildWidgets(const []);
                 }
 
-                return StreamBuilder<QuerySnapshot>(
-                  stream: FirebaseFirestore.instance
-                      .collection('parties')
-                      .where('created_by', isEqualTo: _effectiveDjId!)
-                      .snapshots(),
-                  builder: (context, snapshot) {
-                    final parties = snapshot.hasData
-                        ? snapshot.data!.docs
-                        : (_cachedParties ?? []);
+                // Ein parties-Stream (_partySubscription) — kein zweites snapshots().
+                return ValueListenableBuilder<List<QueryDocumentSnapshot>>(
+                  valueListenable: _partiesNotifier,
+                  builder: (context, parties, _) {
                     return buildWidgets(parties);
                   },
                 );

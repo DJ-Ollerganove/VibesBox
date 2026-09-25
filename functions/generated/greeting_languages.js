@@ -20,6 +20,7 @@ const GREETING_LANGUAGE_CODES = Object.freeze([
   "nl",
   "pl",
   "cs",
+  "th",
   "ar"
 ]);
 
@@ -42,6 +43,7 @@ const GREETING_LANG_LABELS = Object.freeze({
   "nl": "Dutch",
   "pl": "Polish",
   "cs": "Czech",
+  "th": "Thai",
   "ar": "Arabic"
 });
 
@@ -57,7 +59,7 @@ const GREETING_LANG_ALIASES = Object.freeze({
 });
 
 const _PREFIX_CANONICAL = [
-  'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi', 'ja', 'el', 'nl', 'pl', 'cs',
+  'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi', 'ja', 'el', 'nl', 'pl', 'cs', 'th', 'ar',
 ];
 
 /**
@@ -72,7 +74,6 @@ function normalizeGreetingLang(code) {
     .trim()
     .split(/[-_]/)[0];
   if (!raw) return 'en';
-  if (raw === 'ar' || raw.startsWith('ar')) return 'en';
   let canonical = GREETING_LANG_ALIASES[raw] || raw;
   for (const prefix of _PREFIX_CANONICAL) {
     if (canonical.startsWith(prefix) && _greetingLangSet.has(prefix)) {

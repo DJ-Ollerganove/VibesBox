@@ -11,6 +11,8 @@ class LocationModel {
   final String? fixedPartyCode; // Optional: 900.000-999.999
   final String createdBy; // DJ-ID
   final Timestamp createdAt;
+  /// Öffentlich gespeichert — für alle DJs auffindbar (Festcode-Ort).
+  final bool isPublic;
 
   LocationModel({
     required this.id,
@@ -22,6 +24,7 @@ class LocationModel {
     this.fixedPartyCode,
     required this.createdBy,
     required this.createdAt,
+    this.isPublic = false,
   });
 
   /// Erstellt LocationModel aus Firestore-Dokument
@@ -37,6 +40,7 @@ class LocationModel {
       fixedPartyCode: data['fixed_party_code'] as String?,
       createdBy: data['created_by'] as String? ?? '',
       createdAt: data['created_at'] as Timestamp? ?? Timestamp.now(),
+      isPublic: data['is_public'] == true,
     );
   }
 
@@ -51,6 +55,7 @@ class LocationModel {
       if (fixedPartyCode != null) 'fixed_party_code': fixedPartyCode,
       'created_by': createdBy,
       'created_at': createdAt,
+      if (isPublic) 'is_public': true,
     };
   }
 }

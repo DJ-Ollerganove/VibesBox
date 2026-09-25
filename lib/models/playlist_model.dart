@@ -76,29 +76,85 @@ class TrackEntry {
   final String title;
   final String artist;
   final DateTime timestamp;
+  final double? bpm;
+  final String? camelot;
+  final String? key;
+  final int? durationSec;
+  final String? source;
 
   TrackEntry({
     required this.title,
     required this.artist,
     required this.timestamp,
+    this.bpm,
+    this.camelot,
+    this.key,
+    this.durationSec,
+    this.source,
   });
+
+  static DateTime _timestampFromFirestore(dynamic raw) {
+    if (raw is Timestamp) return raw.toDate();
+    if (raw is DateTime) return raw;
+    return DateTime.now();
+  }
+
+  static double? _bpmFrom(dynamic raw) {
+    if (raw is num && raw > 0) return raw.toDouble();
+    return null;
+  }
+
+  static int? _durationFrom(dynamic raw) {
+    if (raw is int && raw > 0) return raw;
+    if (raw is num && raw > 0) return raw.round();
+    return null;
+  }
 
   /// Erstellt einen TrackEntry aus Firestore-Daten
   factory TrackEntry.fromFirestore(Map<String, dynamic> data) {
     return TrackEntry(
       title: unescapeHtml(data['title'] as String? ?? ''),
       artist: unescapeHtml(data['artist'] as String? ?? ''),
-      timestamp: (data['timestamp'] as Timestamp).toDate(),
+      timestamp: _timestampFromFirestore(data['timestamp']),
+      bpm: _bpmFrom(data['bpm']),
+      camelot: (data['camelot'] as String?)?.trim(),
+      key: (data['key'] as String?)?.trim(),
+      durationSec: _durationFrom(data['durationSec']),
+      source: (data['source'] as String?)?.trim(),
     );
   }
 
   /// Konvertiert einen TrackEntry zu Firestore-Daten
-  Map<String, dynamic> toFirestore() {
+  Map<String, dynamic> toFirestore({bool includeMixMeta = true}) {
     return {
       'title': title,
       'artist': artist,
       'timestamp': Timestamp.fromDate(timestamp),
+      if (includeMixMeta && bpm != null && bpm! > 0) 'bpm': bpm,
+      if (includeMixMeta && camelot != null && camelot!.isNotEmpty) 'camelot': camelot,
+      if (includeMixMeta && key != null && key!.isNotEmpty) 'key': key,
+      if (includeMixMeta && durationSec != null && durationSec! > 0)
+        'durationSec': durationSec,
+      if (includeMixMeta && source != null && source!.isNotEmpty) 'source': source,
     };
+  }
+
+  String get mixMetaLabel {
+    final bits = <String>[];
+    if (durationSec != null && durationSec! > 0) {
+      final m = durationSec! ~/ 60;
+      final s = durationSec! % 60;
+      bits.add('$m:${s.toString().padLeft(2, '0')}');
+    }
+    if (bpm != null && bpm! > 0) {
+      final rounded = bpm! == bpm!.roundToDouble()
+          ? bpm!.round().toString()
+          : bpm!.toStringAsFixed(1);
+      bits.add('$rounded BPM');
+    }
+    final cam = (camelot ?? '').trim();
+    if (cam.isNotEmpty) bits.add(cam);
+    return bits.join(' · ');
   }
 }
 

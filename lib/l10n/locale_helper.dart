@@ -2,16 +2,18 @@ import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:ui' as ui;
 
 import '../models/user_model.dart';
+import '../services/user_self_settings_service.dart';
+import '../utils/debug_log.dart';
 import 'app_localizations_de.dart';
+import 'app_localizations_en.dart';
 import 'generated/language_registry.g.dart';
 import 'generated/locale_translations.g.dart';
-import '../utils/debug_log.dart';
 
 /// Zentrale Locale-Logik: Gerät → unterstützte Sprache oder Englisch; eingeloggte Nutzer:
 /// Firestore `users/{uid}` Felder `language`, `selected_language` oder `locale` haben Vorrang.
@@ -23,21 +25,40 @@ class LocaleHelper {
   static const List<String> supportedLanguageCodes =
       LanguageRegistry.supportedLanguageCodes;
 
+  /// Öffentliche + ggf. Admin-only Sprachen — für Delegates/DateFormat.
+  static bool isLoadableLanguageCode(String code) {
+    return supportedLanguageCodes.contains(code) ||
+        LanguageRegistry.adminOnlyLanguageCodes.contains(code);
+  }
+
   static final ValueNotifier<Locale> localeNotifier =
       ValueNotifier<Locale>(const Locale('en'));
 
+  /// Ob Admin-only-Sprachen aufgelöst werden dürfen (Legacy-Hook, derzeit ungenutzt).
+  static bool Function()? adminOnlyLanguagesResolver;
+
+  static bool get canUseAdminOnlyLanguages =>
+      adminOnlyLanguagesResolver?.call() ?? false;
+
+  static bool get _allowAdminOnlyLanguages => canUseAdminOnlyLanguages;
+
   /// Mappt einen beliebigen Sprach-String (z. B. `de_AT`, `en-US`, `it`) auf einen
   /// unterstützten Code; **nicht unterstützt → `en`** (nicht Deutsch).
-  static String mapToSupportedOrEnglish(String raw) {
+  static String mapToSupportedOrEnglish(
+    String raw, {
+    bool? allowAdminOnly,
+  }) {
+    final allowAdmin = allowAdminOnly ?? _allowAdminOnlyLanguages;
     final first = raw
         .toLowerCase()
         .trim()
         .split(RegExp(r'[-_]'))
         .firstWhere((s) => s.isNotEmpty, orElse: () => '');
     if (first.isEmpty) return 'en';
-    // Arabisch bewusst nicht unterstützt (Auswahl ausgeblendet) → Englisch
-    if (first == 'ar' || first.startsWith('ar')) return 'en';
     if (supportedLanguageCodes.contains(first)) return first;
+    if (allowAdmin && LanguageRegistry.adminOnlyLanguageCodes.contains(first)) {
+      return first;
+    }
     if (first.startsWith('zh')) return 'zh';
     if (first.startsWith('es')) return 'es';
     if (first.startsWith('tr')) return 'tr';
@@ -52,6 +73,8 @@ class LocaleHelper {
     if (first == 'nl' || first.startsWith('nl')) return 'nl';
     if (first == 'pl' || first.startsWith('pl')) return 'pl';
     if (first == 'cs' || first.startsWith('cs') || first == 'cz') return 'cs';
+    if (first == 'th' || first.startsWith('th')) return 'th';
+    if (first == 'ar' || first.startsWith('ar')) return 'ar';
     return 'en';
   }
 
@@ -119,12 +142,12 @@ class LocaleHelper {
   /// Schreibt `language` / `selected_language`, wenn sie im Profil fehlen (für Admin-Ansicht & Konsistenz).
   static Future<void> _backfillLanguageToFirestore(String uid, String code) async {
     try {
-      await FirebaseFirestore.instance.collection('users').doc(uid).set(
+      await UserSelfSettingsService.instance.write(
         <String, dynamic>{
           'language': code,
           'selected_language': code,
         },
-        SetOptions(merge: true),
+        userId: uid,
       );
       debugLog('🌍 Firestore Sprache nachgetragen ($code)');
     } catch (e) {
@@ -202,16 +225,12 @@ class LocaleHelper {
     if (!persistToFirestore) return;
 
     try {
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .set(
-            <String, dynamic>{
-              'language': code,
-              'selected_language': code,
-            },
-            SetOptions(merge: true),
-          );
+      await UserSelfSettingsService.instance.write(
+        <String, dynamic>{
+          'language': code,
+          'selected_language': code,
+        },
+      );
       debugLog('🌍 Firestore Sprache gespeichert ($code)');
     } catch (e) {
       debugLog('🌍 Firestore Sprache speichern fehlgeschlagen: $e');
@@ -222,17 +241,35 @@ class LocaleHelper {
   /// Fehlt der Key in der gewählten Sprache, wird Deutsch verwendet, dann der [key] protokolliert.
   static String tr(Map<String, String> map, String key) {
     final v = map[key];
-    if (v != null) return v;
+    if (v != null && v.trim().isNotEmpty) return v;
     final deV = AppLocalizationsDE.translations[key];
-    if (deV != null) {
-      debugLog('⚠️ LocaleHelper.tr: Key "$key" fehlt in Export-Sprache, nutze DE');
+    if (deV != null && deV.trim().isNotEmpty) {
+      if (v != null && v.isEmpty) {
+        debugLog('⚠️ LocaleHelper.tr: Key "$key" leer in Export-Sprache, nutze DE');
+      } else {
+        debugLog('⚠️ LocaleHelper.tr: Key "$key" fehlt in Export-Sprache, nutze DE');
+      }
       return deV;
     }
-    debugLog('⚠️ LocaleHelper.tr: Key "$key" fehlt auch in DE');
+    final enV = AppLocalizationsEN.translations[key];
+    if (enV != null && enV.trim().isNotEmpty) {
+      debugLog('⚠️ LocaleHelper.tr: Key "$key" fehlt/leer auch in DE, nutze EN');
+      return enV;
+    }
+    debugLog('⚠️ LocaleHelper.tr: Key "$key" fehlt/leer auch in DE/EN');
     return key;
   }
 
   static Map<String, String> getTranslations(Locale locale) {
     return translationsForLanguageCode(locale.languageCode);
   }
+
+  /// RTL/LTR aus [l10n/languages.json] (Feld text_direction).
+  static bool isRtlLanguageCode(String code) => LanguageRegistry.isRtl(code);
+
+  static bool isRtl(BuildContext context) =>
+      isRtlLanguageCode(Localizations.localeOf(context).languageCode);
+
+  static TextDirection textDirectionFor(String code) =>
+      LanguageRegistry.textDirectionFor(code);
 }

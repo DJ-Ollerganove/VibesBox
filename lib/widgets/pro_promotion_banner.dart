@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../l10n/app_localizations.dart';
 import '../utils/ui_constants.dart';
 import 'free_feature_locked.dart';
 
@@ -20,8 +21,9 @@ class ProPromotionBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final effectiveMessage = message ?? 'VibesBox Pro für volle Kontrolle';
-    final effectiveButtonLabel = buttonLabel ?? 'Pro holen';
+    final l = AppLocalizations.of(context)!;
+    final effectiveMessage = message ?? l.pro_promotion_banner_message;
+    final effectiveButtonLabel = buttonLabel ?? l.getVibesboxPro;
     return Padding(
       padding: compactPadding
           ? const EdgeInsets.only(top: 8, bottom: 8)

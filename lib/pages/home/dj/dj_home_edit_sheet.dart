@@ -5,6 +5,8 @@ import '../../../services/dj_home_layout_service.dart';
 import '../../../services/dj_pro_session_service.dart';
 import '../../../services/user_service.dart';
 import '../../../utils/ui_constants.dart';
+import '../../../widgets/settings_help_dialog.dart';
+import '../../../widgets/settings_info_icon_button.dart';
 
 /// Bottom-Sheet: Widgets ein/aus und Reihenfolge per Drag & Drop.
 Future<void> showDjHomeEditSheet(BuildContext context) async {
@@ -45,7 +47,7 @@ Future<void> showDjHomeEditSheet(BuildContext context) async {
             });
           }
 
-          final listContentHeight = editableIds.length * 56.0 + 8;
+          final listContentHeight = editableIds.length * 64.0 + 8;
           final sheetHeight = (headerBlockHeight +
                   listContentHeight +
                   footerBlockHeight)
@@ -147,27 +149,68 @@ Future<void> showDjHomeEditSheet(BuildContext context) async {
                                 ),
                               );
                             }(),
-                            trailing: toggleLocked
-                                ? Icon(
-                                    Icons.check_circle_outline,
-                                    color: UIConstants.appOrange
-                                        .withValues(alpha: 0.85),
-                                    size: 22,
-                                  )
-                                : Switch(
-                                    value: enabled,
-                                    activeThumbColor: UIConstants.appOrange,
-                                    onChanged: (v) {
-                                      setSheetState(() {
-                                        draft = draft.copyWith(
-                                          enabled: {
-                                            ...draft.enabled,
-                                            id: v,
-                                          },
-                                        );
-                                      });
-                                    },
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                SettingsInfoIconButton(
+                                  tooltip: l.settings_help_tooltip,
+                                  onPressed: () => showSettingsHelpDialog(
+                                    context,
+                                    title: DjHomeWidgetId.label(l, id),
+                                    intro: l.translate(
+                                      'info_dj_home_${id}_intro',
+                                    ),
+                                    bullets: [
+                                      SettingsHelpBullet(
+                                        title: l.translate(
+                                          'info_dj_home_${id}_what',
+                                        ),
+                                        body: l.translate(
+                                          'info_dj_home_${id}_what_body',
+                                        ),
+                                      ),
+                                      SettingsHelpBullet(
+                                        title: l.translate(
+                                          'info_dj_home_${id}_when',
+                                        ),
+                                        body: l.translate(
+                                          'info_dj_home_${id}_when_body',
+                                        ),
+                                      ),
+                                    ],
                                   ),
+                                ),
+                                const SizedBox(width: 8),
+                                SizedBox(
+                                  width: 52,
+                                  child: Align(
+                                    alignment: Alignment.centerRight,
+                                    child: toggleLocked
+                                        ? Icon(
+                                            Icons.check_circle_outline,
+                                            color: UIConstants.appOrange
+                                                .withValues(alpha: 0.85),
+                                            size: 22,
+                                          )
+                                        : Switch(
+                                            value: enabled,
+                                            activeThumbColor:
+                                                UIConstants.appOrange,
+                                            onChanged: (v) {
+                                              setSheetState(() {
+                                                draft = draft.copyWith(
+                                                  enabled: {
+                                                    ...draft.enabled,
+                                                    id: v,
+                                                  },
+                                                );
+                                              });
+                                            },
+                                          ),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         );
                       },

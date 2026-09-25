@@ -1,23 +1,53 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    // Profilbilder - User können nur ihre eigenen Bilder hochladen/löschen
-    match /profile_images/{fileName} {
-      allow read: if true; // Alle können Profilbilder lesen
-      allow write: if request.auth != null && 
-                     (resource == null || fileName.matches(request.auth.uid + '.*'));
-      allow delete: if request.auth != null && fileName.matches(request.auth.uid + '.*');
+    function isOwnLogoFile(fileName) {
+      return fileName == request.auth.uid + '.jpg'
+        || fileName == request.auth.uid + '.jpeg'
+        || fileName == request.auth.uid + '.png';
     }
-    
-    // DJ-Logos - User können nur ihre eigenen Logos hochladen/löschen
+
+    function isOwnProfileFile(fileName) {
+      return fileName == request.auth.uid + '.jpg'
+        || fileName == request.auth.uid + '.jpeg'
+        || fileName == request.auth.uid + '.png';
+    }
+
+    // Client: dj_logos/{uid}.jpg|png — Callable: dj_logos/{uid}/logo.{ext}
     match /dj_logos/{fileName} {
-      allow read: if true; // Alle können DJ-Logos lesen
-      // Erlaube Upload/Update nur wenn User eingeloggt ist und Dateiname mit UID beginnt
-      allow write: if request.auth != null && 
-                     (resource == null || fileName.matches(request.auth.uid + '.*'));
-      // Erlaube Löschen nur wenn User eingeloggt ist und Dateiname mit UID beginnt
-      allow delete: if request.auth != null && fileName.matches(request.auth.uid + '.*');
+      allow read: if true;
+      allow create, update: if request.auth != null
+        && request.resource != null
+        && request.resource.size < 3 * 1024 * 1024
+        && isOwnLogoFile(fileName);
+      allow delete: if request.auth != null && isOwnLogoFile(fileName);
+    }
+
+    match /dj_logos/{userId}/{allPaths=**} {
+      allow read: if true;
+      allow create, update: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource != null
+        && request.resource.size < 3 * 1024 * 1024;
+      allow delete: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /profile_images/{fileName} {
+      allow read: if true;
+      allow create, update: if request.auth != null
+        && request.resource != null
+        && request.resource.size < 3 * 1024 * 1024
+        && isOwnProfileFile(fileName);
+      allow delete: if request.auth != null && isOwnProfileFile(fileName);
+    }
+
+    match /profile_images/{userId}/{allPaths=**} {
+      allow read: if true;
+      allow create, update: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource != null
+        && request.resource.size < 3 * 1024 * 1024;
+      allow delete: if request.auth != null && request.auth.uid == userId;
     }
   }
 }
-

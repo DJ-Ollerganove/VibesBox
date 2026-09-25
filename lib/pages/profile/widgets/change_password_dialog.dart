@@ -8,6 +8,7 @@ import '../../../utils/password_strength_utils.dart';
 import '../../../utils/ui_constants.dart';
 import '../../../widgets/password_strength_bar.dart';
 import '../../../utils/debug_log.dart';
+import '../../../app_scaffold_messenger.dart';
 
 /// Dialog zum Ändern des Passworts. Controller werden lokal erstellt und nach Schließen disposed.
 class ChangePasswordDialog {
@@ -227,7 +228,7 @@ class ChangePasswordDialog {
                 if (newPassword.length <
                     PasswordStrengthUtils.minPasswordLength) {
                   if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
+                    showVibesSnackBar(context, 
                       SnackBar(
                         content: Text(
                           localizations.password_too_short,
@@ -242,7 +243,7 @@ class ChangePasswordDialog {
                   final currentUser = FirebaseAuth.instance.currentUser;
                   if (currentUser == null) {
                     if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
+                      showVibesSnackBar(context, 
                         SnackBar(
                           content: Text(
                             localizations.error_changing_password,
@@ -265,7 +266,7 @@ class ChangePasswordDialog {
                   );
                   if (context.mounted) {
                     Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
+                    showVibesSnackBar(context, 
                       SnackBar(
                         content: Text(
                           localizations.password_changed,
@@ -333,7 +334,7 @@ class ChangePasswordDialog {
                     errorMessage =
                         localizations.password_too_weak;
                   }
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  showVibesSnackBar(context, 
                     SnackBar(
                       content: Text(errorMessage),
                       backgroundColor: Colors.red,

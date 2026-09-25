@@ -1,0 +1,20 @@
+VibesBox – Gestion pro des demandes musicales pour DJ et invités
+
+Gérez les demandes musicales de façon numérique, claire et professionnelle. L’app prend en charge 20 langues – pour les DJ et les invités internationaux. Fini les papiers et les interruptions : vous gardez le contrôle total de votre set.
+
+Pour les DJ :
+• Hub DJ central : toutes les demandes en liste temps réel – focus sur le mix.
+• Reconnaissance musicale intelligente : identifier automatiquement les titres joués et les marquer comme faits.
+• Protection du set : bloquez utilisateurs indésirables ou spam – vous restez le chef.
+• Pas de pub tierce : VibesBox n’affiche pas de publicité externe ; en Pro, votre branding DJ apparaît aux invités.
+• Moniteur d’état : diagramme des demandes ouvertes et déjà jouées pendant la soirée.
+• Stats after-party : analyse détaillée après l’événement pour les prochains gigs.
+• Présence & networking : liens sociaux dans l’app ; les invités peuvent vous contacter – idéal pour de nouveaux bookings.
+• Free ou Pro : démarrage gratuit ou fonctions complètes avec Pro.
+
+Pour les invités :
+• Web via QR : envoyer une demande dans le navigateur et voir les titres joués – sans app ni inscription.
+• App invité (optionnelle) : expérience plus fluide, accès direct sans navigateur.
+• Invités inscrits : voir et modifier vos demandes et gérer votre historique.
+
+Club, mariage ou événement privé : VibesBox finit le chaos – vous vous concentrez sur la musique.

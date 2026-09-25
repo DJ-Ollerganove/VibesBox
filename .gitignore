@@ -1,3 +1,7 @@
+# VibesBox Sync Installer (liegen auf dem Hosting, nicht im Git)
+public/sync/*.pkg
+public/sync/*.exe
+
 # Miscellaneous
 *.class
 *.log

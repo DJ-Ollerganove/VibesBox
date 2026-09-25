@@ -2,10 +2,15 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../app_scaffold_messenger.dart';
 import '../l10n/app_localizations.dart';
 import '../services/grace_period_settings_service.dart';
+import '../utils/debug_log.dart';
+import '../utils/firebase_error_message.dart';
+import 'settings_help_dialog.dart';
+import 'settings_info_icon_button.dart';
 
-/// DJ-Einstellung: Nachlaufzeit für offene Wünsche nach Party-Ende (0–60 Min., Schritt 5).
+/// DJ-Einstellung: Nachlaufzeit für offene Wünsche nach Party-Ende (0–120 Min., Schritt 10).
 class GracePeriodSettingsSection extends StatefulWidget {
   const GracePeriodSettingsSection({
     super.key,
@@ -54,19 +59,23 @@ class _GracePeriodSettingsSectionState extends State<GracePeriodSettingsSection>
       await GracePeriodSettingsService.save(next);
       if (!mounted) return;
       final l = AppLocalizations.of(context)!;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(l.settingsGracePeriodSaved(next)),
           behavior: SnackBarBehavior.floating,
           duration: const Duration(seconds: 2),
         ),
       );
-    } catch (_) {
+    } catch (e, st) {
+      debugLog('❌ Nachlaufzeit speichern fehlgeschlagen: $e\n$st');
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      final l = AppLocalizations.of(context)!;
+      showVibesSnackBar(
+        context,
         SnackBar(
-          content: Text(AppLocalizations.of(context)!.error),
+          content: Text(l.snackbar_error_details(formatFirebaseErrorDetail(e))),
           backgroundColor: Colors.red.shade800,
+          duration: const Duration(seconds: 8),
         ),
       );
     } finally {
@@ -92,13 +101,33 @@ class _GracePeriodSettingsSectionState extends State<GracePeriodSettingsSection>
           crossAxisAlignment:
               isRtl ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
-            Text(
-              l.settings_grace_period_title,
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-              ),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    l.settings_grace_period_title,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                ),
+                SettingsInfoIconButton(
+                  tooltip: l.settings_help_tooltip,
+                  onPressed: () => showSettingsHelpFromL10n(
+                    context,
+                    titleKey: 'settings_grace_period_title',
+                    introKey: 'info_settings_grace_intro',
+                    bullets: const [
+                      (
+                        'info_settings_grace_duration',
+                        'info_settings_grace_duration_body',
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 6),
             Text(

@@ -14,7 +14,7 @@ abstract final class LocaleClockFormat {
     final style = LanguageRegistry.timeStyleFor(code);
     switch (style) {
       case 'intl_12':
-        return intl.DateFormat.jm(intlTag).format(dateTime);
+        return _fmt(() => intl.DateFormat.jm(intlTag).format(dateTime), dateTime);
       case 'fr_h':
         return _frH(dateTime);
       case 'h_compact':
@@ -24,9 +24,20 @@ abstract final class LocaleClockFormat {
         return _jaKanji(dateTime);
       case 'colon_suffix':
       default:
-        final clock = intl.DateFormat.Hm(intlTag).format(dateTime);
+        final clock = _fmt(
+          () => intl.DateFormat.Hm(intlTag).format(dateTime),
+          dateTime,
+        );
         if (!withSuffix) return clock;
         return _appendSuffix(clock, LanguageRegistry.timeSuffixFor(code));
+    }
+  }
+
+  static String _fmt(String Function() build, DateTime dateTime) {
+    try {
+      return build();
+    } catch (_) {
+      return intl.DateFormat.Hm('en_US').format(dateTime);
     }
   }
 

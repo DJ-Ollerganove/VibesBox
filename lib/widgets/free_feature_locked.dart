@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../l10n/app_localizations.dart';
 import '../utils/ui_constants.dart';
+import 'settings_info_icon_button.dart';
 
 /// Zentrale Design-Definition für Free-Feature-Sperren (grauer Verlauf, roter Rahmen).
 /// Wiederverwendbar für Karten, Dialoge und Hinweis-Boxen (Social Media, Logo-Upload, Favoriten).
@@ -119,6 +120,31 @@ class FreeFeatureLockedDialog extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Info-i wie in den Einstellungen: öffnet den Pro-Kauf-Dialog.
+class ProUnlockInfoIcon extends StatelessWidget {
+  const ProUnlockInfoIcon({
+    super.key,
+    this.title,
+    this.description,
+  });
+
+  final String? title;
+  final String? description;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
+    return SettingsInfoIconButton(
+      tooltip: l.getVibesboxPro,
+      onPressed: () => FreeFeatureLockedDialog.show(
+        context,
+        title: title,
+        description: description,
       ),
     );
   }

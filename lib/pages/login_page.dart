@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -13,15 +15,20 @@ import '../services/auth_email_service.dart';
 import '../services/saved_login_email_store.dart';
 import '../services/registration_flow_guard.dart';
 import '../services/subscription_sync_service.dart';
+import '../services/app_update_service.dart';
 import '../services/user_service.dart';
 import '../utils/password_strength_utils.dart';
 import '../utils/role_helper.dart';
 import '../utils/sanitize.dart';
 import '../utils/ui_constants.dart';
 import '../widgets/email_verification_dialog.dart';
+import '../widgets/forgot_password_dialog.dart';
 import '../widgets/password_strength_bar.dart';
 import 'verify_email_page.dart';
+import '../services/pending_referral_service.dart';
+import '../services/dj_b2b_service.dart';
 import '../utils/debug_log.dart';
+import '../app_scaffold_messenger.dart';
 
 /// Lässt die App zu, wenn [users/{uid}.email_verified_override] == true.
 /// Wird von [MainPage] genutzt, wenn Firebase [emailVerified] noch false ist.
@@ -147,6 +154,7 @@ class _LoginPageState extends State<LoginPage> {
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   final _nameController = TextEditingController();
+  final _werberCodeController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
 
   bool _isLogin = true; // true = Login, false = Registrierung
@@ -172,6 +180,7 @@ class _LoginPageState extends State<LoginPage> {
       _isLogin = false;
     }
     _loadSavedCredentials();
+    _loadPendingWerberCode();
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _checkAndShowSecuritySnackbar(),
     );
@@ -185,7 +194,7 @@ class _LoginPageState extends State<LoginPage> {
     if (!mounted) return;
     final context = this.context;
     final msg = AppLocalizations.of(context)!.login_security_snackbar;
-    ScaffoldMessenger.of(context).showSnackBar(
+    showVibesSnackBar(context, 
       SnackBar(content: Text(msg), duration: const Duration(seconds: 5)),
     );
   }
@@ -201,12 +210,20 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
+  Future<void> _loadPendingWerberCode() async {
+    final pending = await PendingReferralService.instance.peekCode();
+    if (pending != null && mounted) {
+      _werberCodeController.text = DjB2bService.digitsOnly(pending);
+    }
+  }
+
   @override
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
     _nameController.dispose();
+    _werberCodeController.dispose();
     super.dispose();
   }
 
@@ -214,6 +231,8 @@ class _LoginPageState extends State<LoginPage> {
     required String labelText,
     required IconData prefixIcon,
     Widget? suffixIcon,
+    String? helperText,
+    int? helperMaxLines,
   }) {
     const orange = UIConstants.appOrange;
     final border = OutlineInputBorder(
@@ -238,6 +257,9 @@ class _LoginPageState extends State<LoginPage> {
       floatingLabelStyle: const TextStyle(color: orange),
       prefixIcon: Icon(prefixIcon, color: orange),
       suffixIcon: suffixIcon,
+      helperText: helperText,
+      helperMaxLines: helperMaxLines,
+      helperStyle: const TextStyle(color: Colors.white54, height: 1.35),
       filled: true,
       fillColor: Colors.black,
       enabledBorder: border,
@@ -516,7 +538,7 @@ class _LoginPageState extends State<LoginPage> {
               if (!mounted) return;
               setState(() => _isLoading = false);
               if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
+              showVibesSnackBar(context, 
                 SnackBar(
                   content: Text(
                     AppLocalizations.of(context)!.login_error_inactive,
@@ -531,7 +553,7 @@ class _LoginPageState extends State<LoginPage> {
               if (!mounted) return;
               setState(() => _isLoading = false);
               if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
+              showVibesSnackBar(context, 
                 SnackBar(
                   content: Text(
                     AppLocalizations.of(context)!.login_error_banned,
@@ -547,7 +569,7 @@ class _LoginPageState extends State<LoginPage> {
               if (!mounted) return;
               setState(() => _isLoading = false);
               if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
+              showVibesSnackBar(context, 
                 SnackBar(
                   content: Text(
                     AppLocalizations.of(context)!.login_error_banned,
@@ -611,25 +633,36 @@ class _LoginPageState extends State<LoginPage> {
           // role_id aus Firestore übernehmen (kein E-Mail-Override mehr)
           final roleIdToSet = loadedRoleId;
 
-          final updateData = <String, dynamic>{
-            'email': userCredential.user!.email,
-            'displayName': userCredential.user!.displayName,
-            'loginCount': newCount,
-            'lastLogin': now,
-            'previousLogin': previousLogin,
-          };
-          if (roleIdToSet != null) {
-            updateData['role_id'] = roleIdToSet;
-          }
-          if (needsCreatedAt) {
-            updateData['created_at'] = now;
-          }
-
-          await usersRef.set(
-            SecurityHelper.sanitizeMap(updateData),
-            SetOptions(merge: true),
+          await UserService.recordLoginActivity(
+            uid: userCredential.user!.uid,
+            email: userCredential.user!.email,
+            displayName: userCredential.user!.displayName,
+            roleId: roleIdToSet,
+            seedCreatedAt: needsCreatedAt,
+            loginCount: newCount,
+            lastLogin: now,
+            previousLogin: previousLogin,
           );
           debugLog('Login-Zähler erfolgreich aktualisiert: $newCount');
+
+          // Invite-Link / Pending-B2B nach Login einlösen (DJ).
+          if (roleIdToSet != null &&
+              AppConfig.classifyRoleId(roleIdToSet) == AppRoleKind.dj) {
+            final linked = await DjB2bService.instance.tryRedeemPendingReferral(
+              source: 'login',
+            );
+            if (linked == 'linked' && mounted) {
+              showVibesSnackBar(
+                context,
+                SnackBar(
+                  content: Text(
+                    AppLocalizations.of(context)!.referral_code_saved_b2b,
+                  ),
+                  backgroundColor: Colors.green,
+                ),
+              );
+            }
+          }
 
           // Eskalation: role_id nach 5 Retries weiterhin nicht vorhanden
           if (loadedRoleId == null) {
@@ -652,6 +685,9 @@ class _LoginPageState extends State<LoginPage> {
       // RevenueCat mit Firebase-UID verknüpfen und Pro-Status in Firestore syncen
       await SubscriptionSyncService.logIn(userCredential.user!.uid);
       SubscriptionSyncService.syncSubscriptionStatus(userCredential.user!.uid);
+      unawaited(
+        AppUpdateService.ensureSessionDeviceTelemetry(reason: 'login'),
+      );
 
       // DJ-Logo vorladen (Session Caching)
       try {
@@ -685,7 +721,7 @@ class _LoginPageState extends State<LoginPage> {
       }
     } on FirebaseAuthException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(_getErrorMessage(context, e.code)),
             backgroundColor: Colors.red,
@@ -772,7 +808,7 @@ class _LoginPageState extends State<LoginPage> {
     final role = _selectedRole;
     if (role != 'Gast' && role != 'DJ') {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(
               AppLocalizations.of(context)!.role_selection_required,
@@ -790,7 +826,7 @@ class _LoginPageState extends State<LoginPage> {
     // Blockiere Registrierung mit der offiziellen Kontakt-E-Mail (Schutz der Adresse).
     // Admin-Berechtigung nach Login erfolgt ausschließlich über Firestore role_id, nicht über E-Mail.
     if (email == AppConfig.adminEmail) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(
             AppLocalizations.of(context)!.login_email_registration_blocked,
@@ -804,7 +840,7 @@ class _LoginPageState extends State<LoginPage> {
     // Prüfe auf blockierte Namen
     final name = sanitizeInput(_nameController.text.trim());
     if (_isNameBlocked(name)) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(
             AppLocalizations.of(context)!.login_name_blocked,
@@ -821,6 +857,54 @@ class _LoginPageState extends State<LoginPage> {
     // (email-already-in-use) gehandhabt.
 
     setState(() => _isLoading = true);
+
+    // DJ B2B: Format + Existenz prüfen, lokal merken — serverseitig nach User-Doc.
+    String? werberCode;
+    var werberFromInvite = false;
+    if (role == 'DJ') {
+      final digits = DjB2bService.digitsOnly(_werberCodeController.text);
+      werberCode = DjB2bService.normalizeCode(digits);
+      if (digits.isNotEmpty && werberCode == null) {
+        if (mounted) {
+          showVibesSnackBar(
+            context,
+            SnackBar(
+              content: Text(
+                AppLocalizations.of(context)!.referral_code_length_b2b,
+              ),
+              backgroundColor: Colors.red,
+            ),
+          );
+          setState(() => _isLoading = false);
+        }
+        return;
+      }
+      if (werberCode != null) {
+        final referrerUid =
+            await DjB2bService.instance.lookupReferrerUid(werberCode);
+        if (referrerUid == null) {
+          if (mounted) {
+            showVibesSnackBar(
+              context,
+              SnackBar(
+                content: Text(
+                  AppLocalizations.of(context)!.paywall_b2b_code_invalid,
+                ),
+                backgroundColor: Colors.red,
+              ),
+            );
+            setState(() => _isLoading = false);
+          }
+          return;
+        }
+        final pending = await PendingReferralService.instance.peekCode();
+        werberFromInvite = pending == werberCode;
+        await PendingReferralService.instance.saveCode(werberCode);
+      } else {
+        // Feld leer = kein Code (auch Invite abgewählt).
+        await PendingReferralService.instance.clear();
+      }
+    }
 
     var verificationEmailSendFailed = false;
     UserCredential? credential;
@@ -853,7 +937,7 @@ class _LoginPageState extends State<LoginPage> {
           verificationEmailSendFailed = true;
           debugLog('Auth-E-Mail (Callable): ${e.code} ${e.message}');
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
+            showVibesSnackBar(context, 
               SnackBar(
                 content: Text(
                   locForEmail.login_verification_email_send_failed,
@@ -867,7 +951,7 @@ class _LoginPageState extends State<LoginPage> {
           verificationEmailSendFailed = true;
           debugLog('Auth-E-Mail: $e\n$st');
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
+            showVibesSnackBar(context, 
               SnackBar(
                 content: Text(
                   locForEmail.login_verification_email_send_failed,
@@ -881,7 +965,7 @@ class _LoginPageState extends State<LoginPage> {
       }
     } on FirebaseAuthException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(_getErrorMessage(context, e.code)),
             backgroundColor: Colors.red,
@@ -943,6 +1027,36 @@ class _LoginPageState extends State<LoginPage> {
         if (lastProfileError != null) {
           throw lastProfileError;
         }
+
+        // B2B nach User-Doc: Verknüpfung + Werber-Untercollection (ohne Trial).
+        if (role == 'DJ' && werberCode != null) {
+          final redeemResult =
+              await DjB2bService.instance.tryRedeemPendingReferral(
+            source: werberFromInvite ? 'invite_link' : 'registration',
+          );
+          if (mounted && redeemResult == 'linked') {
+            showVibesSnackBar(
+              context,
+              SnackBar(
+                content: Text(
+                  AppLocalizations.of(context)!.referral_code_saved_b2b,
+                ),
+                backgroundColor: Colors.green,
+              ),
+            );
+          } else if (mounted &&
+              (redeemResult == 'invalid' || redeemResult == 'error')) {
+            showVibesSnackBar(
+              context,
+              SnackBar(
+                content: Text(
+                  AppLocalizations.of(context)!.paywall_b2b_code_invalid,
+                ),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
+        }
       } catch (e, st) {
         debugLog('Firestore registration update fehlgeschlagen: $e\n$st');
         try {
@@ -953,7 +1067,7 @@ class _LoginPageState extends State<LoginPage> {
         } catch (_) {}
         if (mounted) {
           final loc = AppLocalizations.of(context)!;
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(
                 verificationEmailSendFailed
@@ -973,13 +1087,16 @@ class _LoginPageState extends State<LoginPage> {
 
       await SubscriptionSyncService.logIn(credential.user!.uid);
       SubscriptionSyncService.syncSubscriptionStatus(credential.user!.uid);
+      unawaited(
+        AppUpdateService.ensureSessionDeviceTelemetry(reason: 'login'),
+      );
 
       if (mounted && !verificationEmailSendFailed) {
         final mail = credential.user!.email?.trim() ?? '';
         if (mail.isNotEmpty) {
           await _showPostRegistrationVerificationDialog(mail);
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(
                 AppLocalizations.of(context)!.login_registration_success,
@@ -1045,70 +1162,11 @@ class _LoginPageState extends State<LoginPage> {
     return getRoleIdByName(roleName);
   }
 
-  Future<void> _resetPassword() async {
-    final email = _emailController.text.trim();
-    if (email.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            AppLocalizations.of(context)!.login_reset_email_required,
-          ),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-    if (!_isLikelyFirebaseEmail(email)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            AppLocalizations.of(context)!.login_email_invalid,
-          ),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-
-    try {
-      final l = AppLocalizations.of(context)!;
-      await AuthEmailService.sendPasswordResetEmail(
-        l: l,
-        email: email,
-      );
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              AppLocalizations.of(context)!.login_reset_email_sent,
-            ),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } on FirebaseFunctionsException catch (e) {
-      debugLog('❌ Reset-Email (Callable): ${e.code} ${e.message}');
-      if (mounted) {
-        final loc = AppLocalizations.of(context)!;
-        final msg = e.code == 'resource-exhausted'
-            ? loc.error_too_many_requests
-            : '${loc.error}: ${e.message ?? e.code}';
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(msg), backgroundColor: Colors.red),
-        );
-      }
-    } catch (e) {
-      debugLog('❌ Fehler beim Senden der Reset-Email: $e');
-      if (mounted) {
-        final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${l.error}: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
+  void _openForgotPasswordDialog() {
+    ForgotPasswordDialog.show(
+      context,
+      initialEmail: _emailController.text.trim(),
+    );
   }
 
   String _getErrorMessage(BuildContext context, String code) {
@@ -1269,6 +1327,56 @@ class _LoginPageState extends State<LoginPage> {
                   ),
                   const SizedBox(height: 16),
                 ],
+                if (!_isLogin && _selectedRole == 'DJ') ...[
+                  Directionality(
+                    textDirection: TextDirection.ltr,
+                    child: TextFormField(
+                      controller: _werberCodeController,
+                      maxLength: 6,
+                      keyboardType: TextInputType.number,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      decoration: _orangeDecoration(
+                        labelText: AppLocalizations.of(context)!
+                            .referral_code_hint_b2b,
+                        prefixIcon: Icons.card_giftcard_outlined,
+                        helperText:
+                            AppLocalizations.of(context)!.paywall_trial_b2b_hint,
+                        helperMaxLines: 3,
+                      ).copyWith(
+                        prefixText: 'DJ',
+                        prefixStyle: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 1.1,
+                        ),
+                        hintText: '123456',
+                        counterText: '',
+                      ),
+                      onChanged: (value) {
+                        final digits = DjB2bService.digitsOnly(value);
+                        if (digits != value) {
+                          _werberCodeController.value = TextEditingValue(
+                            text: digits,
+                            selection: TextSelection.collapsed(
+                              offset: digits.length,
+                            ),
+                          );
+                        }
+                      },
+                      validator: (value) {
+                        final raw = value?.trim() ?? '';
+                        if (raw.isEmpty) return null;
+                        if (DjB2bService.normalizeCode(raw) == null) {
+                          return AppLocalizations.of(context)!
+                              .referral_code_length_b2b;
+                        }
+                        return null;
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
                 // Passwort Feld
                 TextFormField(
                   controller: _passwordController,
@@ -1415,7 +1523,7 @@ class _LoginPageState extends State<LoginPage> {
                         ),
                       ),
                       TextButton(
-                        onPressed: _resetPassword,
+                        onPressed: _openForgotPasswordDialog,
                         child: Text(
                           AppLocalizations.of(context)!.login_forgot_password,
                         ),

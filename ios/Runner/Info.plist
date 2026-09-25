@@ -57,6 +57,8 @@
 		</array>
 		<key>CFBundleVersion</key>
 		<string>$(FLUTTER_BUILD_NUMBER)</string>
+		<key>FirebaseAppDelegateProxyEnabled</key>
+		<true/>
 		<key>FlutterDeepLinkingEnabled</key>
 		<false/>
 		<key>ITSAppUsesNonExemptEncryption</key>
@@ -64,29 +66,29 @@
 		<key>LSRequiresIPhoneOS</key>
 		<true/>
 		<key>NSAppleMusicUsageDescription</key>
-		<string>VibesBox kann auf deine Mediathek zugreifen, um Musikerkennung und passende Funktionen mit Apple Music zu verknüpfen.</string>
+		<string>VibesBox may access your media library to link music recognition with Apple Music features.</string>
 		<key>NSBonjourServices</key>
 		<array>
 			<string>_dartVmService._tcp</string>
 		</array>
 		<key>NSCalendarsUsageDescription</key>
-		<string>Wird benötigt, um Party-Termine in deinen Kalender zu exportieren.</string>
+		<string>Needed to export party dates to your calendar.</string>
 		<key>NSCameraUsageDescription</key>
-		<string>VibesBox benötigt Zugriff auf die Kamera, um QR-Codes zu scannen und Fotos aufzunehmen.</string>
+		<string>VibesBox needs camera access to scan QR codes and take photos.</string>
 		<key>NSFaceIDUsageDescription</key>
-		<string>Admin-Authentifizierung erforderlich, um auf sensible Einstellungen zuzugreifen.</string>
+		<string>Face ID protects admin settings so only you can access sensitive options.</string>
 		<key>NSLocalNetworkUsageDescription</key>
-		<string>VibesBox nutzt das lokale Netzwerk für die Flutter-/Xcode-Entwicklungsverbindung (z. B. Hot Reload, Debugging) und ggf. für Gerätedienste im gleichen WLAN.</string>
+		<string>VibesBox may use the local network so development tools can connect during testing, and for optional device features on the same Wi‑Fi.</string>
 		<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-		<string>VibesBox benötigt Zugriff auf den Standort, um lokale DJ-Funktionen zu unterstützen.</string>
+		<string>VibesBox uses your location to centre the map on your party location.</string>
 		<key>NSLocationWhenInUseUsageDescription</key>
-		<string>VibesBox benötigt Zugriff auf den Standort, um lokale DJ-Funktionen zu unterstützen.</string>
+		<string>VibesBox uses your location to centre the map on your party location.</string>
 		<key>NSMicrophoneUsageDescription</key>
-		<string>VibesBox benötigt Zugriff auf das Mikrofon, um laufende Musik für die Musikerkennung zu analysieren.</string>
+		<string>VibesBox needs microphone access to analyze playing music for recognition.</string>
 		<key>NSPhotoLibraryAddUsageDescription</key>
-		<string>VibesBox benötigt Zugriff, um Bilder (z.B. QR-Codes) in deiner Mediathek zu speichern.</string>
+		<string>VibesBox saves images such as QR codes to your library when you choose to.</string>
 		<key>NSPhotoLibraryUsageDescription</key>
-		<string>VibesBox benötigt Zugriff auf deine Mediathek, um Bilder auszuwählen. Das ist optional nur fürs Profilbild.</string>
+		<string>VibesBox needs photo library access so you can choose a profile picture.</string>
 		<key>UIApplicationSupportsIndirectInputEvents</key>
 		<true/>
 		<key>UIBackgroundModes</key>

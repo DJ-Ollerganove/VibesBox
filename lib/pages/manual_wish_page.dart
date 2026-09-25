@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -9,10 +8,14 @@ import 'package:flutter/services.dart';
 import '../helpers/security_helper.dart';
 import '../l10n/app_localizations.dart';
 import '../services/duplicate_check_service.dart';
+import '../services/app_diagnostic_log_service.dart';
 import '../services/spotify_service.dart';
 import '../services/user_service.dart';
 import '../utils/ui_constants.dart';
 import '../utils/wish_paths.dart';
+import '../services/dj_song_blacklist_service.dart';
+import '../widgets/common/pwa_widget_cell.dart';
+import '../app_scaffold_messenger.dart';
 
 /// Gewählter Künstler (Name + ID für abhängige Suche) — identisch zur Gäste-[WishesFormWidget]-Logik.
 class _SelectedArtist {
@@ -26,6 +29,18 @@ class ManualWishPage extends StatefulWidget {
   final String partyId;
 
   const ManualWishPage({super.key, required this.partyId});
+
+  /// Kompakter Overlay-Dialog (nicht Vollbild), blauer Rahmen wie Offen-Tab.
+  static Future<bool?> show(
+    BuildContext context, {
+    required String partyId,
+  }) {
+    return showDialog<bool>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.7),
+      builder: (ctx) => ManualWishPage(partyId: partyId),
+    );
+  }
 
   @override
   State<ManualWishPage> createState() => _ManualWishPageState();
@@ -385,7 +400,7 @@ class _ManualWishPageState extends State<ManualWishPage> {
     final l = AppLocalizations.of(context)!;
 
     if (title.isEmpty || artist.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(
             l.wish_title_or_artist_required,
@@ -408,6 +423,12 @@ class _ManualWishPageState extends State<ManualWishPage> {
     );
 
     if (inHistory || inOpenWishes) {
+      diagLog(
+        'DUP',
+        'manual_wish dialog party=${widget.partyId} '
+        'inHistory=$inHistory inOpen=$inOpenWishes '
+        'query="$title" / "$artist"',
+      );
       final force = await _showDuplicateInfoDialog(inHistory, inOpenWishes);
       if (force != true || !mounted) return;
     }
@@ -451,12 +472,20 @@ class _ManualWishPageState extends State<ManualWishPage> {
         'is_dj_wish': true,
       };
 
+      await DjSongBlacklistService.instance.applyRejectIfHit(
+        wishData: wishData,
+        djId: djId,
+        title: title,
+        artist: artist,
+        partyId: widget.partyId,
+      );
+
       await WishPaths.partyWishes(widget.partyId)
           .add(SecurityHelper.sanitizeMap(wishData));
 
       if (!mounted) return;
       final line = artist.isNotEmpty ? '$artist – $title' : title;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(
             l.manualWishSavedSnack(line),
@@ -467,7 +496,7 @@ class _ManualWishPageState extends State<ManualWishPage> {
       Navigator.of(context).pop(true);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${l.error}: $e'),
             backgroundColor: Colors.red,
@@ -488,72 +517,57 @@ class _ManualWishPageState extends State<ManualWishPage> {
       'fa',
       'ur',
     ].contains(Localizations.localeOf(context).languageCode);
+    final maxDialogHeight = MediaQuery.sizeOf(context).height * 0.82;
 
-    return Scaffold(
+    return Dialog(
       backgroundColor: Colors.transparent,
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        foregroundColor: Colors.white,
-        iconTheme: const IconThemeData(color: Colors.white),
-        title: Text(
-          l.addManualWish,
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.w600,
-          ),
+      elevation: 0,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 28),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 440,
+          maxHeight: maxDialogHeight,
         ),
-      ),
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          Positioned.fill(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-              child: Container(color: Colors.black.withValues(alpha: 0.45)),
-            ),
-          ),
-          SafeArea(
-            child: Center(
+        child: PwaWidgetCell(
+          borderColor: UIConstants.frameOffen,
+          padding: const EdgeInsets.fromLTRB(18, 12, 10, 14),
+          child: Directionality(
+            textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
+            child: Form(
+              key: _formKey,
               child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: 16,
-                ),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 440),
-                  child: Material(
-                    color: Colors.transparent,
-                    child: Container(
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.78),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: UIConstants.appOrange,
-                          width: 2,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: UIConstants.appOrange.withValues(
-                              alpha: 0.15,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            l.addManualWish,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 17,
+                              height: 1.25,
                             ),
-                            blurRadius: 24,
-                            spreadRadius: 2,
                           ),
-                        ],
-                      ),
-                      child: Directionality(
-                        textDirection: isRtl
-                            ? TextDirection.rtl
-                            : TextDirection.ltr,
-                        child: Form(
-                          key: _formKey,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
+                        ),
+                        IconButton(
+                          tooltip: l.close,
+                          onPressed: () => Navigator.of(context).pop(),
+                          icon: const Icon(Icons.close, color: Colors.white70),
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 36,
+                            minHeight: 36,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
                               // Interpret * — wie Gäste-Wunschbox
                               _buildInputContainer(
                                 child: Column(
@@ -805,17 +819,12 @@ class _ManualWishPageState extends State<ManualWishPage> {
                                         ),
                                 ),
                               ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
+                  ],
                 ),
               ),
             ),
           ),
-        ],
+        ),
       ),
     );
   }

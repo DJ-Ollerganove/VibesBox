@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../l10n/app_localizations.dart';
 import '../services/spotify_search_settings_service.dart';
+import '../app_scaffold_messenger.dart';
 
 /// Admin: Bearbeitung von [admin_config/spotify_settings] (Blacklist, max. Titel-Länge).
 class SpotifySearchFilterSettingsSection extends StatefulWidget {
@@ -66,7 +67,7 @@ class _SpotifySearchFilterSettingsSectionState
       );
       if (mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(l.spotify_filter_saved),
             backgroundColor: const Color(0xFF2E7D32),

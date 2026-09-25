@@ -14,6 +14,7 @@ import '../services/party_session_service.dart';
 import '../services/guest_floor_session_service.dart';
 import '../models/guest_floor_option.dart';
 import '../utils/guest_floor_display.dart';
+import '../utils/venue_party_fields.dart';
 import '../widgets/guest_floor_picker_widget.dart';
 import '../services/wishbox_suggestions_settings_service.dart';
 import '../config/app_config.dart';
@@ -28,6 +29,7 @@ import '../utils/time_utils.dart';
 import '../utils/formatting_utils.dart';
 import '../services/limit_service.dart';
 import '../services/guest_party_stats_service.dart';
+import '../services/guest_wish_stats_service.dart';
 import '../utils/pre_wish_helper.dart';
 import '../services/pre_wish_limit_service.dart';
 import '../widgets/party_realtime_countdown.dart';
@@ -39,6 +41,9 @@ import '../widgets/wishes_form_widget.dart';
 import '../utils/debug_log.dart';
 import '../utils/ios_stable_device_id.dart';
 import '../utils/wish_paths.dart';
+import '../app_scaffold_messenger.dart';
+import '../services/dj_song_blacklist_service.dart';
+import '../models/dj_song_blacklist_prefs.dart';
 
 /// Helper-Funktion: Speichert Track-Daten in die Musikdatenbank (wunschbox_titel, wunschbox_artist, wunschbox_genres)
 /// Wird asynchron im Hintergrund aufgerufen (Fire & Forget), damit der User nicht warten muss
@@ -517,16 +522,10 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
 
   bool _isGuestWishboxRunning(Map<String, dynamic>? data) {
     if (data == null) return false;
-    final lifecycleStatus =
-        (data['lifecycle_status'] ?? data['status'] ?? '').toString();
-    if (lifecycleStatus == 'finished' || data['finished_at'] != null) {
-      return false;
-    }
-    final now = DateTime.now();
-    final start = _partyDateFromData(data, 'start_date', 'start_time_posix');
-    final end = _partyDateFromData(data, 'end_date', 'end_time_posix');
-    if (start == null || end == null) return false;
-    return !now.isBefore(start) && now.isBefore(end);
+    return GuestFloorSessionService.instance.isPartyGuestJoinable(
+      data,
+      DateTime.now(),
+    );
   }
 
   bool _isPartyWishboxPaused(Map<String, dynamic>? data) =>
@@ -598,6 +597,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     _partyDocSubscription?.cancel();
     _wishStatsTimer?.cancel();
     _blockStatusResyncTimer?.cancel();
+    DjSongBlacklistService.instance.stopGuestWatching();
   }
 
   Future<void> _refreshMultiFloorAvailable() async {
@@ -655,6 +655,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
       _djLogoUrl = svc.djLogoUrl;
     });
     _ensurePartyListenersStarted();
+    _syncGuestBlacklistWatch();
     _checkBlockStatus();
     _scheduleGuestPartyStatsLog();
     unawaited(_refreshMultiFloorAvailable());
@@ -752,7 +753,8 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
 
       if (partyId != null &&
           partyId.isNotEmpty &&
-          normalizedJoinCode.length == 8) {
+          normalizedJoinCode.length == 8 &&
+          VenuePartyFields.isPublicVenueParty(partyData)) {
         final redirect =
             await GuestFloorSessionService.instance.redirectAfterPartyEnded(
           endedPartyId: partyId,
@@ -866,6 +868,31 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     }
   }
 
+  Widget _buildPreWishesPausedNotice(AppLocalizations l) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: UIConstants.colorPreWish.withValues(alpha: 0.15),
+        border: Border.all(
+          color: UIConstants.colorPreWish.withValues(alpha: 0.55),
+          width: 2,
+        ),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        l.pre_wishes_paused_guest_message,
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          color: UIConstants.colorPreWishBannerText,
+          fontSize: 15,
+          fontWeight: FontWeight.w600,
+          height: 1.45,
+        ),
+      ),
+    );
+  }
+
   Widget _buildPreWishBanner(AppLocalizations l) {
     return Container(
       width: double.infinity,
@@ -890,6 +917,18 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     );
   }
 
+  /// Wunschbox-Formular nur bei aktiver Session ohne Floor-Picker / Sonderfenster.
+  bool _shouldRenderGuestWishForm() {
+    if (_isAdmin || _showSuccessMessage) return false;
+    final code = _partyCode;
+    if (code == null || code.isEmpty || code == 'manual') return false;
+    if (!PartySessionService.instance.hasSession) return false;
+    if (_floorPickerOptions != null && _floorPickerOptions!.isNotEmpty) {
+      return false;
+    }
+    return true;
+  }
+
   Widget _buildPrePartyWaitNotice(
     AppLocalizations l,
     Map<String, dynamic> partyData,
@@ -904,7 +943,11 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
         ? (partyData['party_name'] as String).trim()
         : (PartySessionService.instance.partyName?.trim().isNotEmpty == true
             ? PartySessionService.instance.partyName!.trim()
-            : 'Party');
+            : l.unnamed_party);
+    final titleTemplate = l.pre_party_title_with_name;
+    final titleText = titleTemplate.contains('{name}')
+        ? titleTemplate.replaceAll('{name}', partyName)
+        : '$partyName — $titleTemplate';
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
@@ -932,7 +975,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
           const Text('⏰', style: TextStyle(fontSize: 48)),
           const SizedBox(height: 12),
           Text(
-            partyName,
+            titleText,
             textAlign: TextAlign.center,
             style: const TextStyle(
               color: Colors.white,
@@ -942,7 +985,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
           ),
           const SizedBox(height: 8),
           Text(
-            l.party_code_not_started,
+            l.pre_party_subtitle,
             textAlign: TextAlign.center,
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.9),
@@ -1005,8 +1048,8 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
           );
         }
         final running = _isGuestWishboxRunning(partyData);
-        final preWishOpen = PreWishHelper.isPreWishWindowOpen(partyData);
-        final preWishUi = preWishOpen && !running;
+        final preWishWindowOpen = PreWishHelper.isPreWishWindowOpen(partyData);
+        final preWishUi = preWishWindowOpen && !running;
         final prePartyWait = PreWishHelper.isPrePartyWaitOnly(partyData);
 
         if (prePartyWait && partyData != null) {
@@ -1018,15 +1061,18 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
           }
           return _buildPartyEndedNotice(localizations, partyData);
         }
-        if (!running && !preWishOpen) {
+        if (!running && !preWishWindowOpen) {
           return _buildWishboxInactiveNotice(localizations);
         }
-        if (_isPartyWishboxPaused(partyData)) {
+        if (running && _isPartyWishboxPaused(partyData)) {
           return const WishboxPausedWidget();
+        }
+        if (preWishUi && PreWishHelper.arePreWishesPaused(partyData)) {
+          return _buildPreWishesPausedNotice(localizations);
         }
 
         Widget wrapWithPreWishBanner(Widget child) {
-          if (!preWishOpen || running) {
+          if (!preWishWindowOpen || running) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -1174,11 +1220,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
                 // Wunschbox Status / Inhaltslogik
                 if (_showSuccessMessage)
                   _buildSuccessView(localizations, preWish: _successWasPreWish)
-                else if (!_isAdmin &&
-                    _partyCode != null &&
-                    _partyCode!.isNotEmpty &&
-                    _partyCode != 'manual' &&
-                    PartySessionService.instance.hasSession)
+                else if (_shouldRenderGuestWishForm())
                   _buildGuestWishboxContent(
                     localizations,
                     (preWishUi) {
@@ -1275,6 +1317,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     _titleController.dispose();
     _artistController.dispose();
     _greetingController.dispose();
+    DjSongBlacklistService.instance.stopGuestWatching();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -1340,6 +1383,28 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     _subscribePartyDocForLimit(PartySessionService.instance.partyId ?? '');
     _checkBlockStatus();
     _startBlockStatusResyncTimer();
+    _syncGuestBlacklistWatch();
+  }
+
+  void _syncGuestBlacklistWatch() {
+    final djId = (_djId ?? PartySessionService.instance.djId ?? '').trim();
+    final partyId = (PartySessionService.instance.partyId ?? '').trim();
+    DjSongBlacklistService.instance.startGuestWatching(
+      djId: djId.isEmpty ? null : djId,
+      partyId: partyId.isEmpty ? null : partyId,
+    );
+  }
+
+  void _clearWishFormAfterBlacklistBlock() {
+    _titleController.clear();
+    _artistController.clear();
+    _greetingController.clear();
+    _selectedSpotifyId = null;
+    _selectedDurationMs = null;
+    if (!_hasProfileName) {
+      _nameController.clear();
+    }
+    if (mounted) setState(() {});
   }
 
   void _startBlockStatusResyncTimer() {
@@ -1360,10 +1425,13 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
       final isAdmin = current != null && AppConfig.isAdminRole(current);
 
       PartyCheckInFeedback? pendingEnded;
+      PartyCheckInFeedback? pendingDeepLink;
       if (!isAdmin) {
         await PartySessionService.instance.hydrateIfNeeded();
         pendingEnded =
             PartySessionService.instance.consumePendingPartyEndedFeedback();
+        pendingDeepLink = PartySessionService.instance
+            .consumePendingDeepLinkCheckInFeedback();
       }
 
       final user = FirebaseAuth.instance.currentUser;
@@ -1412,6 +1480,14 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
             _floorPickerOptions = pendingEnded.otherFloorOptions;
             _pendingJoinCodeForFloorPick = svc.shortCode ?? _partyCode;
           }
+        } else if (pendingDeepLink != null) {
+          _partyCheckInEndedFeedback = pendingDeepLink;
+          if (pendingDeepLink.type == PartyCheckInFeedbackType.selectFloor &&
+              pendingDeepLink.otherFloorOptions != null &&
+              pendingDeepLink.otherFloorOptions!.isNotEmpty) {
+            _floorPickerOptions = pendingDeepLink.otherFloorOptions;
+            _pendingJoinCodeForFloorPick = pending ?? _partyCode;
+          }
         } else if (svc.hasSession) {
           _partyEndedHandled = false;
         }
@@ -1420,6 +1496,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
       if (svc.hasSession) {
         final listenersWereActive = _partyListenersStarted;
         _ensurePartyListenersStarted();
+        _syncGuestBlacklistWatch();
         if (listenersWereActive) {
           _checkBlockStatus();
         }
@@ -1489,6 +1566,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
       _floorPickerOptions = null;
     });
     _ensurePartyListenersStarted();
+    _syncGuestBlacklistWatch();
     _checkBlockStatus();
     _scheduleGuestPartyStatsLog();
     unawaited(_refreshMultiFloorAvailable());
@@ -1718,6 +1796,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
   }
 
   Future<void> _loadWishStatsAndUpdate() async {
+    if (!_shouldRenderGuestWishForm()) return;
     final partyInfo = await _getActivePartyInfo();
     final partyId = partyInfo['partyId'] ?? '';
     if (partyId.isEmpty || partyId == 'manual') return;
@@ -1775,7 +1854,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
   }
 
   Future<void> _updateGuestStats(String p) async {
-    /* ... */
+    await GuestWishStatsService.instance.onWishSubmitted();
   }
 
   /// Liefert die aktive Party-Info (lange party_id + party_code).
@@ -1807,7 +1886,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
         .get();
     final data = partyDoc.data();
     if (_isPartyWishboxPaused(data)) return false;
-    if (PreWishHelper.isPreWishWindowOpen(data)) return true;
+    if (PreWishHelper.isPreWishSubmissionOpen(data)) return true;
     return _isGuestWishboxRunning(data);
   }
 
@@ -2008,6 +2087,35 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     return 'unknown';
   }
 
+  Future<void> _showBlacklistGuestBlockedDialog() async {
+    _clearWishFormAfterBlacklistBlock();
+    if (!mounted) return;
+    final l = AppLocalizations.of(context)!;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        title: Text(
+          l.translate('song_blacklist_guest_blocked_title'),
+          style: const TextStyle(color: Colors.white),
+        ),
+        content: Text(
+          l.translate('song_blacklist_guest_blocked'),
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(
+              l.ok,
+              style: const TextStyle(color: UIConstants.appOrange),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _executeAddWishAttempt() async {
     final title = SecurityHelper.sanitize(_titleController.text.trim());
     final artist = SecurityHelper.sanitize(_artistController.text.trim());
@@ -2017,7 +2125,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     // Pflichtfelder: Titel UND Artist muessen vorhanden sein.
     if (title.isEmpty || artist.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(
             AppLocalizations.of(context)!.wish_title_or_artist_required,
@@ -2031,7 +2139,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     // Prüfe Party-Code
     if (_partyCode == null || _partyCode!.isEmpty || _partyCode == 'manual') {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(
             AppLocalizations.of(context)!.party_code_input_required,
@@ -2049,7 +2157,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
 
     if (partyId.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(
             AppLocalizations.of(context)!.party_code_invalid_or_inactive,
@@ -2066,7 +2174,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
         _isBlocked = true;
       });
       final l10n = AppLocalizations.of(context)!;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(
             '${l10n.wishbox_blocked_title}\n\n${l10n.wishbox_blocked_message}',
@@ -2085,7 +2193,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     }
     if (_deviceId.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(
             AppLocalizations.of(context)!.wish_device_id_unavailable,
@@ -2102,7 +2210,8 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
         .doc(partyId)
         .get();
     final partyLive = partySnap.data();
-    final preWishMode = PreWishHelper.isPreWishWindowOpen(partyLive);
+    final preWishWindow = PreWishHelper.isPreWishWindowOpen(partyLive);
+    final preWishMode = PreWishHelper.isPreWishSubmissionOpen(partyLive);
 
     if (preWishMode &&
         !PreWishLimitService.isUnlimited(
@@ -2117,7 +2226,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
       if (!preStats.allowed) {
         if (!mounted) return;
         final l10n = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(
               l10n.pre_wish_limit_reached(preStats.limit),
@@ -2140,7 +2249,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
         final nextAt = TimeUtils.nextFullHourAfterNow(DateTime.now());
         final nextStr =
             FormattingUtils.formatNextWishFullHourClock(nextAt, context);
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(
               AppLocalizations.of(context)!
@@ -2161,7 +2270,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
       final endedFeedback = _isPartyEnded(partyLive) && partyLive != null
           ? _partyEndedFeedbackFromData(l10n, partyLive)
           : null;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(
             endedFeedback != null
@@ -2169,7 +2278,10 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
                     endedFeedback.partyName ?? l10n.unnamed_party,
                     endedFeedback.djName ?? 'DJ',
                   )
-                : PreWishHelper.isPrePartyWaitOnly(partyLive)
+                : preWishWindow &&
+                        PreWishHelper.arePreWishesPaused(partyLive)
+                    ? l10n.pre_wishes_paused_guest_message
+                    : PreWishHelper.isPrePartyWaitOnly(partyLive)
                     ? l10n.pre_wish_submit_blocked_deadline
                     : l10n.wishbox_inactive_description,
           ),
@@ -2182,7 +2294,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     if (!preWishMode) {
       if (_wishLimit > 0 && _wishRemaining <= 0) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(
               AppLocalizations.of(context)!.wish_limit_reset_next_hour,
@@ -2196,7 +2308,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
         final canAddWish = await _checkWishLimit(partyId);
         if (!canAddWish) {
           if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(
                 AppLocalizations.of(context)!.wish_limit_reset_next_hour,
@@ -2210,6 +2322,18 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     }
 
     try {
+      final djId = await _resolvePartyDjId(partyId);
+      if (await DjSongBlacklistService.instance.decide(
+            djId: djId,
+            title: title,
+            artist: artist,
+            partyId: partyId,
+          ) ==
+          SongBlacklistOutcome.blockGuest) {
+        await _showBlacklistGuestBlockedDialog();
+        return;
+      }
+
       await DuplicateCheckService.ensurePartySettingsLoaded();
 
       if (await DuplicateCheckService.checkIfSongWasPlayed(
@@ -2279,7 +2403,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
         return;
       }
       final l = AppLocalizations.of(context)!;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text('${l.error_saving} $e'),
           backgroundColor: Colors.red,
@@ -2297,6 +2421,13 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     if (djId == null || djId.isEmpty) {
       throw Exception('DJ-ID der Party konnte nicht ermittelt werden');
     }
+    if (_djId != djId) {
+      _djId = djId;
+    }
+    DjSongBlacklistService.instance.startGuestWatching(
+      djId: djId,
+      partyId: partyId,
+    );
     return djId;
   }
 
@@ -2350,6 +2481,20 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
       'client_platform': _wishClientPlatform(),
     };
 
+    final blacklistOutcome = await DjSongBlacklistService.instance.decide(
+      djId: djId,
+      title: title,
+      artist: artist,
+      partyId: partyId,
+    );
+    if (blacklistOutcome == SongBlacklistOutcome.blockGuest) {
+      await _showBlacklistGuestBlockedDialog();
+      return;
+    }
+    if (blacklistOutcome == SongBlacklistOutcome.rejectToDj) {
+      wishData.addAll(DjSongBlacklistService.instance.rejectPatch());
+    }
+
     if (_selectedSpotifyId != null && _selectedSpotifyId!.trim().isNotEmpty) {
       wishData['spotify_id'] = _selectedSpotifyId;
       if (_selectedDurationMs != null) {
@@ -2401,6 +2546,29 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
     bool isPreWish = false,
   }) async {
     final djId = await _resolvePartyDjId(partyId);
+    final blacklistOutcome = await DjSongBlacklistService.instance.decide(
+      djId: djId,
+      title: title,
+      artist: artist,
+      partyId: partyId,
+    );
+    if (blacklistOutcome == SongBlacklistOutcome.blockGuest) {
+      await _showBlacklistGuestBlockedDialog();
+      return;
+    }
+    if (blacklistOutcome == SongBlacklistOutcome.rejectToDj) {
+      await _submitNewWish(
+        title: title,
+        artist: artist,
+        greeting: greeting,
+        name: name,
+        partyId: partyId,
+        partyCode: partyCode,
+        clientId: clientId,
+        isPreWish: isPreWish,
+      );
+      return;
+    }
     var actualOriginalId = match.documentId;
     final md = match.data;
     if (md['is_duplicate'] == true && md['original_wish_id'] != null) {
@@ -2450,11 +2618,11 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
       } else if (person == originalOwnerName && baseCreated is Timestamp) {
         createdAtList.add(baseCreated);
       } else if (person == sanitizedName) {
-        createdAtList.add(FieldValue.serverTimestamp());
+        createdAtList.add(Timestamp.now());
       } else if (baseCreated is Timestamp) {
         createdAtList.add(baseCreated);
       } else {
-        createdAtList.add(FieldValue.serverTimestamp());
+        createdAtList.add(Timestamp.now());
       }
     }
 
@@ -2483,6 +2651,7 @@ class _WishesPageState extends State<WishesPage> with WidgetsBindingObserver {
       'createdAt_list': createdAtList,
       'greetings': greetings,
       'is_registered_users': existingIsRegisteredUsers,
+      'duplicate_updated_at': FieldValue.serverTimestamp(),
     };
     // Vorab-Queue → bei Dublette während laufender Party in Offen übernehmen
     if (PreWishHelper.isQueuedPreWish(originalData)) {
@@ -2945,7 +3114,7 @@ class ContactFormState extends State<ContactForm> {
       final message = sanitizeInput(_messageController.text.trim());
 
       if (name.length > 100) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(
               localizations.contact_error_name_too_long,
@@ -2956,7 +3125,7 @@ class ContactFormState extends State<ContactForm> {
         return;
       }
       if (subject.length > 200) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(
               localizations.contact_error_subject_too_long,
@@ -2967,7 +3136,7 @@ class ContactFormState extends State<ContactForm> {
         return;
       }
       if (message.length > 3000) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(
               localizations.contact_error_message_too_long,

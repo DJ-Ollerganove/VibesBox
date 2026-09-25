@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -583,6 +584,13 @@ class UserService {
     clearCache();
   }
 
+  /// Lokales UserModel patchen (z. B. nach erfolgreichem Self-Service-Write).
+  void applyLocalUserPatch(UserModel Function(UserModel current) patch) {
+    final root = _userModelFromRootDoc;
+    if (root == null) return;
+    _setRootUserAndEmit(patch(root));
+  }
+
   /// Deaktiviert den Account: setzt status='inaktiv' und deactivated_at in Firestore,
   /// löscht den Auth-User (damit die E-Mail für Neuregistrierung frei wird), dann Logout.
   /// Muss nur vom eigentlichen User aufgerufen werden (nach Re-Auth).
@@ -621,6 +629,48 @@ class UserService {
     } catch (e) {
       debugLog('UserService ensureDjLogoCached: $e');
     }
+  }
+
+  /// Login-Zähler + lastLogin — zuerst Callable (Admin), dann Firestore-Fallback.
+  static Future<void> recordLoginActivity({
+    required String uid,
+    required String? email,
+    required String? displayName,
+    required String? roleId,
+    required bool seedCreatedAt,
+    required int loginCount,
+    required Timestamp lastLogin,
+    required Timestamp? previousLogin,
+  }) async {
+    try {
+      await FirebaseFunctions.instanceFor(region: 'us-central1')
+          .httpsCallable('recordUserLoginActivity')
+          .call<Map<String, dynamic>>({
+        'email': email ?? '',
+        'displayName': displayName ?? '',
+        'seedCreatedAt': seedCreatedAt,
+      });
+      debugLog('UserService: Login-Aktivität via Callable OK (uid=$uid)');
+      return;
+    } catch (e) {
+      debugLog('UserService: Callable Login fehlgeschlagen, Firestore-Fallback: $e');
+    }
+
+    final updateData = <String, dynamic>{
+      'email': email,
+      'displayName': displayName,
+      'loginCount': loginCount,
+      'lastLogin': lastLogin,
+      'previousLogin': previousLogin,
+    };
+    if (seedCreatedAt) {
+      updateData['created_at'] = lastLogin;
+    }
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .set(_sanitizeWriteMap(updateData), SetOptions(merge: true));
+    debugLog('UserService: Login-Aktivität Firestore OK (uid=$uid)');
   }
 }
 

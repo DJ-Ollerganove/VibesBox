@@ -1,39 +1,55 @@
-const CACHE_NAME = 'dj-wunschbox-v6';
-const urlsToCache = [
-  '/vb/',
-  '/vb/index.html',
-  '/vb/manifest.json'
-];
+const CACHE_NAME = 'dj-wunschbox-v13';
 
-
-// Fetch Event
-self.addEventListener('fetch', (event) => {
-  event.respondWith(
-    caches.match(event.request)
-      .then((response) => {
-        // Cache hit - return response
-        if (response) {
-          return response;
-        }
-        return fetch(event.request);
-      }
+// Install: alten Cache leeren, sofort aktivieren
+self.addEventListener('install', (event) => {
+  self.skipWaiting();
+  event.waitUntil(
+    caches.keys().then((names) =>
+      Promise.all(names.map((name) => caches.delete(name)))
     )
   );
 });
 
-// Activate Event
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
-            return caches.delete(cacheName);
-          }
-        })
-      );
-    })
+    caches.keys().then((cacheNames) =>
+      Promise.all(
+        cacheNames
+          .filter((cacheName) => cacheName !== CACHE_NAME)
+          .map((cacheName) => caches.delete(cacheName))
+      )
+    ).then(() => self.clients.claim())
   );
 });
 
+// JS / Lang-Pakete: immer Netzwerk (nie stale i18n-Keys wie suggestions_auto_appear).
+// Andere Assets: Netzwerk zuerst, Cache nur als Offline-Fallback.
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  if (req.method !== 'GET') return;
 
+  let path = '';
+  try {
+    path = new URL(req.url).pathname || '';
+  } catch (e) {
+    return;
+  }
+
+  const noStore =
+    path.indexOf('/vb/lang/') === 0 ||
+    path.indexOf('/vb/scripts/') === 0 ||
+    path.endsWith('/vb/app.js') ||
+    path.endsWith('/vb/service-worker.js') ||
+    path.endsWith('.js');
+
+  if (noStore) {
+    event.respondWith(fetch(req));
+    return;
+  }
+
+  event.respondWith(
+    fetch(req)
+      .then((response) => response)
+      .catch(() => caches.match(req))
+  );
+});

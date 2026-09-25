@@ -1,13 +1,18 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'dart:async';
 
 import '../l10n/app_localizations.dart';
 import '../helpers/security_helper.dart';
 import '../services/countries_service.dart';
+import '../services/dj_b2b_service.dart';
 import '../services/user_service.dart';
+import '../services/user_self_settings_service.dart';
 import '../services/wishbox_suggestions_settings_service.dart';
+import '../utils/firebase_error_message.dart';
 import '../utils/ui_constants.dart';
+import '../app_scaffold_messenger.dart';
 
 /// Pflicht-Dialog für DJs: Real Name, Land, Geburtsdatum. Nicht wegklickbar.
 /// Nach Speichern: hasCompletedProfile = true.
@@ -26,6 +31,7 @@ class _MandatoryProfileDialogState extends State<MandatoryProfileDialog> {
   List<CountryEntry> _countries = [];
   bool _loadingCountries = true;
   bool _saving = false;
+  String? _saveError;
 
   @override
   void initState() {
@@ -86,34 +92,34 @@ class _MandatoryProfileDialogState extends State<MandatoryProfileDialog> {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
 
-    setState(() => _saving = true);
+    setState(() {
+      _saving = true;
+      _saveError = null;
+    });
     try {
-      final batch = FirebaseFirestore.instance.batch();
-      final userRef = FirebaseFirestore.instance.collection('users').doc(uid);
-      batch.update(
-        userRef,
-        {
-          'realName': SecurityHelper.sanitize(
-            _realNameController.text.trim(),
-            maxLength: 80,
-          ),
-          'country': _selectedCountryCode,
-          'birthDate': _birthDate != null
-              ? Timestamp.fromDate(_birthDate!)
-              : null,
-          'hasCompletedProfile': true,
-          WishboxSuggestionsSettingsService.userField: true,
-        }.map((k, v) => MapEntry(k, SecurityHelper.sanitizeDynamic(v))),
-      );
-      batch.set(
-        WishboxSuggestionsSettingsService.guestLiveRef(uid),
-        {
-          WishboxSuggestionsSettingsService.userField: true,
-          'updatedAt': FieldValue.serverTimestamp(),
-        },
-        SetOptions(merge: true),
-      );
-      await batch.commit();
+      final birth = _birthDate!;
+      await UserSelfSettingsService.instance.write({
+        'realName': SecurityHelper.sanitize(
+          _realNameController.text.trim(),
+          maxLength: 80,
+        ),
+        'country': _selectedCountryCode,
+        'birthDate': Timestamp.fromDate(birth),
+        'hasCompletedProfile': true,
+        WishboxSuggestionsSettingsService.userField: true,
+      });
+      try {
+        await WishboxSuggestionsSettingsService.guestLiveRef(uid).set(
+          {
+            WishboxSuggestionsSettingsService.userField: true,
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+      } catch (_) {
+        // Wunschbox-Gast-Flag ist optional; Profil-Abschluss darf dadurch nicht scheitern.
+      }
+      unawaited(DjB2bService.instance.ensureCode());
       if (mounted) {
         UserService().forceRefresh();
         Navigator.of(context).pop(true);
@@ -121,13 +127,20 @@ class _MandatoryProfileDialogState extends State<MandatoryProfileDialog> {
     } catch (e) {
       if (mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        final detail = formatFirebaseErrorDetail(e);
+        final message = '${l.error_saving} $detail';
+        setState(() {
+          _saving = false;
+          _saveError = message;
+        });
+        showTopOverlayVibesSnackBar(
           SnackBar(
-            content: Text('${l.error_saving} $e'),
+            content: Text(message),
             backgroundColor: Colors.red,
           ),
+          tag: 'mandatory_profile_save',
+          error: e,
         );
-        setState(() => _saving = false);
       }
     }
   }
@@ -160,7 +173,7 @@ class _MandatoryProfileDialogState extends State<MandatoryProfileDialog> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      'Profil vervollständigen',
+                      l10n.mandatory_profile_title,
                       style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.bold,
                         color: Colors.white,
@@ -168,7 +181,7 @@ class _MandatoryProfileDialogState extends State<MandatoryProfileDialog> {
                     ),
                     const SizedBox(height: 12),
                     Text(
-                      'Um VibesBox noch besser zu machen und für rein statistische Zwecke, benötigen wir noch diese Angaben von dir. Deine Daten werden vertraulich behandelt und nirgendwo weiter verwendet.',
+                      l10n.mandatory_profile_intro,
                       style: Theme.of(
                         context,
                       ).textTheme.bodyMedium?.copyWith(color: Colors.grey[300]),
@@ -178,9 +191,9 @@ class _MandatoryProfileDialogState extends State<MandatoryProfileDialog> {
                       controller: _realNameController,
                       maxLength: 80,
                       decoration: InputDecoration(
-                        labelText: 'Name',
+                        labelText: l10n.name,
                         labelStyle: TextStyle(color: Colors.grey[400]),
-                        hintText: 'Vor- und Nachname',
+                        hintText: l10n.mandatory_profile_name_hint,
                         hintStyle: TextStyle(color: Colors.grey[500]),
                         enabledBorder: OutlineInputBorder(
                           borderSide: BorderSide(
@@ -214,8 +227,9 @@ class _MandatoryProfileDialogState extends State<MandatoryProfileDialog> {
                         setState(() {});
                       },
                       validator: (v) {
-                        if (v == null || v.trim().isEmpty)
-                          return 'Bitte Namen angeben.';
+                        if (v == null || v.trim().isEmpty) {
+                          return l10n.mandatory_profile_name_required;
+                        }
                         return null;
                       },
                     ),
@@ -237,7 +251,7 @@ class _MandatoryProfileDialogState extends State<MandatoryProfileDialog> {
                         dropdownColor: Colors.grey.shade800,
                         style: const TextStyle(color: Colors.white),
                         decoration: InputDecoration(
-                          labelText: 'Land',
+                          labelText: l10n.mandatory_profile_country_label,
                           labelStyle: TextStyle(color: Colors.grey[400]),
                           enabledBorder: OutlineInputBorder(
                             borderSide: BorderSide(
@@ -270,8 +284,9 @@ class _MandatoryProfileDialogState extends State<MandatoryProfileDialog> {
                         onChanged: (v) =>
                             setState(() => _selectedCountryCode = v),
                         validator: (v) {
-                          if (v == null || v.isEmpty)
-                            return 'Bitte Land wählen.';
+                          if (v == null || v.isEmpty) {
+                            return l10n.mandatory_profile_country_required;
+                          }
                           return null;
                         },
                       ),
@@ -287,7 +302,7 @@ class _MandatoryProfileDialogState extends State<MandatoryProfileDialog> {
                       icon: const Icon(Icons.calendar_today, size: 20),
                       label: Text(
                         _birthDate == null
-                            ? 'Geburtsdatum wählen'
+                            ? l10n.mandatory_profile_pick_birthdate
                             : '${_birthDate!.day}.${_birthDate!.month}.${_birthDate!.year}',
                       ),
                     ),
@@ -296,8 +311,8 @@ class _MandatoryProfileDialogState extends State<MandatoryProfileDialog> {
                         padding: const EdgeInsets.only(top: 6),
                         child: Text(
                           _birthDate!.isAfter(DateTime.now())
-                              ? 'Datum darf nicht in der Zukunft liegen.'
-                              : 'Du musst mindestens 10 Jahre alt sein.',
+                              ? l10n.mandatory_profile_birthdate_future
+                              : l10n.mandatory_profile_min_age,
                           style: const TextStyle(
                             color: Colors.red,
                             fontSize: 12,
@@ -312,18 +327,18 @@ class _MandatoryProfileDialogState extends State<MandatoryProfileDialog> {
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(color: UIConstants.appOrange),
                       ),
-                      child: const Row(
+                      child: Row(
                         children: [
-                          Icon(
+                          const Icon(
                             Icons.warning_amber_rounded,
                             color: UIConstants.appOrange,
                             size: 24,
                           ),
-                          SizedBox(width: 10),
+                          const SizedBox(width: 10),
                           Expanded(
                             child: Text(
-                              'Das Geburtsdatum kann später nicht mehr geändert werden!',
-                              style: TextStyle(
+                              l10n.mandatory_profile_birthdate_immutable,
+                              style: const TextStyle(
                                 fontWeight: FontWeight.bold,
                                 color: Colors.white,
                               ),
@@ -333,6 +348,26 @@ class _MandatoryProfileDialogState extends State<MandatoryProfileDialog> {
                       ),
                     ),
                     const SizedBox(height: 24),
+                    if (_saveError != null) ...[
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        margin: const EdgeInsets.only(bottom: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withValues(alpha: 0.18),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.redAccent),
+                        ),
+                        child: Text(
+                          _saveError!,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            height: 1.35,
+                          ),
+                        ),
+                      ),
+                    ],
                     SizedBox(
                       width: double.infinity,
                       child: FilledButton(

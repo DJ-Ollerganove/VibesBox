@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/debug_log.dart';
@@ -17,6 +19,7 @@ class NavigationService {
   static const String _prefsKey = 'main_navigation_tab_index';
   static const String _prefsKeyAdminViewRole = 'admin_ui_view_role';
   static const String _prefsKeyPreferredStartView = 'preferred_start_view';
+  static const String _prefsKeyLastAuthUid = 'last_auth_uid';
 
   /// Einmal pro Prozess: [hydrateNavigationFromPrefs] darf Prefs nur einmal einlesen.
   bool _hydratedFromPrefs = false;
@@ -24,6 +27,7 @@ class NavigationService {
   /// Synchroner Spiegel der Prefs (Admin „Admin“ vs „DJ“) – gesetzt bei Hydration/Persist/Clear.
   String? _cachedAdminViewRole;
   String _cachedPreferredStartView = 'admin_dashboard';
+  String? _cachedLastAuthUid;
 
   /// Aktueller Tab-Index (IndexedStack).
   final ValueNotifier<int> currentTabIndex = ValueNotifier<int>(0);
@@ -32,6 +36,7 @@ class NavigationService {
   String? get cachedAdminViewRole => _cachedAdminViewRole;
   String get cachedPreferredStartView => _cachedPreferredStartView;
   String get preferredStartView => _cachedPreferredStartView;
+  String? get lastAuthUid => _cachedLastAuthUid;
 
   static String _sanitizePreferredStartView(String? value) {
     switch (value) {
@@ -63,8 +68,10 @@ class NavigationService {
       _cachedPreferredStartView = _sanitizePreferredStartView(
         p.getString(_prefsKeyPreferredStartView),
       );
+      final lastUid = p.getString(_prefsKeyLastAuthUid)?.trim();
+      _cachedLastAuthUid = (lastUid != null && lastUid.isNotEmpty) ? lastUid : null;
       debugLog(
-        'NavigationService: hydrate – tab=${currentTabIndex.value}, adminView=${_cachedAdminViewRole ?? "null"}, preferredStart=$_cachedPreferredStartView',
+        'NavigationService: hydrate – tab=${currentTabIndex.value}, adminView=${_cachedAdminViewRole ?? "null"}, preferredStart=$_cachedPreferredStartView, lastAuth=${_cachedLastAuthUid ?? "null"}',
       );
     } catch (e) {
       debugLog('NavigationService.hydrateNavigationFromPrefs: $e');
@@ -92,6 +99,30 @@ class NavigationService {
   /// Nur bei **echtem Logout** (Firebase signOut) – Tab auf Startseite.
   void resetToHome() {
     setTabIndex(0, force: true);
+  }
+
+  /// Session-Restore nach Prozess-Tod: gleiche UID → letzten Tab behalten.
+  void rememberAuthUid(String uid) {
+    final next = uid.trim();
+    if (next.isEmpty) return;
+    if (_cachedLastAuthUid == next) return;
+    _cachedLastAuthUid = next;
+    unawaited(_persistLastAuthUid(next));
+  }
+
+  Future<void> clearLastAuthUid() async {
+    _cachedLastAuthUid = null;
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.remove(_prefsKeyLastAuthUid);
+    } catch (_) {}
+  }
+
+  Future<void> _persistLastAuthUid(String uid) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_prefsKeyLastAuthUid, uid);
+    } catch (_) {}
   }
 
   /// Admin-Konten: gewählte UI-Ansicht „Admin“ vs „DJ“ (überlebt [MainPage]-Neuaufbau).

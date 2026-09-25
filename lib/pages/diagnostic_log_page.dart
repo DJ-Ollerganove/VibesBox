@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../l10n/app_localizations.dart';
 import '../services/app_diagnostic_log_service.dart';
 import '../widgets/custom_page_header.dart';
+import '../app_scaffold_messenger.dart';
 
 /// Admin-DJ: Diagnoseprotokoll auf dem Gerät (Freeze, Abstürze, Shazam, Party).
 class DiagnosticLogPage extends StatefulWidget {
@@ -45,10 +47,16 @@ class _DiagnosticLogPageState extends State<DiagnosticLogPage> {
     switch (level) {
       case 'ERROR':
         return Colors.redAccent;
+      case 'SNACKBAR':
+        return Colors.red;
+      case 'PARTY':
+        return Colors.deepOrangeAccent;
       case 'WARN':
         return Colors.orangeAccent;
       case 'SHAZAM':
         return Colors.lightBlueAccent;
+      case 'HISTORY':
+        return Colors.amberAccent;
       case 'LIFE':
         return Colors.greenAccent;
       default:
@@ -58,6 +66,7 @@ class _DiagnosticLogPageState extends State<DiagnosticLogPage> {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     if (!AppDiagnosticLogService.canAccessDiagnosticUi()) {
       return Scaffold(
         backgroundColor: Colors.transparent,
@@ -86,10 +95,10 @@ class _DiagnosticLogPageState extends State<DiagnosticLogPage> {
                     icon: const Icon(Icons.arrow_back, color: Colors.white),
                     onPressed: () => Navigator.of(context).pop(),
                   ),
-                  const Expanded(
+                  Expanded(
                     child: CustomPageHeader(
                       icon: Icons.bug_report_outlined,
-                      title: 'Diagnose-Log',
+                      title: l.diagnostic_log_title,
                     ),
                   ),
                 ],
@@ -98,8 +107,7 @@ class _DiagnosticLogPageState extends State<DiagnosticLogPage> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Text(
-                'Protokoll auf diesem Gerät (auch Release). Nach Absturz oder Freeze: '
-                'hier prüfen oder exportieren. Keine automatische Cloud-Übertragung.',
+                l.diagnostic_log_description,
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.65),
                   fontSize: 12.5,
@@ -112,14 +120,14 @@ class _DiagnosticLogPageState extends State<DiagnosticLogPage> {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: SwitchListTile(
                 contentPadding: EdgeInsets.zero,
-                title: const Text(
-                  'Aufzeichnung aktiv',
-                  style: TextStyle(color: Colors.white, fontSize: 15),
+                title: Text(
+                  l.diagnostic_log_capture_active,
+                  style: const TextStyle(color: Colors.white, fontSize: 15),
                 ),
                 subtitle: Text(
                   _captureOn
-                      ? 'Fehler, Lifecycle, Shazam & wichtige Events'
-                      : 'Pausiert — nur Anzeige alter Einträge',
+                      ? l.diagnostic_log_capture_on_hint
+                      : l.diagnostic_log_capture_off_hint,
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.55),
                     fontSize: 12,
@@ -138,11 +146,21 @@ class _DiagnosticLogPageState extends State<DiagnosticLogPage> {
               padding: const EdgeInsets.symmetric(horizontal: 12),
               child: Row(
                 children: [
-                  for (final f in ['ALL', 'ERROR', 'LIFE', 'SHAZAM', 'INFO', 'WARN'])
+                  for (final f in [
+                    'ALL',
+                    'SNACKBAR',
+                    'PARTY',
+                    'ERROR',
+                    'LIFE',
+                    'SHAZAM',
+                    'HISTORY',
+                    'INFO',
+                    'WARN',
+                  ])
                     Padding(
                       padding: const EdgeInsets.only(right: 8),
                       child: FilterChip(
-                        label: Text(f == 'ALL' ? 'Alle' : f),
+                        label: Text(f == 'ALL' ? l.filter_all : f),
                         selected: _filter == f,
                         onSelected: (_) => setState(() => _filter = f),
                         selectedColor: Colors.orange.withValues(alpha: 0.35),
@@ -164,17 +182,17 @@ class _DiagnosticLogPageState extends State<DiagnosticLogPage> {
                 children: [
                   _actionButton(
                     icon: Icons.copy,
-                    label: 'Kopieren',
+                    label: l.copy,
                     onPressed: _copyAll,
                   ),
                   _actionButton(
                     icon: Icons.share_outlined,
-                    label: 'Teilen',
+                    label: l.share,
                     onPressed: _shareLog,
                   ),
                   _actionButton(
                     icon: Icons.delete_outline,
-                    label: 'Leeren',
+                    label: l.clear,
                     onPressed: _clearLog,
                   ),
                 ],
@@ -189,7 +207,7 @@ class _DiagnosticLogPageState extends State<DiagnosticLogPage> {
                   if (items.isEmpty) {
                     return Center(
                       child: Text(
-                        'Noch keine Einträge.\nApp nutzen — bei Problemen erscheinen Zeilen hier.',
+                        l.diagnostic_log_empty,
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.5),
@@ -267,8 +285,9 @@ class _DiagnosticLogPageState extends State<DiagnosticLogPage> {
     final text = await AppDiagnosticLogService.instance.exportAsText();
     await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Log in Zwischenablage kopiert')),
+    final l = AppLocalizations.of(context)!;
+    showVibesSnackBar(context, 
+      SnackBar(content: Text(l.log_copied_to_clipboard)),
     );
   }
 
@@ -279,30 +298,33 @@ class _DiagnosticLogPageState extends State<DiagnosticLogPage> {
       await file.writeAsString(text, flush: true);
       await Share.shareXFiles(
         [XFile(file.path, mimeType: 'text/plain', name: 'vibesbox_diagnostic.log')],
-        subject: 'VibesBox Diagnose-Log',
+        subject: AppLocalizations.of(context)!.diagnostic_log_share_subject,
       );
     } else {
-      await Share.share(text, subject: 'VibesBox Diagnose-Log');
+      await Share.share(text, subject: AppLocalizations.of(context)!.diagnostic_log_share_subject);
     }
   }
 
   Future<void> _clearLog() async {
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Log leeren?'),
-        content: const Text('Alle Einträge auf diesem Gerät werden gelöscht.'),
+      builder: (ctx) {
+        final l = AppLocalizations.of(ctx)!;
+        return AlertDialog(
+        title: Text(l.diagnostic_log_clear_title),
+        content: Text(l.diagnostic_log_clear_body),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Abbrechen'),
+            child: Text(l.cancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Leeren'),
+            child: Text(l.clear),
           ),
         ],
-      ),
+      );
+      },
     );
     if (ok != true) return;
     await AppDiagnosticLogService.instance.clear();

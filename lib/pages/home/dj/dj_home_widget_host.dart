@@ -48,6 +48,9 @@ class DjHomeWidgetDeps {
 class DjHomeWidgetHost {
   const DjHomeWidgetHost._();
 
+  static String? _livePartyId(DjHomeWidgetDeps deps) =>
+      deps.partySnapshot.activePartyId ?? deps.partySnapshot.graceParty?.id;
+
   static Widget? build(
     BuildContext context,
     String widgetId,
@@ -60,10 +63,15 @@ class DjHomeWidgetHost {
       case DjHomeWidgetId.partyStatus:
         return deps.buildPartyStatusSection(context);
       case DjHomeWidgetId.statsLive:
+        final livePartyId = deps.partySnapshot.activePartyId ??
+            deps.partySnapshot.graceParty?.id;
+        if (livePartyId == null) {
+          return const SizedBox.shrink();
+        }
         return _wrapStats(
           context,
           deps,
-          partyId: deps.partySnapshot.activePartyId,
+          partyId: livePartyId,
           sectionTitle: l.dj_home_widget_stats_live,
           showLiveIndicator: true,
           emptyHint: l.dj_home_no_party_running,
@@ -95,8 +103,14 @@ class DjHomeWidgetHost {
           mode: 'history',
         );
       case DjHomeWidgetId.historyRecent:
+        if (_livePartyId(deps) == null) {
+          return const SizedBox.shrink();
+        }
         return const DjHomeRecentHistoryWidget();
       case DjHomeWidgetId.openWishesCount:
+        if (_livePartyId(deps) == null) {
+          return const SizedBox.shrink();
+        }
         return const DjHomeOpenWishesCountWidget();
       case DjHomeWidgetId.preWishesCount:
         return const DjHomePreWishesCountWidget();

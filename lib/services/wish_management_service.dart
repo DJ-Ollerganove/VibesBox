@@ -12,6 +12,8 @@ import '../utils/debug_log.dart';
 import '../utils/pre_wish_helper.dart';
 import '../utils/wish_paths.dart';
 import 'active_party_service.dart';
+import 'open_wishes_visibility_service.dart';
+import '../app_scaffold_messenger.dart';
 
 /// Service für die Verwaltung von Musikwünschen in Firestore
 /// Enthält Datenoperationen und UI-Dialoge für Wunsch-Verwaltung
@@ -25,6 +27,10 @@ class WishManagementService {
 
   static Future<String> _requirePartyId([String? partyId]) async {
     if (partyId != null && partyId.isNotEmpty) return partyId;
+    final fromVisibility = OpenWishesVisibilityService.resolveDjWishPartyId();
+    if (fromVisibility != null && fromVisibility.isNotEmpty) {
+      return fromVisibility;
+    }
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       throw StateError('WishManagementService: nicht eingeloggt');
@@ -80,13 +86,43 @@ class WishManagementService {
         .snapshots();
   }
 
-  /// Nur Vorab-Wünsche (Party-Karte / Übersicht) — kein voller pending-Stream.
-  static Stream<QuerySnapshot> getPreWishOverviewStream(String partyId) {
+  static final Map<String, Stream<QuerySnapshot>> _preWishOverviewStreamCache =
+      {};
+
+  static Query<Map<String, dynamic>> _preWishOverviewQuery(String partyId) {
     return WishPaths.partyWishes(partyId)
         .where('status', isEqualTo: 'pending')
         .where('is_pre_wish', isEqualTo: true)
-        .limit(200)
-        .snapshots();
+        .limit(200);
+  }
+
+  /// Einmaliger Read für Party-Karten (sofort „0 Wünsche“, nicht „…“).
+  static Future<QuerySnapshot<Map<String, dynamic>>> fetchPreWishOverviewOnce(
+    String partyId,
+  ) {
+    if (partyId.isEmpty) {
+      return Future.error(ArgumentError('partyId empty'));
+    }
+    return _preWishOverviewQuery(partyId).get();
+  }
+
+  /// Nur Vorab-Wünsche (Party-Karte / Übersicht) — ein Firestore-Listener pro Party.
+  static Stream<QuerySnapshot> getPreWishOverviewStream(String partyId) {
+    if (partyId.isEmpty) {
+      return Stream<QuerySnapshot>.empty();
+    }
+    return _preWishOverviewStreamCache.putIfAbsent(
+      partyId,
+      () => _preWishOverviewQuery(partyId).snapshots(),
+    );
+  }
+
+  /// Für [StreamBuilder]: immer sofort erste Snapshot (get), danach Live-Updates.
+  /// Der gecachte [getPreWishOverviewStream] replayed nicht — zweite Listener blieben auf „…“.
+  static Stream<QuerySnapshot> watchPreWishOverview(String partyId) async* {
+    if (partyId.isEmpty) return;
+    yield await fetchPreWishOverviewOnce(partyId);
+    yield* _preWishOverviewQuery(partyId).snapshots();
   }
 
   /// Mindestens ein Vorab-Wunsch noch nicht in Offen freigegeben (DJ-Tab „Vorab“).
@@ -102,8 +138,7 @@ class WishManagementService {
     if (partyId.isEmpty) {
       return Stream.value(false);
     }
-    return getPreWishOverviewStream(partyId)
-        .map(snapshotHasQueuedPreWishes);
+    return watchPreWishOverview(partyId).map(snapshotHasQueuedPreWishes);
   }
 
   /// Stream-Funktion für favorisierte Wünsche einer bestimmten Party
@@ -205,8 +240,7 @@ class WishManagementService {
     final now = FieldValue.serverTimestamp();
     int validUpdates = 0;
     int skippedUpdates = 0;
-    /// Bei Wiederherstellung abgelehnter Wünsche (user_blocked): Gäste-Sperre in Firestore entfernen, sonst bleibt die PWA gesperrt.
-    final clientIdsToUnblock = <String>{};
+    int skippedBlockedGuestRestores = 0;
 
     debugLog(
       '🔒 updateGroupedStatus: Prüfe ${docIds.length} Dokumente für Party-ID: $partyId',
@@ -228,15 +262,24 @@ class WishManagementService {
 
         final docData = docSnapshot.data();
 
+        // Gesperrte Gäste: Abgelehnt → Offen ist verboten (Sperre bleibt, kein Auto-Unblock).
         if (status == 'pending' &&
             (docData?['status'] as String?) == 'rejected') {
-          final rr = docData?['rejection_reason'] as String?;
-          final autoBlk = docData?['auto_rejected_by_block'] == true;
-          if (rr == 'user_blocked' || autoBlk) {
-            final cid = docData?['client_id'] as String?;
-            if (cid != null && cid.trim().isNotEmpty) {
-              clientIdsToUnblock.add(cid.trim());
-            }
+          final cid = (docData?['client_id'] ?? '').toString().trim();
+          final blockedByFlag =
+              docData?['rejection_reason'] == 'user_blocked' ||
+              docData?['auto_rejected_by_block'] == true;
+          var stillBlocked = blockedByFlag;
+          if (!stillBlocked && cid.isNotEmpty) {
+            stillBlocked = await _isClientBlockedForParty(cid, partyId);
+          }
+          if (stillBlocked) {
+            debugLog(
+              '🚫 updateGroupedStatus: Restore verweigert (Gast gesperrt) doc=$docId',
+            );
+            skippedBlockedGuestRestores++;
+            skippedUpdates++;
+            continue;
           }
         }
 
@@ -265,6 +308,7 @@ class WishManagementService {
           updateData['rejected_at'] = FieldValue.delete();
           updateData['rejection_reason'] = FieldValue.delete();
           updateData['auto_rejected_by_block'] = FieldValue.delete();
+          updateData['auto_rejected_by_blacklist'] = FieldValue.delete();
         }
 
         batch.update(docRef, _sanitizeWriteMap(updateData));
@@ -283,33 +327,48 @@ class WishManagementService {
       debugLog(
         '✅ updateGroupedStatus: $validUpdates Dokumente aktualisiert, $skippedUpdates übersprungen',
       );
-      if (status == 'pending' && clientIdsToUnblock.isNotEmpty) {
-        try {
-          final unblockBatch = FirebaseFirestore.instance.batch();
-          final fs = FirebaseFirestore.instance;
-          for (final cid in clientIdsToUnblock) {
-            unblockBatch.delete(
-              fs.collection('blocked_guests').doc('${cid}_$partyId'),
-            );
-            unblockBatch.delete(fs.collection('blocked_devices').doc(cid));
-          }
-          await unblockBatch.commit();
-          debugLog(
-            '✅ updateGroupedStatus: Gäste-Sperre aufgehoben (blocked_guests + blocked_devices) für: $clientIdsToUnblock',
-          );
-        } catch (e) {
-          debugLog(
-            '⚠️ updateGroupedStatus: Wünsche auf pending, aber Entsperren fehlgeschlagen: $e',
-          );
-        }
-      }
     } else {
       debugLog(
         '⚠️ updateGroupedStatus: Keine gültigen Updates (alle Dokumente wurden übersprungen)',
       );
+      if (skippedBlockedGuestRestores > 0 &&
+          skippedBlockedGuestRestores == skippedUpdates) {
+        throw Exception(
+          'Abgelehnte Wünsche gesperrter Gäste können nicht zurück auf Offen gesetzt werden',
+        );
+      }
       throw Exception(
         'Keine Dokumente konnten aktualisiert werden - möglicherweise falsche Party-ID',
       );
+    }
+  }
+
+  /// party_id-Anker in blocked_guests oder blocked_devices.
+  static Future<bool> _isClientBlockedForParty(
+    String clientId,
+    String partyId,
+  ) async {
+    final fs = FirebaseFirestore.instance;
+    try {
+      final guest = await fs
+          .collection('blocked_guests')
+          .doc('${clientId}_$partyId')
+          .get();
+      if (guest.exists) return true;
+      final device = await fs.collection('blocked_devices').doc(clientId).get();
+      if (!device.exists) return false;
+      final data = device.data();
+      final docParty =
+          (data?['party_id'] ?? data?['partyId'] ?? '').toString().trim();
+      if (docParty.isNotEmpty && docParty != partyId) return false;
+      final blockStatus =
+          (data?['block_status'] ?? '').toString().trim().toLowerCase();
+      return blockStatus == 'party_specific' ||
+          blockStatus == 'permanent' ||
+          blockStatus == 'temporary';
+    } catch (e) {
+      debugLog('⚠️ _isClientBlockedForParty: $e');
+      return false;
     }
   }
 
@@ -339,6 +398,43 @@ class WishManagementService {
     }
     await batch.commit();
     debugLog('✅ publishPreWishToOpen: $valid Dokument(e) für Party $partyId');
+  }
+
+  /// Alle noch wartenden Vorab-Wünsche in die offene Liste übernehmen.
+  static Future<int> publishAllQueuedPreWishesToOpen(String partyId) async {
+    if (partyId.isEmpty) {
+      throw ArgumentError('partyId empty');
+    }
+
+    final snap = await fetchPreWishOverviewOnce(partyId);
+    final docIds = <String>[];
+    for (final doc in snap.docs) {
+      final data = doc.data();
+      if (PreWishHelper.isQueuedPreWish(data)) {
+        docIds.add(doc.id);
+      }
+    }
+
+    if (docIds.isEmpty) return 0;
+
+    const batchLimit = 500;
+    for (var offset = 0; offset < docIds.length; offset += batchLimit) {
+      final chunk = docIds.skip(offset).take(batchLimit).toList();
+      final batch = FirebaseFirestore.instance.batch();
+      for (final docId in chunk) {
+        batch.update(WishPaths.partyWish(partyId, docId), {
+          'pre_wish_published': true,
+          'status': 'pending',
+        });
+      }
+      await batch.commit();
+    }
+
+    debugLog(
+      '✅ publishAllQueuedPreWishesToOpen: ${docIds.length} Dokument(e) '
+      'für Party $partyId',
+    );
+    return docIds.length;
   }
 
   /// Löscht mehrere Wünsche (Batch-Operation)
@@ -527,7 +623,7 @@ class WishManagementService {
       try {
         await updateStatus(docId, 'rejected');
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(
                 AppLocalizations.of(context)!.status_updated,
@@ -538,7 +634,7 @@ class WishManagementService {
         }
       } catch (e) {
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(
                 '${AppLocalizations.of(context)!.error_updating} $e',
@@ -552,7 +648,7 @@ class WishManagementService {
       try {
         await deleteWish(docId);
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(
                 AppLocalizations.of(context)!.wish_deleted,
@@ -563,7 +659,7 @@ class WishManagementService {
         }
       } catch (e) {
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(
                 '${AppLocalizations.of(context)!.error_deleting} $e',
@@ -700,7 +796,7 @@ class WishManagementService {
       try {
         await updateStatus(docId, status);
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(
                 AppLocalizations.of(context)!.status_updated,
@@ -711,7 +807,7 @@ class WishManagementService {
         }
       } catch (e) {
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(
                 '${AppLocalizations.of(context)!.error_updating} $e',
@@ -841,7 +937,7 @@ class WishManagementService {
                           : status == 'played'
                               ? loc.snackbar_wishes_marked_played(docIds.length)
                               : loc.snackbar_wishes_updated(docIds.length);
-                      ScaffoldMessenger.of(context).showSnackBar(
+                      showVibesSnackBar(context, 
                         SnackBar(
                           content: Text(msg),
                           backgroundColor: status == 'rejected'
@@ -853,7 +949,7 @@ class WishManagementService {
                   } catch (e) {
                     if (context.mounted) {
                       final locErr = AppLocalizations.of(context)!;
-                      ScaffoldMessenger.of(context).showSnackBar(
+                      showVibesSnackBar(context, 
                         SnackBar(
                           content: Text(locErr.snackbar_error_details(e)),
                           backgroundColor: UIConstants.frameNoParty,
@@ -1011,7 +1107,7 @@ class WishManagementService {
         await deleteGroupedWishes(docIds, partyId);
         if (context.mounted) {
           final locOk = AppLocalizations.of(context)!;
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(locOk.snackbar_wishes_deleted(docIds.length)),
               backgroundColor: UIConstants.frameGespielt,
@@ -1021,7 +1117,7 @@ class WishManagementService {
       } catch (e) {
         if (context.mounted) {
           final locErr = AppLocalizations.of(context)!;
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(locErr.snackbar_error_details(e)),
               backgroundColor: UIConstants.frameNoParty,
@@ -1041,7 +1137,7 @@ class WishManagementService {
         await updateGroupedStatus(docIds, 'rejected', partyId);
         if (context.mounted) {
           final locOk = AppLocalizations.of(context)!;
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(locOk.snackbar_wishes_rejected(docIds.length)),
               backgroundColor: UIConstants.frameGespielt,
@@ -1051,7 +1147,7 @@ class WishManagementService {
       } catch (e) {
         if (context.mounted) {
           final locErr = AppLocalizations.of(context)!;
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(locErr.snackbar_error_details(e)),
               backgroundColor: UIConstants.frameNoParty,
@@ -1167,7 +1263,7 @@ class WishManagementService {
                     debugLog('>>> SERVICE-ENDE: Alle Löschungen durchgelaufen');
                     if (context.mounted) {
                       final locOk = AppLocalizations.of(context)!;
-                      ScaffoldMessenger.of(context).showSnackBar(
+                      showVibesSnackBar(context, 
                         SnackBar(
                           content: Text(locOk.snackbar_wishes_deleted(docIds.length)),
                           backgroundColor: UIConstants.frameGespielt,
@@ -1177,7 +1273,7 @@ class WishManagementService {
                   } catch (e) {
                     if (context.mounted) {
                       final locErr = AppLocalizations.of(context)!;
-                      ScaffoldMessenger.of(context).showSnackBar(
+                      showVibesSnackBar(context, 
                         SnackBar(
                           content: Text(locErr.snackbar_error_details(e)),
                           backgroundColor: UIConstants.frameNoParty,

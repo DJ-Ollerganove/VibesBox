@@ -1,7 +1,8 @@
 /// Extrahiert den Party-Code (genau 8 Ziffern) aus VibesBox-QR-Inhalten.
 ///
 /// Unterstützte Formate:
-/// - https://vibesbox.app/vb/?code=12345678
+/// - https://vibesbox.app/vb/?code=12345678 (QR / PWA)
+/// - https://vibesbox.app/vb/p/12345678 (Deep-Link-Pfad)
 /// - https://vibesbox.app/?code=12345678 (Legacy)
 /// - djwunschbox://wunschbox?code=12345678
 /// - Reine Ziffernfolge: 8-stellig

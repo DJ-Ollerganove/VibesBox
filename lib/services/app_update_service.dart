@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
@@ -9,12 +10,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:new_version_plus/new_version_plus.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../l10n/app_localizations.dart';
 import '../utils/ui_constants.dart';
 import '../utils/debug_log.dart';
-import '../utils/ios_stable_device_id.dart';
+import '../l10n/locale_helper.dart';
+import '../utils/stable_device_id.dart';
+import '../utils/device_display_helper.dart';
+import '../utils/callable_payload_serializer.dart';
+import 'app_diagnostic_log_service.dart';
 
 enum UpdateCheckResult { forceUpdate, optionalUpdate, upToDate, skip }
 
@@ -48,10 +54,143 @@ class AppUpdateService {
   static final ValueNotifier<String> storeVersionDebug =
       ValueNotifier<String>('–');
   static bool _optionalPromptShownInSession = false;
+  static const String _prefOptionalDismissedStoreVersion =
+      'optional_update_dismissed_store_version_v1';
 
-  /// Verhindert viele Firestore-Reads bei schnellen Resume-/Lifecycle-Ketten (pro UID).
+  /// Einmal pro App-Session und UID (nicht bei jedem Rollen-Rebuild erneut).
+  static String? _updateCheckCompletedUid;
+
+  static void resetSessionForLogout() {
+    _optionalPromptShownInSession = false;
+    _updateCheckCompletedUid = null;
+    _lastLogUserAppVersionUid = null;
+    _lastLogUserAppVersionAt = null;
+    _lastLoggedVersionString = null;
+    _sessionTelemetrySucceededUid = null;
+    _sessionTelemetryInFlight = null;
+  }
+
+  /// Erfolgreich geschriebene Geräte-/App-Version-Telemetrie für diese App-Session + UID.
+  /// Erst nach erfolgreichem Write setzen — sonst erneute Versuche bei Login/Home/Resume.
+  static String? _sessionTelemetrySucceededUid;
+  static Future<bool>? _sessionTelemetryInFlight;
+
+  /// Einmal pro Login-Session (manuell oder Auto-Login): aktuelle App-Version + Gerät
+  /// nach Firestore schreiben. Bei Fehler **nicht** als erledigt markieren.
+  static Future<bool> ensureSessionDeviceTelemetry({
+    String reason = 'session',
+  }) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || kIsWeb) return false;
+    if (_sessionTelemetrySucceededUid == user.uid) {
+      debugLog(
+        '📱 AppUpdateService: Session-Telemetrie bereits OK '
+        '(uid=${user.uid}, reason=$reason) — Soft-Refresh',
+      );
+      // Nach erstem Erfolg trotzdem last_seen/Version refreshen (gedrosselt),
+      // sonst bleiben Admin-Daten stundenlang auf dem Stand vom Kaltstart.
+      if (reason == 'resume' ||
+          reason.startsWith('home_') ||
+          reason == 'login') {
+        return logUserAppVersion(force: false);
+      }
+      return true;
+    }
+    final inFlight = _sessionTelemetryInFlight;
+    if (inFlight != null) {
+      debugLog(
+        '📱 AppUpdateService: Session-Telemetrie läuft bereits — warte '
+        '(reason=$reason)',
+      );
+      return inFlight;
+    }
+    final future = _runSessionDeviceTelemetry(reason: reason);
+    _sessionTelemetryInFlight = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_sessionTelemetryInFlight, future)) {
+        _sessionTelemetryInFlight = null;
+      }
+    }
+  }
+
+  static Future<bool> _runSessionDeviceTelemetry({
+    required String reason,
+  }) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || kIsWeb) return false;
+
+    debugLog(
+      '📱 AppUpdateService: Session-Telemetrie starten '
+      '(uid=${user.uid}, reason=$reason)',
+    );
+    // Auth/Token kann beim Kaltstart noch nicht bereit sein — kurz gestaffelt retryen.
+    for (var attempt = 0; attempt < 4; attempt++) {
+      if (attempt > 0) {
+        await Future<void>.delayed(Duration(milliseconds: 400 * attempt));
+        if (FirebaseAuth.instance.currentUser?.uid != user.uid) {
+          return false;
+        }
+      }
+      final ok = await logUserAppVersion(force: true);
+      if (ok) {
+        _sessionTelemetrySucceededUid = user.uid;
+        diagLog(
+          'DEVICE',
+          'Session-Telemetrie OK reason=$reason attempt=${attempt + 1}',
+        );
+        return true;
+      }
+      debugLog(
+        '📱 AppUpdateService: Session-Telemetrie Versuch ${attempt + 1}/4 fehlgeschlagen',
+      );
+    }
+    diagLog('DEVICE', 'Session-Telemetrie FEHLER reason=$reason');
+    return false;
+  }
+
+  /// Fallback von DJ-/Gast-Home, falls Cold-Start die Telemetrie noch nicht geschafft hat.
+  static Future<void> logUserAppVersionFromHomeShell({
+    required String area,
+  }) async {
+    final normalizedArea = area.trim().toLowerCase();
+    if (normalizedArea != 'dj' && normalizedArea != 'guest') return;
+    await ensureSessionDeviceTelemetry(reason: 'home_$normalizedArea');
+  }
+
+  static bool hasCompletedUpdateCheckForUid(String uid) =>
+      _updateCheckCompletedUid == uid;
+
+  static void markUpdateCheckCompletedForUid(String uid) {
+    _updateCheckCompletedUid = uid;
+  }
+
+  static Future<void> markOptionalUpdateDismissed(String storeVersion) async {
+    final v = normalizeSemver(storeVersion);
+    if (v.isEmpty || v == '0.0.0') return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_prefOptionalDismissedStoreVersion, v);
+    } catch (_) {}
+  }
+
+  static Future<bool> wasOptionalUpdateDismissed(String storeVersion) async {
+    final v = normalizeSemver(storeVersion);
+    if (v.isEmpty) return false;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString(_prefOptionalDismissedStoreVersion) == v;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Verhindert viele Firestore-Writes bei schnellen Resume-Ketten (pro UID).
   static String? _lastLogUserAppVersionUid;
   static DateTime? _lastLogUserAppVersionAt;
+  static String? _lastLoggedVersionString;
+  static const Duration _logUserAppVersionMinInterval = Duration(minutes: 5);
 
   /// `flutter run` / Dev-APK: kein Zwang, wenn lokale Version älter als Store.
   static const bool _skipUpdateCheckFromDefine =
@@ -201,116 +340,202 @@ class AppUpdateService {
     }
   }
 
-  static Future<void> logUserAppVersion() async {
-    debugLog('📱 AppUpdateService: logUserAppVersion start');
+  /// Schreibt App-Version + Geräteinfos. [true] nur bei erfolgreichem Callable- oder Firestore-Write.
+  static Future<bool> logUserAppVersion({bool force = false}) async {
+    debugLog('📱 AppUpdateService: logUserAppVersion start (force=$force)');
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null || kIsWeb) return;
-
-    final nowClock = DateTime.now();
-    if (_lastLogUserAppVersionUid == user.uid &&
-        _lastLogUserAppVersionAt != null &&
-        nowClock.difference(_lastLogUserAppVersionAt!) <
-            const Duration(minutes: 2)) {
-      debugLog('📱 AppUpdateService: logUserAppVersion übersprungen (≤2 min)');
-      return;
-    }
-    _lastLogUserAppVersionUid = user.uid;
-    _lastLogUserAppVersionAt = nowClock;
+    if (user == null || kIsWeb) return false;
 
     try {
       final packageInfo = await PackageInfo.fromPlatform();
       final version = packageInfo.version.trim();
       final build = packageInfo.buildNumber.trim();
+      // Explizit Plattform-Version: Android=pubspec, iOS=xcconfig (getrennt!).
       final versionString = build.isEmpty ? version : '$version ($build)';
 
-      final deviceInfo = DeviceInfoPlugin();
-      String deviceId = '';
+      final nowClock = DateTime.now();
+      final sameUid = _lastLogUserAppVersionUid == user.uid;
+      final versionUnchanged =
+          sameUid && _lastLoggedVersionString == versionString;
+      if (!force &&
+          sameUid &&
+          versionUnchanged &&
+          _lastLogUserAppVersionAt != null &&
+          nowClock.difference(_lastLogUserAppVersionAt!) <
+              _logUserAppVersionMinInterval) {
+        debugLog(
+          '📱 AppUpdateService: logUserAppVersion übersprungen '
+          '(≤${_logUserAppVersionMinInterval.inMinutes} min, gleiche Version)',
+        );
+        // Soft-Skip: Daten sind in dieser Session schon erfolgreich geschrieben.
+        return _sessionTelemetrySucceededUid == user.uid ||
+            _lastLoggedVersionString == versionString;
+      }
+
       String deviceModel = '';
+      String deviceModelCode = '';
       String osVersion = '';
       String platform = 'unknown';
 
       if (Platform.isAndroid) {
-        final androidInfo = await deviceInfo.androidInfo;
-        deviceId = androidInfo.id;
-        if (deviceId.isEmpty) {
-          deviceId = androidInfo.fingerprint ?? 'android_unknown';
+        final androidInfo = await DeviceInfoPlugin().androidInfo;
+        deviceModelCode = androidInfo.model.trim();
+        if (deviceModelCode.isEmpty) {
+          deviceModelCode = androidInfo.device.trim();
         }
-        deviceModel = androidInfo.model;
-        osVersion = androidInfo.version.release;
+        deviceModel = DeviceDisplayHelper.androidDisplayName(
+          manufacturer: androidInfo.manufacturer,
+          model: androidInfo.model,
+          brand: androidInfo.brand,
+          device: androidInfo.device,
+          product: androidInfo.product,
+        );
+        osVersion = androidInfo.version.release.trim();
         platform = 'android';
       } else if (Platform.isIOS) {
-        final iosInfo = await deviceInfo.iosInfo;
-        deviceId = await getStableIosDeviceId();
-        if (deviceId.isEmpty) deviceId = 'ios_${iosInfo.model}_unknown';
-        deviceModel = iosInfo.utsname.machine.isNotEmpty
+        final iosInfo = await DeviceInfoPlugin().iosInfo;
+        deviceModelCode = iosInfo.utsname.machine.isNotEmpty
             ? iosInfo.utsname.machine
             : iosInfo.model;
-        if (deviceModel.isEmpty) deviceModel = iosInfo.name;
+        deviceModel = DeviceDisplayHelper.iosMarketingName(deviceModelCode);
+        if (deviceModel.isEmpty) {
+          deviceModel = iosInfo.model.trim().isNotEmpty
+              ? iosInfo.model.trim()
+              : iosInfo.name.trim();
+        }
         osVersion = iosInfo.systemVersion;
         platform = 'ios';
       } else {
-        return;
+        return false;
       }
 
+      if (deviceModel.trim().isEmpty) {
+        deviceModel = deviceModelCode.trim().isNotEmpty
+            ? deviceModelCode.trim()
+            : platform;
+      }
+      if (osVersion.trim().isEmpty) {
+        osVersion = 'unknown';
+      }
+
+      final deviceId = await getStableDeviceId();
       final safeDeviceKey = deviceId.replaceAll('.', '_');
-      final userRef = FirebaseFirestore.instance.collection('users').doc(user.uid);
-      final doc = await userRef.get();
-      final devicesRaw = doc.data()?['devices'];
-      final Map<String, dynamic>? devices = devicesRaw is Map
-          ? Map<String, dynamic>.from(
-              devicesRaw.map(
-                (k, v) => MapEntry(k.toString(), v),
-              ),
-            )
-          : null;
-      Map<String, dynamic>? existing;
-      final rawEntry = devices?[safeDeviceKey];
-      if (rawEntry is Map) {
-        existing = Map<String, dynamic>.from(rawEntry);
-      }
-      final storedVersion = existing?['app_version'] as String?;
-      final lastSeen = existing?['last_seen'] as Timestamp?;
-      final now = DateTime.now();
-      final lastSeenOlderThan24h =
-          lastSeen == null || now.difference(lastSeen.toDate()).inHours >= 24;
-      final versionChanged = storedVersion?.trim() != versionString;
-      final systemTag = existing?['system_locale_tag']?.toString().trim();
-      final missingSystemLocale =
-          systemTag == null || systemTag.isEmpty;
-
-      // Wichtig: sonst wird bei gleicher Version + frischem last_seen nie
-      // `system_locale_tag` nachgetragen (Admin sieht dann nur „–“).
-      if (!versionChanged && !lastSeenOlderThan24h && !missingSystemLocale) {
-        return;
-      }
-
+      final appLanguage = LocaleHelper.localeNotifier.value.languageCode;
       final systemLocaleTag =
           ui.PlatformDispatcher.instance.locale.toLanguageTag();
-      final payload = {
+      final payload = <String, dynamic>{
         'app_version': versionString,
+        'version_name': version,
+        'build_number': build,
         'device_model': deviceModel,
+        'device_model_code': deviceModelCode,
         'os_version': osVersion,
         'platform': platform,
-        // Für Admin/Support: OS-/Flutter-Geräte-Locale (wenn Nutzer nie `language` im Profil setzt)
+        'app_language': appLanguage,
         'system_locale_tag': systemLocaleTag,
         'last_seen': FieldValue.serverTimestamp(),
       };
 
-      if (doc.exists) {
-        // Zusätzlich Top-Level: Admin-Liste / Queries müssen nicht in `devices` graben.
-        await userRef.update({
-          'devices.$safeDeviceKey': payload,
-          'last_app_system_locale_tag': systemLocaleTag,
-        });
-      } else {
-        await userRef.set({
-          'devices': {safeDeviceKey: payload},
-          'last_app_system_locale_tag': systemLocaleTag,
-        }, SetOptions(merge: true));
+      final topLevel = <String, dynamic>{
+        'app_version': versionString,
+        'platform': platform,
+        'device_model': deviceModel,
+        'device_model_code': deviceModelCode,
+        'os_version': osVersion,
+        'app_version_updated_at': FieldValue.serverTimestamp(),
+        'last_seen': FieldValue.serverTimestamp(),
+        'last_app_system_locale_tag': systemLocaleTag,
+      };
+
+      var callableOk = false;
+      Object? lastCallableError;
+      for (var attempt = 0; attempt < 3; attempt++) {
+        try {
+          await _logDeviceTelemetryViaCallable(
+            deviceKey: safeDeviceKey,
+            payload: payload,
+          );
+          callableOk = true;
+          debugLog('📱 AppUpdateService: Geräte-Telemetrie via Callable OK');
+          break;
+        } catch (callableError) {
+          lastCallableError = callableError;
+          debugLog(
+            '📱 AppUpdateService: Callable Versuch ${attempt + 1}/3 fehlgeschlagen: $callableError',
+          );
+          if (attempt < 2) {
+            await Future<void>.delayed(
+              Duration(milliseconds: 350 * (attempt + 1)),
+            );
+          }
+        }
       }
-    } catch (e) {
-      debugLog('AppUpdateService: logUserAppVersion Fehler: $e');
+      if (!callableOk && lastCallableError != null) {
+        debugLog(
+          '📱 AppUpdateService: Callable endgültig fehlgeschlagen: $lastCallableError',
+        );
+      }
+
+      var firestoreOk = false;
+      try {
+        final userRef =
+            FirebaseFirestore.instance.collection('users').doc(user.uid);
+        final doc = await userRef.get();
+        final update = <String, dynamic>{
+          'devices.$safeDeviceKey': payload,
+          ...topLevel,
+        };
+        if (doc.exists) {
+          await userRef.update(update);
+        } else {
+          await userRef.set(
+            <String, dynamic>{
+              'devices': {safeDeviceKey: payload},
+              ...topLevel,
+            },
+            SetOptions(merge: true),
+          );
+        }
+        firestoreOk = true;
+        debugLog('📱 AppUpdateService: Geräte-Telemetrie Firestore OK');
+      } catch (firestoreError) {
+        debugLog(
+          '📱 AppUpdateService: Firestore Telemetrie fehlgeschlagen: $firestoreError',
+        );
+        if (!callableOk) rethrow;
+      }
+
+      if (!callableOk && !firestoreOk) {
+        return false;
+      }
+
+      _lastLogUserAppVersionUid = user.uid;
+      _lastLogUserAppVersionAt = nowClock;
+      _lastLoggedVersionString = versionString;
+      diagLog(
+        'DEVICE',
+        'Telemetrie OK uid=${user.uid} device=$safeDeviceKey version=$versionString model=$deviceModel',
+      );
+      return true;
+    } catch (e, st) {
+      debugLog('AppUpdateService: logUserAppVersion Fehler: $e\n$st');
+      diagLog('DEVICE', 'Telemetrie FEHLER: $e');
+      return false;
     }
+  }
+
+  static Future<void> _logDeviceTelemetryViaCallable({
+    required String deviceKey,
+    required Map<String, dynamic> payload,
+  }) async {
+    final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+        .httpsCallable('logUserDeviceTelemetry');
+    final serializable = Map<String, dynamic>.from(payload)
+      ..remove('last_seen');
+    await callable.call<Map<String, dynamic>>({
+      'deviceKey': deviceKey,
+      'payload': serializeForCallable(serializable),
+    });
   }
 
   Future<Map<String, dynamic>?> _loadRawConfig() async {
@@ -586,6 +811,15 @@ class AppUpdateService {
 
     // Optional: Store neuer als installiert, aber installiert erfüllt Mindestpolicy.
     if (!_optionalPromptShownInSession) {
+      if (await wasOptionalUpdateDismissed(gate.storeSemver)) {
+        return (
+          result: UpdateCheckResult.upToDate,
+          minVersion: firestoreMin,
+          currentVersion: gate.storeSemver,
+          localVersion: localDisplay,
+          storeUrl: storeUrlLaunch,
+        );
+      }
       _optionalPromptShownInSession = true;
       return (
         result: UpdateCheckResult.optionalUpdate,
@@ -686,7 +920,9 @@ class AppUpdateService {
                       child: OutlinedButton(
                         onPressed: () async {
                           Navigator.of(ctx).pop();
-                          if (force) {
+                          if (!force) {
+                            await markOptionalUpdateDismissed(availableVersion);
+                          } else {
                             await _exitAppHard();
                           }
                         },

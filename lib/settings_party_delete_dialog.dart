@@ -4,10 +4,13 @@ import 'package:flutter/material.dart';
 import 'l10n/app_localizations.dart';
 import 'services/active_party_service.dart';
 import 'services/limit_service.dart';
+import 'services/party_code_index_service.dart';
 import 'utils/ui_constants.dart';
 import 'config/app_config.dart';
 import 'services/user_service.dart';
 import 'utils/debug_log.dart';
+import 'utils/party_ownership_helper.dart';
+import 'app_scaffold_messenger.dart';
 
 /// Dialog für die Bestätigung und Löschung einer Party
 /// Erlaubt: Admin oder DJ (created_by der Party)
@@ -27,8 +30,11 @@ class SettingsPartyDeleteDialog {
           .doc(partyId)
           .get();
       if (!partyDoc.exists) return false;
-      final createdBy = partyDoc.data()?['created_by'] as String?;
-      return createdBy == user.uid;
+      return PartyOwnershipHelper.canManageParty(
+        partyDoc.data(),
+        user.uid,
+        currentUser: UserService().currentUser.value,
+      );
     } catch (_) {
       return false;
     }
@@ -44,7 +50,7 @@ class SettingsPartyDeleteDialog {
     final l10n = AppLocalizations.of(context)!;
     if (!await _mayDeleteParty(partyId)) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(l10n.delete_party_only_own),
             backgroundColor: Colors.red,
@@ -165,7 +171,7 @@ class SettingsPartyDeleteDialog {
   ) async {
     if (!await _mayDeleteParty(partyId)) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(l10n.delete_party_only_own),
             backgroundColor: Colors.red,
@@ -181,6 +187,7 @@ class SettingsPartyDeleteDialog {
 
       final firestore = FirebaseFirestore.instance;
       int totalDeleted = 0;
+      Map<String, dynamic>? partyDocDataForIndexRelease;
 
       // 0. FÄLSCHUNGSSICHERES PARTY-LIMIT (Fall A/B):
       // Party-Dokument laden für start_date und created_by
@@ -188,6 +195,7 @@ class SettingsPartyDeleteDialog {
         final partyDoc = await firestore.collection('parties').doc(partyId).get();
         if (partyDoc.exists) {
           final data = partyDoc.data()!;
+          partyDocDataForIndexRelease = data;
           final createdBy = data['created_by'] as String?;
           if (createdBy != null && createdBy.isNotEmpty) {
             // Startdatum ermitteln: start_time_posix (Unix-Sekunden) oder start_date (Timestamp)
@@ -430,6 +438,12 @@ class SettingsPartyDeleteDialog {
       // 9. Lösche das Party-Dokument selbst (ZU LETZT, nach allen abhängigen Daten)
       debugLog('🎉 Schritt 9: Lösche Party-Dokument...');
       try {
+        if (partyDocDataForIndexRelease != null) {
+          await PartyCodeIndexService.instance.releaseCodeForParty(
+            partyDocDataForIndexRelease,
+            partyId: partyId,
+          );
+        }
         await firestore.collection('parties').doc(partyId).delete();
         debugLog('   ✅ Party-Dokument gelöscht');
       } catch (e) {
@@ -443,9 +457,9 @@ class SettingsPartyDeleteDialog {
       debugLog('═══════════════════════════════════════════════════════════');
 
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
-            content: Text(l10n.party_deleted_with_related(partyName, totalDeleted)),
+            content: Text(l10n.party_deleted_success),
             backgroundColor: Colors.green,
             duration: const Duration(seconds: 5),
           ),
@@ -457,7 +471,7 @@ class SettingsPartyDeleteDialog {
       debugLog('Stack Trace: $stackTrace');
       
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(l10n.snackbar_error_details(e)),
             backgroundColor: Colors.red,

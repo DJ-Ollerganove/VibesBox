@@ -20,6 +20,7 @@
   "nl": "nl-NL",
   "pl": "pl-PL",
   "cs": "cs-CZ",
+  "th": "th-TH",
   "ar": "ar"
 };
 })();

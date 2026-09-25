@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../l10n/app_localizations.dart';
 import '../l10n/generated/language_menu_entries.g.dart';
+import '../l10n/locale_helper.dart';
 import '../utils/ui_constants.dart';
 
 /// Sprachwahl: Spalten à [LanguageMenuEntries.rowsPerColumn], horizontal wischbar mit sichtbaren Hinweisen.
@@ -12,12 +13,14 @@ class LanguageMenuGrid extends StatefulWidget {
     required this.onLanguageSelected,
     this.compact = false,
     this.showSwipeHint = true,
+    this.includeAdminOnlyLanguages = false,
   });
 
   final String currentLanguageCode;
   final ValueChanged<String> onLanguageSelected;
   final bool compact;
   final bool showSwipeHint;
+  final bool includeAdminOnlyLanguages;
 
   @override
   State<LanguageMenuGrid> createState() => _LanguageMenuGridState();
@@ -73,7 +76,9 @@ class _LanguageMenuGridState extends State<LanguageMenuGrid> {
 
   @override
   Widget build(BuildContext context) {
-    final columns = LanguageMenuEntries.columns;
+    final columns = LanguageMenuEntries.columnsFor(
+      includeAdminOnly: widget.includeAdminOnlyLanguages,
+    );
     final columnWidth = widget.compact ? 132.0 : 148.0;
     final bg = const Color(0xFF1F2937);
 
@@ -316,6 +321,7 @@ Future<void> showLanguagePickerDialog(
   required String currentLanguageCode,
   required ValueChanged<String> onLanguageSelected,
 }) async {
+  final includeAdminOnly = LocaleHelper.canUseAdminOnlyLanguages;
   await showDialog<void>(
     context: context,
     builder: (dialogContext) {
@@ -348,9 +354,14 @@ Future<void> showLanguagePickerDialog(
                 const SizedBox(height: 12),
                 LanguageMenuGrid(
                   currentLanguageCode: currentLanguageCode,
+                  includeAdminOnlyLanguages: includeAdminOnly,
                   onLanguageSelected: (code) {
                     Navigator.of(dialogContext).pop();
-                    onLanguageSelected(code);
+                    // Locale erst im nächsten Frame — verhindert Descendant-Assertion
+                    // beim gleichzeitigen MaterialApp-Rebuild.
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      onLanguageSelected(code);
+                    });
                   },
                 ),
               ],

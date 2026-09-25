@@ -110,7 +110,7 @@ class PartyTimeHelpers {
     return List<int>.from(kFiveMinuteSteps);
   }
 
-  /// Verfügbare Endstunden ab Startzeit, max. Start + 23:55.
+  /// Verfügbare Endstunden ab Startzeit, max. Start + [maxDuration].
   /// [minEndDateTime]: bei laufender Party — keine Endzeit in der Vergangenheit.
   static List<int> getAvailableEndHours(
     DateTime? startDate,
@@ -118,12 +118,13 @@ class PartyTimeHelpers {
     int? startMinute,
     DateTime? endDate, {
     DateTime? minEndDateTime,
+    Duration maxDuration = PartyValidator.maxDuration,
   }) {
     if (startDate == null || startHour == null || startMinute == null || endDate == null) {
       return [];
     }
     final startDateTime = DateTime(startDate.year, startDate.month, startDate.day, startHour, startMinute);
-    final maxEnd = startDateTime.add(const Duration(hours: 23, minutes: 55));
+    final maxEnd = startDateTime.add(maxDuration);
     List<int> hours;
     if (isSameCalendarDay(endDate, startDate)) {
       final minHour = startHour;
@@ -160,7 +161,7 @@ class PartyTimeHelpers {
     return hours;
   }
 
-  /// Verfügbare Endminuten (5-Minuten-Takt, abhängig von Start und max. 23:55).
+  /// Verfügbare Endminuten (5-Minuten-Takt, abhängig von Start und [maxDuration]).
   /// [minEndDateTime]: bei laufender Party — keine Endzeit in der Vergangenheit.
   static List<int> getAvailableEndMinutes(
     DateTime? startDate,
@@ -169,12 +170,13 @@ class PartyTimeHelpers {
     DateTime? endDate,
     int? endHour, {
     DateTime? minEndDateTime,
+    Duration maxDuration = PartyValidator.maxDuration,
   }) {
     if (startDate == null || startHour == null || startMinute == null || endDate == null || endHour == null) {
       return [];
     }
     final startDateTime = DateTime(startDate.year, startDate.month, startDate.day, startHour, startMinute);
-    final maxEnd = startDateTime.add(const Duration(hours: 23, minutes: 55));
+    final maxEnd = startDateTime.add(maxDuration);
     List<int> minutes;
     if (isSameCalendarDay(endDate, startDate) && endHour == startHour) {
       final filtered = kFiveMinuteSteps.where((m) => m > startMinute).toList();

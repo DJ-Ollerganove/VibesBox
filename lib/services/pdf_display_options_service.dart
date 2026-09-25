@@ -1,7 +1,7 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/user_model.dart';
+import 'user_self_settings_service.dart';
 
 /// Speichert und synchronisiert die PDF-Anzeige-Optionen (Ort, Telefon, E-Mail, Alt.-E-Mail).
 /// Liest beim Login aus Firestore, hält lokalen Cache (SharedPreferences), schreibt bei Toggle sofort lokal + Firestore.
@@ -104,18 +104,14 @@ class PdfDisplayOptionsService {
         showAltEmailOnPdf: updated.showAltEmailOnPdf,
       );
 
-      // 2) Firestore
+      // 2) Firestore via Callable (Legacy-Docs / Rules-sicher)
       final data = <String, dynamic>{
         'showLocationOnPdf': updated.showLocationOnPdf,
         'showPhoneOnPdf': updated.showPhoneOnPdf,
         'showEmailOnPdf': updated.showEmailOnPdf,
         'showAltEmailOnPdf': updated.showAltEmailOnPdf,
       };
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .set(data, SetOptions(merge: true));
-    } catch (e) {
+      await UserSelfSettingsService.instance.write(data, userId: uid);    } catch (e) {
       // Lokaler Update ist bereits erfolgt; Firestore-Fehler ignorieren oder loggen
     }
   }

@@ -8,6 +8,8 @@ import '../../../utils/sanitize.dart' show sanitizeInput, sanitizeEmail;
 import '../../../utils/ui_constants.dart';
 import '../../../utils/debug_log.dart';
 import '../../../utils/wish_paths.dart';
+import '../../../app_scaffold_messenger.dart';
+import '../../../services/user_self_settings_service.dart';
 /// Zentrale Klasse für die Profil-Bearbeiten-Dialoge (Daten, Name, E-Mail).
 /// Controller werden von der ProfilPage übergeben; Callbacks für UI-Updates (z. B. onSaved).
 class ProfileEditDialogs {
@@ -428,22 +430,14 @@ class ProfileEditDialogs {
       await user.reload();
       final updateData = <String, dynamic>{'displayName': newDjName};
       if (!isGuest) {
-        updateData['realName'] = newRealName.isEmpty
-            ? FieldValue.delete()
-            : newRealName;
-        updateData['phoneNumber'] = newPhone.isEmpty
-            ? FieldValue.delete()
-            : newPhone;
+        updateData['realName'] = newRealName.isEmpty ? null : newRealName;
+        updateData['phoneNumber'] = newPhone.isEmpty ? null : newPhone;
         if (selectedCountryCode != null && selectedCountryCode!.isNotEmpty) {
           updateData['country'] = selectedCountryCode;
         }
       }
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .set(SecurityHelper.sanitizeMap(updateData), SetOptions(merge: true));
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+      await UserSelfSettingsService.instance.write(updateData);      if (context.mounted) {
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(localizations.name_changed),
             backgroundColor: Colors.green,
@@ -453,7 +447,7 @@ class ProfileEditDialogs {
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(
               '${localizations.error_changing_name} $e',
@@ -563,16 +557,10 @@ class ProfileEditDialogs {
       await user.updateDisplayName(newName);
       await user.reload();
       try {
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .set(
-              SecurityHelper.sanitizeMap({
-                'displayName': newName,
-                'email': user.email,
-              }),
-              SetOptions(merge: true),
-            );
+        await UserSelfSettingsService.instance.write({
+          'displayName': newName,
+          if (user.email != null && user.email!.isNotEmpty) 'email': user.email,
+        });
       } catch (e) {
         debugLog('Firestore users update fehlgeschlagen: $e');
       }
@@ -596,7 +584,7 @@ class ProfileEditDialogs {
         }
       }
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(
               localizations.name_changed,
@@ -608,7 +596,7 @@ class ProfileEditDialogs {
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(
               '${localizations.error_changing_name} $e',
@@ -853,30 +841,13 @@ class ProfileEditDialogs {
         }),
       );
 
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .set(
-            SecurityHelper.sanitizeMap({
-              'pendingEmail': newEmail,
-              'emailChangeRequestedAt': Timestamp.now(),
-              'email_history': FieldValue.arrayUnion([
-                {
-                  'old_email': currentUserEmail,
-                  'new_email': newEmail,
-                  'requested_at': FieldValue.serverTimestamp(),
-                  'confirmed_at': null,
-                  'type': 'email_change',
-                  'request_id': requestRef.id,
-                },
-              ]),
-            }),
-            SetOptions(merge: true),
-          );
+      await UserSelfSettingsService.instance.write({
+        'pendingEmail': newEmail,
+        'emailChangeRequestedAt': Timestamp.now(),
+      });
 
       if (!context.mounted) return;
-      await showDialog<void>(
-        context: context,
+      await showDialog<void>(        context: context,
         barrierDismissible: false,
         builder: (dialogContext) => styledDialog(
           context: dialogContext,

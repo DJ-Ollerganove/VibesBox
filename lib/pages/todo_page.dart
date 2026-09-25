@@ -5,6 +5,7 @@ import '../l10n/app_localizations.dart';
 import '../helpers/security_helper.dart';
 import '../utils/formatting_utils.dart';
 import '../utils/debug_log.dart';
+import '../app_scaffold_messenger.dart';
 
 class TodoPage extends StatefulWidget {
   const TodoPage({super.key});
@@ -96,7 +97,7 @@ class _TodoPageState extends State<TodoPage> {
     } catch (e) {
       if (mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${l.snackbar_error_adding_todo} $e'),
             backgroundColor: Colors.red,
@@ -126,7 +127,7 @@ class _TodoPageState extends State<TodoPage> {
     } catch (e) {
       if (mounted) {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${l.snackbar_error_updating_todo} $e'),
             backgroundColor: Colors.red,
@@ -166,7 +167,7 @@ class _TodoPageState extends State<TodoPage> {
       } catch (e) {
         if (mounted) {
           final loc = AppLocalizations.of(context)!;
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text('${loc.snackbar_error_deleting_todo} $e'),
               backgroundColor: Colors.red,

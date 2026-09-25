@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#000000">
+  <meta name="robots" content="noindex">
+  <title>VibesBox – DJ B2B</title>
+  <link rel="icon" type="image/png" href="/vb/favicon.png">
+  <style>
+    :root {
+      --vb-bg: #000;
+      --vb-fg: #f5f5f5;
+      --vb-orange: #ff8800;
+      --vb-border: #2a2a2a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--vb-bg);
+      color: var(--vb-fg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }
+    #invite-root {
+      display: none;
+      width: 100%;
+      max-width: 440px;
+      border: 1px solid var(--vb-border);
+      border-radius: 12px;
+      padding: 1.75rem 1.5rem;
+      background: #0a0a0a;
+      box-shadow: 0 12px 40px rgba(0,0,0,.55);
+    }
+    .logo {
+      display: block;
+      height: 56px;
+      width: auto;
+      margin: 0 auto 1.25rem;
+      object-fit: contain;
+    }
+    h1 {
+      margin: 0 0 0.75rem;
+      font-size: 1.2rem;
+      text-align: center;
+      color: rgba(255,255,255,.92);
+    }
+    p {
+      margin: 0 0 1rem;
+      line-height: 1.55;
+      text-align: center;
+      color: rgba(255,255,255,.78);
+      font-size: 0.95rem;
+    }
+    .code-panel {
+      margin: 0 0 1.1rem;
+      padding: 1rem;
+      border: 1.5px solid var(--vb-orange);
+      border-radius: 10px;
+      background: #000;
+      text-align: center;
+    }
+    .code-label {
+      margin: 0 0 0.4rem;
+      font-size: 0.8rem;
+      color: rgba(255,255,255,.65);
+      letter-spacing: 0.02em;
+    }
+    .code-value {
+      margin: 0 0 0.75rem;
+      font-size: 1.55rem;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      color: var(--vb-orange);
+      word-break: break-all;
+    }
+    .code-hint {
+      margin: 0 0 0.85rem;
+      font-size: 0.88rem;
+      line-height: 1.45;
+      color: rgba(255,255,255,.78);
+    }
+    .btn {
+      display: block;
+      width: 100%;
+      text-align: center;
+      text-decoration: none;
+      border: none;
+      cursor: pointer;
+      padding: 0.85rem 1rem;
+      border-radius: 10px;
+      font-weight: 700;
+      font-size: 0.95rem;
+      font-family: inherit;
+    }
+    .btn-copy {
+      background: transparent;
+      color: var(--vb-orange);
+      border: 1.5px solid var(--vb-orange);
+      margin-bottom: 0;
+    }
+    .btn-copy.copied {
+      color: #00e676;
+      border-color: #00e676;
+    }
+    #invite-actions {
+      display: flex;
+      flex-direction: row;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem 0.75rem;
+      margin-top: 0.35rem;
+    }
+    .store-badge {
+      display: inline-flex;
+      line-height: 0;
+      border-radius: 8px;
+      transition: opacity 0.15s ease, transform 0.15s ease;
+    }
+    .store-badge:hover {
+      opacity: 0.92;
+      transform: translateY(-1px);
+    }
+    .store-badge img {
+      display: block;
+      height: 40px;
+      width: auto;
+      max-width: 100%;
+    }
+    .store-badge-google img {
+      height: 58px;
+      margin-left: -8px;
+    }
+    .store-badge-ios[hidden],
+    #invite-ios-block[hidden] {
+      display: none !important;
+    }
+    #invite-ios-block {
+      display: none;
+      margin-top: 1rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--vb-border);
+    }
+    #invite-ios-block h2 {
+      margin: 0 0 0.5rem;
+      font-size: 1rem;
+      text-align: center;
+      color: rgba(255,255,255,.88);
+    }
+    #invite-ios-text {
+      margin: 0;
+      font-size: 0.88rem;
+      color: rgba(255,255,255,.65);
+    }
+  </style>
+  <script src="/scripts/dj-b2b-invite-redirect.js?v=2" defer></script>
+</head>
+<body>
+  <div id="invite-root">
+    <img class="logo" src="/icon/vibesbox-logo.png" alt="VibesBox" width="220" height="64">
+    <h1 id="invite-title"></h1>
+    <p id="invite-body"></p>
+
+    <div class="code-panel" id="invite-code-panel">
+      <p class="code-label" id="invite-code-label"></p>
+      <p class="code-value" id="invite-code-value"></p>
+      <p class="code-hint" id="invite-trial-hint"></p>
+      <button type="button" class="btn btn-copy" id="invite-copy-btn"></button>
+    </div>
+
+    <div id="invite-actions" class="store-badges">
+      <a
+        id="invite-ios-btn"
+        class="store-badge store-badge-ios"
+        href="https://apps.apple.com/app/vibesbox/id6767363203"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="App Store"
+        hidden
+      >
+        <img src="/assets/store/app-store-badge.svg" width="148" height="40" alt="Download on the App Store">
+      </a>
+      <a
+        id="invite-play-btn"
+        class="store-badge store-badge-google"
+        href="#"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Google Play"
+      >
+        <img src="/assets/store/google-play-badge.png" width="150" height="58" alt="Get it on Google Play">
+      </a>
+    </div>
+    <div id="invite-ios-block" hidden>
+      <h2 id="invite-ios-title"></h2>
+      <p id="invite-ios-text"></p>
+    </div>
+  </div>
+</body>
+</html>

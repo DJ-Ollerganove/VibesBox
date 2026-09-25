@@ -4,15 +4,18 @@ import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../app_navigator_keys.dart';
 import '../l10n/app_localizations.dart';
+import '../l10n/locale_helper.dart';
 import '../utils/debug_log.dart';
 import '../utils/notification_display_text.dart';
 import 'active_party_service.dart';
 import 'app_local_notifications.dart';
+import 'dj_wish_push_dedupe.dart';
 import 'user_service.dart';
 import '../utils/wish_paths.dart';
 
@@ -35,7 +38,10 @@ class DjWishNotificationService with WidgetsBindingObserver {
   static const String fallbackWishTitleStatic = 'VibesBox: Neuer Songwunsch';
 
   /// Bundled unter `ios/Runner/` — gleicher Inhalt wie Android `notification.mp3`.
-  static const String iosWishNotificationSound = 'notification.caf';
+  static const String iosWishNotificationSound = kIosWishNotificationSound;
+
+  static const MethodChannel _iosSoundChannel =
+      MethodChannel('dj_og_app/notification_sound');
 
   bool _attached = false;
   bool _shellGate = false;
@@ -79,6 +85,9 @@ class DjWishNotificationService with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _lifecycleState = state;
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_pushSubsystemSync?.call());
+    }
   }
 
   void dispose() {
@@ -130,7 +139,7 @@ class DjWishNotificationService with WidgetsBindingObserver {
     }
     final key = partyId;
     if (_subKey == key && _wishSub != null) {
-      unawaited(_pushSubsystemSync?.call());
+      // Bereits abonniert — kein erneuter FCM-Sync (sonst Retry-Sturm).
       return;
     }
     _cancelWishSub();
@@ -187,6 +196,10 @@ class DjWishNotificationService with WidgetsBindingObserver {
       if (change.type != DocumentChangeType.added) continue;
       final id = change.doc.id;
       if (_notifiedWishIds.contains(id)) continue;
+      if (await wasDjWishPushDelivered(id)) {
+        _notifiedWishIds.add(id);
+        continue;
+      }
 
       final wishData = change.doc.data() ?? <String, dynamic>{};
       if (wishData['is_pre_wish'] == true) {
@@ -211,6 +224,7 @@ class DjWishNotificationService with WidgetsBindingObserver {
         change.doc.data() ?? <String, dynamic>{},
         soundOn: soundOn,
       );
+      await markDjWishPushDelivered(id);
     }
   }
 
@@ -271,16 +285,35 @@ class DjWishNotificationService with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _playIosWishSoundIfNeeded(bool soundOn) async {
+    if (!soundOn || !Platform.isIOS) return;
+    try {
+      await _iosSoundChannel.invokeMethod<void>('playWishSound');
+    } catch (e) {
+      debugLog('⚠️ DjWishNotification: iOS-Ton fehlgeschlagen: $e');
+    }
+  }
+
   Future<void> _showLocalNotificationImpl({
     required String wishDocId,
     required bool soundOn,
     required String titleLine,
     required String body,
   }) async {
+    if (Platform.isIOS) {
+      await ensureIosNotificationPermission();
+    }
+
+    final t = LocaleHelper.getTranslations(LocaleHelper.localeNotifier.value);
+    final channelName =
+        LocaleHelper.tr(t, 'notification_channel_new_wishes');
+    final channelDesc =
+        LocaleHelper.tr(t, 'notification_channel_new_wishes_desc');
+
     final android = AndroidNotificationDetails(
       'new_wishes_channel',
-      'Neue Wünsche',
-      channelDescription: 'Benachrichtigungen für neue Wünsche',
+      channelName,
+      channelDescription: channelDesc,
       importance: Importance.high,
       priority: Priority.high,
       showWhen: true,
@@ -302,6 +335,7 @@ class DjWishNotificationService with WidgetsBindingObserver {
       presentBadge: true,
       presentSound: soundOn,
       sound: soundOn ? iosWishNotificationSound : null,
+      interruptionLevel: InterruptionLevel.active,
     );
     final details = NotificationDetails(android: android, iOS: ios);
 
@@ -314,8 +348,14 @@ class DjWishNotificationService with WidgetsBindingObserver {
         payload: 'dj_wish',
       );
       debugLog('✅ DjWishNotification: show() ok doc=$wishDocId sound=$soundOn');
+      if (soundOn) {
+        unawaited(_playIosWishSoundIfNeeded(true));
+      }
     } catch (e) {
       debugLog('❌ DjWishNotification show: $e');
+      if (soundOn) {
+        unawaited(_playIosWishSoundIfNeeded(true));
+      }
     }
   }
 
@@ -323,17 +363,7 @@ class DjWishNotificationService with WidgetsBindingObserver {
   static Future<bool> requestNotificationPermissionIfNeeded() async {
     if (!Platform.isAndroid && !Platform.isIOS) return true;
     if (Platform.isIOS) {
-      final iosPlugin = appLocalNotificationsPlugin
-          .resolvePlatformSpecificImplementation<
-              IOSFlutterLocalNotificationsPlugin>();
-      if (iosPlugin != null) {
-        final granted = await iosPlugin.requestPermissions(
-          alert: true,
-          badge: true,
-          sound: true,
-        );
-        if (granted == true) return true;
-      }
+      return ensureIosNotificationPermission();
     }
     final status = await Permission.notification.status;
     if (status.isGranted) return true;

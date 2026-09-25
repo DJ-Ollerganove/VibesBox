@@ -1,4 +1,5 @@
 rules_version = '2';
+// vibesbox-rules-deploy-bump 2026-09-23-sync-installs
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -26,7 +27,11 @@ service cloud.firestore {
     }
     function partyLifecycleIsActive(partyId) {
       return partyDocExists(partyId)
-        && partyData(partyId).lifecycle_status == 'active';
+        && (
+          !('lifecycle_status' in partyData(partyId))
+          || partyData(partyId).lifecycle_status == null
+          || partyData(partyId).lifecycle_status == 'active'
+        );
     }
 
     /** Vorab-Wünsche: Party noch nicht beendet, auch standby/upcoming (Test-/Zukunfts-Partys). */
@@ -51,6 +56,59 @@ service cloud.firestore {
       return get(usersDocPath(request.auth.uid)).data;
     }
 
+    /** DJ-VibesBox im Browser — Custom-Token mit role dj_browser. */
+    function djBrowserSessionDocPath(sessionId) {
+      return /databases/$(database)/documents/dj_browser_sessions/$(sessionId);
+    }
+    function isDjBrowserSession(partyId) {
+      return request.auth != null
+        && request.auth.token.role == 'dj_browser'
+        && request.auth.token.partyId == partyId
+        && request.auth.token.sessionId is string
+        && request.auth.token.sessionId.size() > 0
+        && exists(djBrowserSessionDocPath(request.auth.token.sessionId))
+        && get(djBrowserSessionDocPath(request.auth.token.sessionId)).data.active == true
+        && get(djBrowserSessionDocPath(request.auth.token.sessionId)).data.partyId == partyId;
+    }
+
+    /** Party-Besitzer-UID (Legacy-Felder wie in assertPartyOwner). */
+    function partyOwnerUidMatches(partyId, uid) {
+      let p = partyData(partyId);
+      return uid is string
+        && uid.size() > 0
+        && (
+          ('created_by' in p && p.created_by == uid)
+          || ('djId' in p && p.djId == uid)
+          || ('uid' in p && p.uid == uid)
+          || ('dj_code' in p && p.dj_code == uid)
+        );
+    }
+
+    /** DJ-Browser: manueller Offen-Wunsch (wie Flutter ManualWishPage, is_dj_wish). */
+    function isDjBrowserManualWishCreate(data, partyId) {
+      return isDjBrowserSession(partyId)
+        && partyDocExists(partyId)
+        && data.status == 'pending'
+        && data.is_dj_wish == true
+        && (!('is_pre_wish' in data) || data.is_pre_wish != true)
+        && data.party_id == partyId
+        && ('dj_id' in data)
+        && data.dj_id is string
+        && ('djId' in data)
+        && data.djId is string
+        && data.dj_id == data.djId
+        && (
+          partyOwnerUidMatches(partyId, data.dj_id)
+          || (
+            request.auth.token.ownerUid is string
+            && request.auth.token.ownerUid.size() > 0
+            && data.dj_id == request.auth.token.ownerUid
+          )
+        )
+        && data.duplicate_count == 0
+        && data.is_duplicate == false;
+    }
+
     // Zentrale XSS/Payload-Pruefung fuer Texteingaben.
     function isSafeText(text, maxLen) {
       return text is string
@@ -64,6 +122,15 @@ service cloud.firestore {
       return !(field in data) || data[field] == null || isSafeText(data[field], maxLen);
     }
 
+    /** party_code / fixed_party_code: Legacy-Docs nutzen teils int statt string. */
+    function isSafePartyCodeField(data, field, maxLen) {
+      return !(field in data)
+        || data[field] == null
+        || (data[field] is string && isSafeText(data[field], maxLen))
+        || (data[field] is int && data[field] > 0)
+        || (data[field] is float && data[field] > 0);
+    }
+
     function isSafeUserData(data) {
       return isSafeOptionalText(data, 'displayName', 50)
         && isSafeOptionalText(data, 'realName', 80)
@@ -73,16 +140,48 @@ service cloud.firestore {
         && isSafeOptionalText(data, 'status', 40)
         && isSafeOptionalText(data, 'country', 80)
         && isSafeOptionalText(data, 'alternativeEmail', 100)
-        && isSafeOptionalText(data, 'djLogoUrl', 300)
-        && isSafeOptionalText(data, 'dj_logo_url', 300)
+        && (!('useAlternativeEmail' in data) || data.useAlternativeEmail is bool)
+        && isSafeOptionalText(data, 'language', 12)
+        && isSafeOptionalText(data, 'selected_language', 12)
+        && isSafeOptionalText(data, 'fcm_token_platform', 20)
+        && (!('fcm_token_updated_at' in data)
+          || data.fcm_token_updated_at == null
+          || data.fcm_token_updated_at is timestamp)
+        && (!('emailChangeRequestedAt' in data)
+          || data.emailChangeRequestedAt == null
+          || data.emailChangeRequestedAt is timestamp)
+        && (!('email_history' in data)
+          || (data.email_history is list && data.email_history.size() <= 50))
+        && (!('dj_notif_awaiting_first_device_seed' in data)
+          || data.dj_notif_awaiting_first_device_seed is bool)
+        && isSafeOptionalText(data, 'djLogoUrl', 2048)
+        && isSafeOptionalText(data, 'dj_logo_url', 2048)
+        && isSafeOptionalText(data, 'photoURL', 2048)
         && isSafeOptionalText(data, 'planType', 40)
         && isSafeOptionalText(data, 'role_id', 60)
-        && isSafeOptionalText(data, 'fcm_token', 512)
+        && isSafeOptionalText(data, 'fcm_token', 4096)
         && isSafeOptionalText(data, 'last_app_system_locale_tag', 80)
         && (!('emailVerified' in data) || data.emailVerified is bool)
         && (!('email_verified' in data) || data.email_verified is bool)
         && (!('wishbox_suggestions_enabled' in data) || data.wishbox_suggestions_enabled is bool)
-        && (!('grace_period_minutes' in data) || isSafeGracePeriodMinutesValue(data.grace_period_minutes));
+        && (!('show_greeting_translations' in data) || data.show_greeting_translations is bool)
+        && (!('notifyNewWishes' in data) || data.notifyNewWishes is bool)
+        && (!('enableNotificationSound' in data) || data.enableNotificationSound is bool)
+        && (!('show_status_notification' in data) || data.show_status_notification is bool)
+        && (!('vibesbox_sync_enabled' in data) || data.vibesbox_sync_enabled is bool)
+        && (!('hasCompletedProfile' in data) || data.hasCompletedProfile is bool)
+        && (!('hasSeenQuickstart' in data) || data.hasSeenQuickstart is bool)
+        && (!('birthDate' in data) || data.birthDate == null || data.birthDate is timestamp)
+        && (!('grace_period_minutes' in data)
+          || (data.grace_period_minutes is number
+            && data.grace_period_minutes >= 0
+            && data.grace_period_minutes <= 120))
+        && (!('song_rec_enabled' in data) || data.song_rec_enabled is bool)
+        && (!('song_rec_same_artist' in data) || data.song_rec_same_artist is bool)
+        && (!('song_rec_count' in data) || isSafeSongRecCountValue(data.song_rec_count))
+        && isSafeOptionalSongRecScope(data)
+        && isSafeOptionalSongRecTempo(data)
+        && isSafeOptionalSongRecFamiliarity(data);
     }
 
     function isSafeGuestLiveWishboxData(data) {
@@ -97,16 +196,52 @@ service cloud.firestore {
 
     function isSafeUserRegistrationPayload(data) {
       return isSafeUserData(data)
+        && userRegistrationForbidsPrivileges(data)
         && (!('loginCount' in data)
           || (data.loginCount is int && data.loginCount >= 0 && data.loginCount < 100000000))
+        && (!('guestWishesSubmittedCount' in data)
+          || (data.guestWishesSubmittedCount is int
+            && data.guestWishesSubmittedCount >= 0
+            && data.guestWishesSubmittedCount < 100000000))
         && (!('lastLogin' in data) || data.lastLogin is timestamp)
         && (!('created_at' in data) || data.created_at is timestamp);
     }
 
+    /// Registrierung darf Gast/DJ setzen, nie Admin/Abo/Sperre.
+    function roleDocNameIsAdmin(roleId) {
+      return roleId is string
+        && roleId.size() > 0
+        && exists(/databases/$(database)/documents/roles/$(roleId))
+        && get(/databases/$(database)/documents/roles/$(roleId)).data.name == 'Admin';
+    }
+
+    function userRegistrationForbidsPrivileges(data) {
+      return (!('admin' in data) || data.admin != true)
+        && (!('isPro' in data) || data.isPro != true)
+        && (!('is_blocked' in data) || data.is_blocked != true)
+        && (!('email_verified_override' in data) || data.email_verified_override != true)
+        && (!('role_id' in data) || !roleDocNameIsAdmin(data.role_id));
+    }
+
+    /// Owner-Updates: Rolle/Abo/Admin unverändert (Admin-Pfad bleibt separat).
+    function userOwnerCannotEscalatePrivileges() {
+      return !request.resource.data.diff(resource.data).changedKeys().hasAny([
+        'admin',
+        'role_id',
+        'isPro',
+        'proUntil',
+        'planType',
+        'is_blocked',
+        'email_verified_override'
+      ]);
+    }
+
     function userPreservesDeviceBlockFusion() {
+      let changed = request.resource.data.diff(resource.data).changedKeys();
       return !resource.exists
         || !('device_block_fusion' in resource.data)
         || resource.data.device_block_fusion != true
+        || !changed.hasAny(['device_block_fusion', 'is_blocked', 'status'])
         || (
           request.resource.data.device_block_fusion == true
           && request.resource.data.is_blocked == true
@@ -115,6 +250,44 @@ service cloud.firestore {
             || request.resource.data.status == 'blocked'
           )
         );
+    }
+
+    /** DJ-B2B-Ledger und Referral-Verknüpfung nur via Cloud Functions. */
+    function userPreservesDjB2bLedger() {
+      return isAdmin()
+        || !request.resource.data.diff(resource.data).changedKeys().hasAny([
+          'djB2bCode',
+          'djB2bDaysLifetimeEarned',
+          'djB2bDaysPendingHold',
+          'djB2bDaysAvailable',
+          'djB2bDaysConsumptionActive',
+          'djB2bDaysLastConsumedDate',
+          'djB2bReferralCount',
+          'referredByUid',
+          'referredByCode',
+          'referralCapturedAt',
+          'referralRedeemedAt',
+          'referralSource',
+          'trialDaysGranted',
+          'trialUsedDjB2bCode',
+        ]);
+    }
+
+    function clientCannotSeedDjB2bFields(data) {
+      return !('djB2bCode' in data)
+        && !('djB2bDaysLifetimeEarned' in data)
+        && !('djB2bDaysPendingHold' in data)
+        && !('djB2bDaysAvailable' in data)
+        && !('djB2bDaysConsumptionActive' in data)
+        && !('djB2bDaysLastConsumedDate' in data)
+        && !('djB2bReferralCount' in data)
+        && !('referredByUid' in data)
+        && !('referredByCode' in data)
+        && !('referralCapturedAt' in data)
+        && !('referralRedeemedAt' in data)
+        && !('referralSource' in data)
+        && !('trialDaysGranted' in data)
+        && !('trialUsedDjB2bCode' in data);
     }
 
     function isSafeSocialLinksData(data) {
@@ -147,11 +320,340 @@ service cloud.firestore {
         && isSafeOptionalText(data, 'request_id', 120);
     }
 
+    function isSafeSavedTrackData(data) {
+      return data != null
+        && data.keys().hasOnly([
+          'title',
+          'artist',
+          'party_id',
+          'source_wish_id',
+          'bookmarked_at',
+        ])
+        && isSafeText(data.title, 300)
+        && isSafeText(data.artist, 300)
+        && isSafeOptionalText(data, 'party_id', 120)
+        && isSafeOptionalText(data, 'source_wish_id', 120)
+        && data.bookmarked_at is timestamp;
+    }
+
     function isSafeGracePeriodMinutesValue(v) {
-      return v is int
+      return v is number
         && v >= 0
         && v <= 120
         && v % 10 == 0;
+    }
+
+    function isSafeSongRecScopeValue(v) {
+      return v is string && (v == 'strict' || v == 'similar' || v == 'bold');
+    }
+
+    function isSafeSongRecTempoValue(v) {
+      return v is string && (
+        v == 'exact'
+        || v == 'bpm10'
+        || v == 'bpm20'
+        || v == 'bpm30'
+        || v == 'bpm40'
+        || v == 'over40'
+      );
+    }
+
+    function isSafeSongRecFamiliarityValue(v) {
+      return v is string && (v == 'hits' || v == 'mix');
+    }
+
+    function isSafeSongRecCountValue(v) {
+      return v is int && v >= 1 && v <= 20;
+    }
+
+    function isSafeOptionalSongRecScope(data) {
+      return !('song_rec_scope' in data) || isSafeSongRecScopeValue(data.song_rec_scope);
+    }
+
+    function isSafeOptionalSongRecTempo(data) {
+      return !('song_rec_tempo' in data) || isSafeSongRecTempoValue(data.song_rec_tempo);
+    }
+
+    function isSafeOptionalSongRecFamiliarity(data) {
+      return !('song_rec_familiarity' in data)
+        || isSafeSongRecFamiliarityValue(data.song_rec_familiarity);
+    }
+
+    function isSafeDjAudioSettingsFields(data) {
+      return (!('mic_sensitivity' in data)
+          || (data.mic_sensitivity is number
+            && data.mic_sensitivity >= 0.5
+            && data.mic_sensitivity <= 2.0))
+        && (!('recognition_threshold' in data)
+          || (data.recognition_threshold is number
+            && data.recognition_threshold >= 0
+            && data.recognition_threshold <= 1))
+        && (!('smart_threshold_enabled' in data)
+          || data.smart_threshold_enabled is bool)
+        && (!('auto_start_recognition' in data)
+          || data.auto_start_recognition is bool)
+        && (!('vibesbox_sync_enabled' in data)
+          || data.vibesbox_sync_enabled is bool)
+        && (!('shazam_scan_interval_seconds' in data)
+          || (data.shazam_scan_interval_seconds is number
+            && data.shazam_scan_interval_seconds >= 15
+            && data.shazam_scan_interval_seconds <= 300));
+    }
+
+    function isSafeUserDevicesMap(devices) {
+      return devices is map && devices.size() <= 32;
+    }
+
+    /** Nur geänderte Selbstbedienungs-Felder — kein Full-Doc-isSafeUserData für Legacy-Daten. */
+    function userSelfServiceChangedKeysAllowed() {
+      return request.resource.data.diff(resource.data).changedKeys().hasOnly([
+        'displayName',
+        'realName',
+        'phoneNumber',
+        'email',
+        'pendingEmail',
+        'country',
+        'alternativeEmail',
+        'useAlternativeEmail',
+        'language',
+        'selected_language',
+        'emailChangeRequestedAt',
+        'email_history',
+        'fcm_token_platform',
+        'fcm_token_updated_at',
+        'dj_notif_awaiting_first_device_seed',
+        'djLogoUrl',
+        'dj_logo_url',
+        'fcm_token',
+        'last_app_system_locale_tag',
+        'emailVerified',
+        'email_verified',
+        'wishbox_suggestions_enabled',
+        'grace_period_minutes',
+        'show_greeting_translations',
+        'mic_sensitivity',
+        'recognition_threshold',
+        'smart_threshold_enabled',
+        'auto_start_recognition',
+        'vibesbox_sync_enabled',
+        'shazam_scan_interval_seconds',
+        'notifyNewWishes',
+        'enableNotificationSound',
+        'show_status_notification',
+        'hasCompletedProfile',
+        'hasSeenQuickstart',
+        'read_announcements',
+        'photoURL',
+        'birthDate',
+        'showLocationOnPdf',
+        'showPhoneOnPdf',
+        'showEmailOnPdf',
+        'showAltEmailOnPdf',
+        'song_rec_enabled',
+        'song_rec_scope',
+        'song_rec_tempo',
+        'song_rec_familiarity',
+        'song_rec_same_artist',
+        'song_rec_count',
+        'status',
+        'app_version',
+        'platform',
+        'device_model',
+        'device_model_code',
+        'os_version',
+        'app_version_updated_at',
+        'last_seen',
+        'devices',
+        'loginCount',
+        'lastLogin',
+        'previousLogin',
+        'created_at',
+      ]);
+    }
+
+    function userSelfServiceChangedValuesSafe() {
+      let data = request.resource.data;
+      let changed = request.resource.data.diff(resource.data).changedKeys();
+      return (!changed.hasAny(['devices'])
+          || isSafeUserDevicesMap(data.devices))
+        && (!changed.hasAny(['loginCount'])
+          || (data.loginCount is int
+            && data.loginCount >= 0
+            && data.loginCount < 100000000))
+        && (!changed.hasAny(['lastLogin'])
+          || data.lastLogin is timestamp)
+        && (!changed.hasAny(['previousLogin'])
+          || data.previousLogin == null
+          || data.previousLogin is timestamp)
+        && (!changed.hasAny(['created_at'])
+          || data.created_at is timestamp)
+        && (!changed.hasAny(['app_version'])
+          || isSafeOptionalText(data, 'app_version', 40))
+        && (!changed.hasAny(['platform'])
+          || (data.platform is string
+            && (data.platform == 'ios' || data.platform == 'android')))
+        && (!changed.hasAny(['device_model'])
+          || isSafeOptionalText(data, 'device_model', 120))
+        && (!changed.hasAny(['device_model_code'])
+          || isSafeOptionalText(data, 'device_model_code', 40))
+        && (!changed.hasAny(['os_version'])
+          || isSafeOptionalText(data, 'os_version', 40))
+        && (!changed.hasAny(['app_version_updated_at'])
+          || data.app_version_updated_at is timestamp)
+        && (!changed.hasAny(['last_seen'])
+          || data.last_seen is timestamp)
+        && (!changed.hasAny(['grace_period_minutes'])
+          || isSafeGracePeriodMinutesValue(data.grace_period_minutes))
+        && (!changed.hasAny(['smart_threshold_enabled'])
+          || data.smart_threshold_enabled is bool)
+        && (!changed.hasAny(['auto_start_recognition'])
+          || data.auto_start_recognition is bool)
+        && (!changed.hasAny(['vibesbox_sync_enabled'])
+          || data.vibesbox_sync_enabled is bool)
+        && (!changed.hasAny(['show_greeting_translations'])
+          || data.show_greeting_translations is bool)
+        && (!changed.hasAny(['wishbox_suggestions_enabled'])
+          || data.wishbox_suggestions_enabled is bool)
+        && (!changed.hasAny(['song_rec_enabled'])
+          || data.song_rec_enabled is bool)
+        && (!changed.hasAny(['song_rec_same_artist'])
+          || data.song_rec_same_artist is bool)
+        && (!changed.hasAny(['song_rec_scope'])
+          || isSafeSongRecScopeValue(data.song_rec_scope))
+        && (!changed.hasAny(['song_rec_tempo'])
+          || isSafeSongRecTempoValue(data.song_rec_tempo))
+        && (!changed.hasAny(['song_rec_familiarity'])
+          || isSafeSongRecFamiliarityValue(data.song_rec_familiarity))
+        && (!changed.hasAny(['song_rec_count'])
+          || isSafeSongRecCountValue(data.song_rec_count))
+        && (!changed.hasAny(['useAlternativeEmail'])
+          || data.useAlternativeEmail is bool)
+        && (!changed.hasAny(['language'])
+          || isSafeOptionalText(data, 'language', 12))
+        && (!changed.hasAny(['selected_language'])
+          || isSafeOptionalText(data, 'selected_language', 12))
+        && (!changed.hasAny(['fcm_token_platform'])
+          || (data.fcm_token_platform is string
+            && (data.fcm_token_platform == 'ios'
+              || data.fcm_token_platform == 'android'
+              || data.fcm_token_platform == 'web')))
+        && (!changed.hasAny(['fcm_token'])
+          || isSafeOptionalText(data, 'fcm_token', 4096))
+        && (!changed.hasAny(['fcm_token_updated_at'])
+          || data.fcm_token_updated_at is timestamp)
+        && (!changed.hasAny(['emailChangeRequestedAt'])
+          || data.emailChangeRequestedAt == null
+          || data.emailChangeRequestedAt is timestamp)
+        && (!changed.hasAny(['email_history'])
+          || (data.email_history is list && data.email_history.size() <= 50))
+        && (!changed.hasAny(['dj_notif_awaiting_first_device_seed'])
+          || data.dj_notif_awaiting_first_device_seed is bool)
+        && (!changed.hasAny(['notifyNewWishes'])
+          || data.notifyNewWishes is bool)
+        && (!changed.hasAny(['enableNotificationSound'])
+          || data.enableNotificationSound is bool)
+        && (!changed.hasAny(['show_status_notification'])
+          || data.show_status_notification is bool)
+        && (!changed.hasAny(['mic_sensitivity'])
+          || (data.mic_sensitivity is number
+            && data.mic_sensitivity >= 0.5
+            && data.mic_sensitivity <= 2.0))
+        && (!changed.hasAny(['recognition_threshold'])
+          || (data.recognition_threshold is number
+            && data.recognition_threshold >= 0
+            && data.recognition_threshold <= 1))
+        && (!changed.hasAny(['shazam_scan_interval_seconds'])
+          || (data.shazam_scan_interval_seconds is number
+            && data.shazam_scan_interval_seconds >= 15
+            && data.shazam_scan_interval_seconds <= 300))
+        && (!changed.hasAny(['hasSeenQuickstart'])
+          || (data.hasSeenQuickstart is bool && data.hasSeenQuickstart == true))
+        && (!changed.hasAny(['hasCompletedProfile'])
+          || data.hasCompletedProfile is bool)
+        && (!changed.hasAny(['birthDate'])
+          || data.birthDate is timestamp)
+        && (!changed.hasAny(['read_announcements'])
+          || (data.read_announcements is list && data.read_announcements.size() <= 200))
+        && (!changed.hasAny(['photoURL'])
+          || data.photoURL == null
+          || isSafeOptionalText(data, 'photoURL', 2048))
+        && (!changed.hasAny(['djLogoUrl'])
+          || data.djLogoUrl == null
+          || isSafeOptionalText(data, 'djLogoUrl', 2048))
+        && (!changed.hasAny(['dj_logo_url'])
+          || data.dj_logo_url == null
+          || isSafeOptionalText(data, 'dj_logo_url', 2048))
+        && (!changed.hasAny(['showLocationOnPdf'])
+          || data.showLocationOnPdf is bool)
+        && (!changed.hasAny(['showPhoneOnPdf'])
+          || data.showPhoneOnPdf is bool)
+        && (!changed.hasAny(['showEmailOnPdf'])
+          || data.showEmailOnPdf is bool)
+        && (!changed.hasAny(['showAltEmailOnPdf'])
+          || data.showAltEmailOnPdf is bool)
+        && (!changed.hasAny(['last_app_system_locale_tag'])
+          || isSafeOptionalText(data, 'last_app_system_locale_tag', 80));
+    }
+
+    function userOwnerSelfServicePatchAllowed() {
+      return userSelfServiceChangedKeysAllowed()
+        && userSelfServiceChangedValuesSafe();
+    }
+
+    /**
+     * Profilbild / DJ-Logo — installierte App: set(merge) nur dieser Keys.
+     * Deploy-Bump: 2026-08-08 media-url owner patch v4
+     */
+    function userOwnerMediaUrlPatchAllowed() {
+      let changed = request.resource.data.diff(resource.data).changedKeys();
+      return changed.size() > 0
+        && changed.hasOnly(['dj_logo_url', 'djLogoUrl', 'photoURL']);
+    }
+
+    /** Owner darf Branding/Profil-Felder setzen, ohne Full-Doc-isSafeUserData. */
+    function userOwnerNonPrivilegedPatchAllowed() {
+      let changed = request.resource.data.diff(resource.data).changedKeys();
+      return changed.size() > 0
+        && !changed.hasAny([
+          'admin',
+          'role_id',
+          'isPro',
+          'proUntil',
+          'planType',
+          'loginCount',
+          'device_block_fusion',
+          'is_blocked',
+          'status',
+          'djB2bCode',
+          'djB2bDaysLifetimeEarned',
+          'djB2bDaysPendingHold',
+          'djB2bDaysAvailable',
+          'djB2bDaysConsumptionActive',
+          'djB2bDaysLastConsumedDate',
+          'djB2bReferralCount',
+          'referredByUid',
+          'referredByCode',
+          'referralCapturedAt',
+          'referralRedeemedAt',
+          'referralSource',
+          'trialDaysGranted',
+        ])
+        && userPreservesDeviceBlockFusion()
+        && userPreservesDjB2bLedger();
+    }
+
+    /** Party-Branding: nur dj_logo, ohne Full-Doc-isSafePartyData. */
+    function partyOwnerDjLogoPatchAllowed(partyId) {
+      return request.auth != null
+        && (isAdmin() || isPartyOwnedByCurrentUser(partyId))
+        && request.resource.data.diff(resource.data).changedKeys()
+          .hasOnly(['dj_logo'])
+        && (
+          !('dj_logo' in request.resource.data)
+          || request.resource.data.dj_logo == null
+          || (request.resource.data.dj_logo is string
+            && request.resource.data.dj_logo.size() <= 2048)
+        );
     }
 
     function isSafeResultsPerPageValue(v) {
@@ -193,7 +695,11 @@ service cloud.firestore {
         && isSafeOptionalText(data, 'spotify_id', 120)
         && isSafeOptionalText(data, 'browser_language', 20)
         && isSafeOptionalText(data, 'client_platform', 20)
-        && (!('is_pre_wish' in data) || data.is_pre_wish is bool);
+        && (!('is_pre_wish' in data) || data.is_pre_wish is bool)
+        && (!('pre_wish_published' in data) || data.pre_wish_published is bool)
+        && (!('is_favorite' in data) || data.is_favorite is bool)
+        && (!('from_setlist' in data) || data.from_setlist is bool)
+        && isSafeOptionalText(data, 'display_name', 50);
     }
 
     function isSafeGuestStatsData(data) {
@@ -216,33 +722,275 @@ service cloud.firestore {
         && isSafeOptionalText(data, 'location_street', 120)
         && isSafeOptionalText(data, 'location_zip', 20)
         && isSafeOptionalText(data, 'timezone_id', 80)
-        && isSafeOptionalText(data, 'party_code', 32)
+        && isSafePartyCodeField(data, 'party_code', 32)
         && isSafeOptionalText(data, 'dj_code', 64)
         && isSafeOptionalText(data, 'created_by_email', 100)
         && isSafeOptionalText(data, 'dj_plan_type', 40)
+        && isSafeOptionalText(data, 'party_type', 20)
+        && isSafeOptionalText(data, 'location_id', 128)
+        && isSafeOptionalText(data, 'place_id', 128)
+        && isSafeOptionalText(data, 'dj_logo', 2048)
         && isSafeOptionalText(data, 'status', 40)
         && isSafeOptionalText(data, 'lifecycle_status', 40)
+        && isSafeOptionalText(data, 'active_recognition_device', 512)
         && (!('active_recognition_last_seen' in data)
           || data.active_recognition_last_seen == null
           || data.active_recognition_last_seen is timestamp)
         && (!('allow_pre_wishes' in data) || data.allow_pre_wishes is bool)
+        && (!('pre_wishes_paused' in data) || data.pre_wishes_paused is bool)
         && (!('auto_publish_pre_wishes_on_start' in data)
           || data.auto_publish_pre_wishes_on_start is bool)
         && (!('pre_wishes_auto_publish_completed_at' in data)
           || data.pre_wishes_auto_publish_completed_at == null
           || data.pre_wishes_auto_publish_completed_at is timestamp)
         && (!('wishes_manually_hidden' in data) || data.wishes_manually_hidden is bool)
+        && (!('is_paused' in data) || data.is_paused is bool)
+        && (!('pause_log' in data) || (
+          data.pause_log is list && data.pause_log.size() <= 500
+        ))
+        && (!('finished_at' in data)
+          || data.finished_at == null
+          || data.finished_at is timestamp)
+        && isSafeOptionalText(data, 'finished_by', 128)
+        && (!('finished_manually' in data) || data.finished_manually is bool)
+        && (!('end_date' in data)
+          || data.end_date == null
+          || data.end_date is timestamp)
+        && (!('end_time_posix' in data) || (
+          (data.end_time_posix is int || data.end_time_posix is float)
+          && data.end_time_posix >= 0
+        ))
         && isSafeOptionalText(data, 'venue_id', 128)
         && isSafeOptionalText(data, 'floor_key', 80)
         && isSafeOptionalText(data, 'floor_label', 120)
-        && (!('is_co_venue_dj' in data) || data.is_co_venue_dj is bool);
+        && (!('is_co_venue_dj' in data) || data.is_co_venue_dj is bool)
+        && (!('open_wish_order' in data) || (
+          data.open_wish_order is list
+          && data.open_wish_order.size() <= 500
+        ))
+        && (!('open_wish_order_rev' in data) || (
+          (data.open_wish_order_rev is int || data.open_wish_order_rev is float)
+          && data.open_wish_order_rev >= 0
+          && data.open_wish_order_rev <= 1000000
+        ))
+        && (!('open_wish_order_updated_at' in data)
+          || data.open_wish_order_updated_at == null
+          || data.open_wish_order_updated_at is timestamp)
+        && isSafeOptionalText(data, 'open_wish_sort_lock_device_id', 128)
+        && (!('open_wish_sort_lock_at' in data)
+          || data.open_wish_sort_lock_at == null
+          || data.open_wish_sort_lock_at is timestamp)
+        && (!('open_wish_pinned_keys' in data) || (
+          data.open_wish_pinned_keys is list
+          && data.open_wish_pinned_keys.size() <= 3
+        ))
+        && (!('open_wish_pinned_updated_at' in data)
+          || data.open_wish_pinned_updated_at == null
+          || data.open_wish_pinned_updated_at is timestamp)
+        && (!('pre_wish_limit_per_guest' in data) || (
+          (data.pre_wish_limit_per_guest is int || data.pre_wish_limit_per_guest is float)
+          && data.pre_wish_limit_per_guest >= 0
+          && data.pre_wish_limit_per_guest <= 50
+        ))
+        && (!('guest_limit_per_hour' in data) || (
+          (data.guest_limit_per_hour is int || data.guest_limit_per_hour is float)
+          && data.guest_limit_per_hour >= 0
+          && data.guest_limit_per_hour <= 100
+        ))
+        && (!('user_limit_per_hour' in data) || (
+          (data.user_limit_per_hour is int || data.user_limit_per_hour is float)
+          && data.user_limit_per_hour >= 0
+          && data.user_limit_per_hour <= 100
+        ))
+        && (!('show_location_publicly' in data) || data.show_location_publicly is bool)
+        && isSafePartyCodeField(data, 'fixed_party_code', 32)
+    }
+
+    function isSafeOpenWishOrderPartyFields(data) {
+      return (!('open_wish_order' in data) || (
+          data.open_wish_order is list
+          && data.open_wish_order.size() <= 500
+        ))
+        && (!('open_wish_order_rev' in data) || (
+          (data.open_wish_order_rev is int || data.open_wish_order_rev is float)
+          && data.open_wish_order_rev >= 0
+          && data.open_wish_order_rev <= 1000000
+        ))
+        && (!('open_wish_order_updated_at' in data)
+          || data.open_wish_order_updated_at == null
+          || data.open_wish_order_updated_at is timestamp)
+        && isSafeOptionalText(data, 'open_wish_sort_lock_device_id', 128)
+        && (!('open_wish_sort_lock_at' in data)
+          || data.open_wish_sort_lock_at == null
+          || data.open_wish_sort_lock_at is timestamp)
+        && isSafeOptionalText(data, 'active_recognition_device', 512)
+        && (!('open_wish_pinned_keys' in data) || (
+          data.open_wish_pinned_keys is list
+          && data.open_wish_pinned_keys.size() <= 3
+        ))
+        && (!('open_wish_pinned_updated_at' in data)
+          || data.open_wish_pinned_updated_at == null
+          || data.open_wish_pinned_updated_at is timestamp);
+    }
+
+    function isPartyCreatedByCurrentUser(partyId) {
+      return request.auth != null
+        && partyDocExists(partyId)
+        && partyData(partyId).created_by == request.auth.uid;
+    }
+
+    function openWishOrderPartyPatchAllowed() {
+      return resource.data != null
+        && isPartyOwnedByCurrentUser(resource.id)
+        && isSafeOpenWishOrderPartyFields(request.resource.data)
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'open_wish_order',
+          'open_wish_order_rev',
+          'open_wish_order_updated_at',
+          'open_wish_sort_lock_device_id',
+          'open_wish_sort_lock_at',
+          'active_recognition_device',
+          'open_wish_pinned_keys',
+          'open_wish_pinned_updated_at',
+          'active_recognition_last_seen',
+        ]);
+    }
+
+    /** DJ-Browser: Verankern / Loslösen (max. 3 Gruppen). */
+    function djBrowserOpenWishPinPatchAllowed(partyId) {
+      return request.auth != null
+        && isDjBrowserSession(partyId)
+        && resource.data != null
+        && isSafeOpenWishOrderPartyFields(request.resource.data)
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'open_wish_order',
+          'open_wish_order_rev',
+          'open_wish_order_updated_at',
+          'open_wish_sort_lock_device_id',
+          'open_wish_sort_lock_at',
+          'open_wish_pinned_keys',
+          'open_wish_pinned_updated_at',
+        ]);
+    }
+
+    /** Nachlaufzeit sofort beenden — nur wishes_manually_hidden = true. */
+    function partyGraceHideWishesPatchAllowed(partyId) {
+      return request.auth != null
+        && partyDocExists(partyId)
+        && (isAdmin() || isPartyOwnedByCurrentUser(partyId))
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'wishes_manually_hidden',
+        ])
+        && request.resource.data.wishes_manually_hidden == true;
+    }
+
+    /** Vorab-Wunschbox pausieren/fortsetzen — nur pre_wishes_paused. */
+    function preWishesPausedPatchAllowed(partyId) {
+      return request.auth != null
+        && partyDocExists(partyId)
+        && (isAdmin() || isPartyOwnedByCurrentUser(partyId))
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'pre_wishes_paused',
+        ])
+        && request.resource.data.pre_wishes_paused is bool;
+    }
+
+    /** Vorab-Einstellungen: aktivieren (nur >6 h vor Start), nie deaktivieren; Limit nur >6 h. */
+    function partyPreWishSettingsPatchAllowed(partyId) {
+      return request.auth != null
+        && partyDocExists(partyId)
+        && (isAdmin() || isPartyOwnedByCurrentUser(partyId))
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'allow_pre_wishes',
+          'pre_wish_limit_per_guest',
+        ])
+        && partyPreWishSettingsPatchValuesSafe(partyId);
+    }
+
+    function partyPreWishSettingsPatchValuesSafe(partyId) {
+      let changed = request.resource.data.diff(resource.data).changedKeys();
+      let prev = resource.data;
+      let next = request.resource.data;
+      return (!changed.hasAny(['allow_pre_wishes']) || (
+          next.allow_pre_wishes is bool
+          && !(prev.allow_pre_wishes == true && next.allow_pre_wishes == false)
+          && (
+            next.allow_pre_wishes == prev.allow_pre_wishes
+            || (
+              prev.allow_pre_wishes != true
+              && next.allow_pre_wishes == true
+              && isWithinPreWishWindow(partyId)
+            )
+          )
+        ))
+        && (!changed.hasAny(['pre_wish_limit_per_guest']) || (
+          (next.pre_wish_limit_per_guest is int || next.pre_wish_limit_per_guest is float)
+          && next.pre_wish_limit_per_guest >= 0
+          && next.pre_wish_limit_per_guest <= 50
+          && isWithinPreWishWindow(partyId)
+        ));
+    }
+
+    /** Vorab-Wunsch in Offen freigeben — nur pre_wish_published + status, kein Full-Doc-isSafeWishData. */
+    function preWishPublishPatchAllowed(partyId) {
+      return request.auth != null
+        && partyDocExists(partyId)
+        && (isAdmin() || isPartyOwnedByCurrentUser(partyId) || isDjBrowserSession(partyId))
+        && resource.data != null
+        && resource.data.is_pre_wish == true
+        && resource.data.pre_wish_published != true
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'pre_wish_published',
+          'status',
+        ])
+        && request.resource.data.pre_wish_published == true
+        && request.resource.data.status == 'pending';
+    }
+
+    /** Pause, Beenden, Start, Nachlaufzeit — nur geänderte Felder, kein Full-Doc-isSafePartyData. */
+    function partyOwnerLifecyclePatchAllowed(partyId) {
+      return (isAdmin() || isPartyOwnedByCurrentUser(partyId))
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'is_paused',
+          'pause_log',
+          'lifecycle_status',
+          'finished_at',
+          'finished_by',
+          'finished_manually',
+          'end_date',
+          'end_time_posix',
+          'wishes_manually_hidden',
+        ])
+        && partyOwnerLifecyclePatchValuesSafe();
+    }
+
+    function partyOwnerLifecyclePatchValuesSafe() {
+      let data = request.resource.data;
+      let changed = request.resource.data.diff(resource.data).changedKeys();
+      return (!changed.hasAny(['is_paused']) || data.is_paused is bool)
+        && (!changed.hasAny(['pause_log']) || (
+          data.pause_log is list && data.pause_log.size() <= 500
+        ))
+        && (!changed.hasAny(['lifecycle_status'])
+          || isSafeOptionalText(data, 'lifecycle_status', 40))
+        && (!changed.hasAny(['finished_at']) || data.finished_at is timestamp)
+        && (!changed.hasAny(['finished_by'])
+          || isSafeOptionalText(data, 'finished_by', 128))
+        && (!changed.hasAny(['finished_manually']) || data.finished_manually is bool)
+        && (!changed.hasAny(['end_date']) || data.end_date is timestamp)
+        && (!changed.hasAny(['end_time_posix']) || (
+          (data.end_time_posix is int || data.end_time_posix is float)
+          && data.end_time_posix >= 0
+        ))
+        && (!changed.hasAny(['wishes_manually_hidden'])
+          || data.wishes_manually_hidden is bool);
     }
 
     function isSafeVenueData(data) {
       return isSafeText(data.name, 120)
         && isSafeOptionalText(data, 'address', 200)
         && isSafeOptionalText(data, 'timezone_id', 80)
-        && isSafeOptionalText(data, 'fixed_party_code', 32)
+        && isSafePartyCodeField(data, 'fixed_party_code', 32)
         && isSafeOptionalText(data, 'created_by', 128)
         && isSafeOptionalText(data, 'place_id', 128)
         && data.latitude is number
@@ -296,6 +1044,14 @@ service cloud.firestore {
         && request.time <= partyData(partyId).start_date - duration.value(6, 'h');
     }
 
+    function preWishesNotPausedForParty(partyId) {
+      return partyDocExists(partyId)
+        && (
+          !('pre_wishes_paused' in partyData(partyId))
+          || partyData(partyId).pre_wishes_paused != true
+        );
+    }
+
     function isPreWishGuestCreate(data) {
       return request.auth == null
         && ('is_pre_wish' in data)
@@ -303,11 +1059,12 @@ service cloud.firestore {
         && ('party_id' in data)
         && data.party_id is string
         && partyLifecycleAllowsPreWish(data.party_id)
-        && isWithinPreWishWindow(data.party_id);
+        && isWithinPreWishWindow(data.party_id)
+        && preWishesNotPausedForParty(data.party_id);
     }
 
     function isSafePartyStatusData(data) {
-      return isSafeOptionalText(data, 'party_code', 32)
+      return isSafePartyCodeField(data, 'party_code', 32)
         && isSafeOptionalText(data, 'dj_code', 64)
         && isSafeOptionalText(data, 'party_id', 120)
         && (!('status' in data) || data.status is bool);
@@ -337,10 +1094,40 @@ service cloud.firestore {
     }
 
     function isSafeMusicHistoryTrackData(data) {
-      return data.keys().hasOnly(['title', 'artist', 'timestamp'])
+      return data.keys().hasOnly([
+          'title',
+          'artist',
+          'timestamp',
+          'bpm',
+          'camelot',
+          'key',
+          'durationSec',
+          'source',
+        ])
         && 'title' in data && isSafeText(data.title, 100)
         && 'artist' in data && isSafeText(data.artist, 100)
-        && data.timestamp is timestamp;
+        && data.timestamp is timestamp
+        && (!('bpm' in data) || (data.bpm is number && data.bpm > 0 && data.bpm <= 400))
+        && (!('camelot' in data) || (
+          data.camelot is string
+          && data.camelot.size() > 0
+          && data.camelot.size() <= 8
+        ))
+        && (!('key' in data) || (
+          data.key is string
+          && data.key.size() > 0
+          && data.key.size() <= 24
+        ))
+        && (!('durationSec' in data) || (
+          data.durationSec is int
+          && data.durationSec >= 1
+          && data.durationSec <= 86400
+        ))
+        && (!('source' in data) || (
+          data.source is string
+          && data.source.size() > 0
+          && data.source.size() <= 40
+        ));
     }
 
     /** Session-Dokument; nur nach exists(musicHistoryDocPath(sessionId)) verwenden. */
@@ -443,6 +1230,66 @@ service cloud.firestore {
         );
     }
 
+    function isSafeRbToolLive(data) {
+      return data != null
+        && data.keys().hasOnly([
+          'sessionId',
+          'connected',
+          'source',
+          'nowPlaying',
+          'decks',
+          'history',
+          'updatedAt'
+        ])
+        && data.sessionId is string
+        && data.sessionId.size() > 0
+        && data.sessionId.size() <= 80
+        && data.connected is bool
+        && data.source is string
+        && data.source.size() <= 40
+        && data.decks is list
+        && data.decks.size() <= 4
+        && data.history is list
+        && data.history.size() <= 50
+        && (data.nowPlaying == null || data.nowPlaying is map);
+    }
+
+    function isActiveRbTool() {
+      return request.auth != null
+        && request.auth.token.role == 'rb_tool'
+        && request.auth.token.sessionId is string
+        && request.auth.token.sessionId.size() > 0
+        && exists(/databases/$(database)/documents/rb_tool_sessions/$(request.auth.token.sessionId))
+        && get(/databases/$(database)/documents/rb_tool_sessions/$(request.auth.token.sessionId)).data.active == true;
+    }
+
+    function isSafeSongSuggestions(data) {
+      return data != null
+        && data.artist is string
+        && data.artist.size() > 0
+        && data.artist.size() <= 200
+        && data.title is string
+        && data.title.size() > 0
+        && data.title.size() <= 200
+        && data.version is string
+        && data.version.size() <= 80
+        && data.suggestions is list
+        && data.suggestions.size() <= 20;
+    }
+
+    function isSafeSongTransitions(data) {
+      return data != null
+        && data.from_artist is string
+        && data.from_artist.size() > 0
+        && data.from_artist.size() <= 200
+        && data.from_title is string
+        && data.from_title.size() > 0
+        && data.from_title.size() <= 200
+        && data.from_version is string
+        && data.from_version.size() <= 80
+        && data.next_tracks is map;
+    }
+
     function isSafeSpotifySettingsData(data) {
       return data != null
         && data.keys().hasOnly(['search_blacklist', 'max_song_duration_ms'])
@@ -537,6 +1384,7 @@ service cloud.firestore {
           partyData(partyId).created_by == request.auth.uid
           || partyData(partyId).djId == request.auth.uid
           || partyData(partyId).uid == request.auth.uid
+          || partyData(partyId).dj_code == request.auth.uid
         );
     }
 
@@ -648,12 +1496,62 @@ service cloud.firestore {
         );
     }
 
+    /** Öffentlich ohne Login — nur Katalog/Texte, keine PII. */
+    function isUnauthPublicCollection(collection) {
+      return collection in [
+        'settings',
+        'impressum',
+        'countries',
+        'genres',
+        'venues',
+        'locations',
+        'language_stats',
+        'roles',
+        'global_announcements'
+      ];
+    }
+
+    function canManageBlockResource() {
+      return request.auth != null
+        && (
+          isAdmin()
+          || ('dj_id' in resource.data && resource.data.dj_id == request.auth.uid)
+          || (
+            'party_id' in resource.data
+            && resource.data.party_id is string
+            && (
+              isPartyOwnedByCurrentUser(resource.data.party_id)
+              || isDjBrowserSession(resource.data.party_id)
+            )
+          )
+        );
+    }
+
+    function canWriteBlockRequest() {
+      return request.auth != null
+        && (
+          isAdmin()
+          || ('dj_id' in request.resource.data && request.resource.data.dj_id == request.auth.uid)
+          || (
+            'party_id' in request.resource.data
+            && request.resource.data.party_id is string
+            && isPartyOwnedByCurrentUser(request.resource.data.party_id)
+          )
+        );
+    }
+
+    function guestWishCreateNotPrivileged(data) {
+      return (!('is_dj_wish' in data) || data.is_dj_wish == false)
+        && (!('status' in data) || data.status in ['pending', 'rejected']);
+    }
+
     function partyListOwnedByAuth() {
       return request.auth != null && (
         isAdmin()
         || (resource.data.created_by is string && resource.data.created_by == request.auth.uid)
         || (resource.data.djId is string && resource.data.djId == request.auth.uid)
         || (resource.data.uid is string && resource.data.uid == request.auth.uid)
+        || (resource.data.dj_code is string && resource.data.dj_code == request.auth.uid)
       );
     }
 
@@ -682,8 +1580,18 @@ service cloud.firestore {
 
     function partyDjJoinCodeCollisionListAllowed() {
       return request.auth != null
-        && request.query.limit <= 1
+        && request.query.limit <= 25
         && partyHasNonEmptyJoinCode(resource.data);
+    }
+
+    /** Öffentliche Venue-Partys für Floor-/Zeit-Konflikt (DJ-übergreifend). */
+    function partyVenueConflictListAllowed() {
+      return request.auth != null
+        && request.query.limit <= 50
+        && ('venue_id' in resource.data)
+        && resource.data.venue_id is string
+        && resource.data.venue_id.size() > 0
+        && resource.data.party_type == 'public';
     }
 
     function partyGuestJoinCodeListAllowed() {
@@ -693,14 +1601,31 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow get: if isUserOwner(userId) || isAdmin() || isPublicUserProfileKeysOnly(resource.data);
+      allow get: if isUserOwner(userId) || isAdmin() || isPublicUserProfileKeysOnly(resource.data)
+        || (isActiveRbTool() && userId == request.auth.token.ownerUid);
       allow list: if isUserOwner(userId) || isAdmin();
       allow delete: if isUserOwner(userId) || isAdmin();
-      allow create: if (isUserOwner(userId) && isSafeUserRegistrationPayload(request.resource.data))
-        || (isAdmin() && isSafeUserData(request.resource.data));
-      allow update: if (isUserOwner(userId) || isAdmin())
-        && isSafeUserData(request.resource.data)
-        && (isAdmin() || userPreservesDeviceBlockFusion());
+      allow create: if (isUserOwner(userId) && isSafeUserRegistrationPayload(request.resource.data) && clientCannotSeedDjB2bFields(request.resource.data))
+        || isAdmin()
+        // Logo/Profilbild: falls Doc noch fehlt (set merge als create)
+        || (isUserOwner(userId)
+          && request.resource.data.keys().hasOnly(['dj_logo_url', 'djLogoUrl', 'photoURL']));
+      allow update: if (request.auth != null
+        && isAdmin()
+        && userPreservesDeviceBlockFusion()
+        && userPreservesDjB2bLedger())
+        // Logo/Profilbild: eigener, schlanker Pfad (umgeht Legacy-/Fusion-Blocker)
+        || (isUserOwner(userId) && userOwnerMediaUrlPatchAllowed())
+        // Fallback: Owner-Patch ohne privilegierte Felder (isSafeUserData-Legacy)
+        || (isUserOwner(userId) && userOwnerNonPrivilegedPatchAllowed())
+        || (isUserOwner(userId)
+          && userPreservesDeviceBlockFusion()
+          && userPreservesDjB2bLedger()
+          && userOwnerCannotEscalatePrivileges()
+          && (
+            isSafeUserData(request.resource.data)
+            || userOwnerSelfServicePatchAllowed()
+          ));
 
       match /social_media_links/{docId} {
         allow read: if true;
@@ -721,6 +1646,52 @@ service cloud.firestore {
         allow delete: if isUserOwner(userId) || isAdmin();
         allow create, update: if (isUserOwner(userId) || isAdmin())
           && isSafeHistoryData(request.resource.data);
+      }
+
+      match /saved_tracks/{docId} {
+        allow read: if isUserOwner(userId) || isAdmin();
+        allow delete: if isUserOwner(userId) || isAdmin();
+        allow create, update: if (isUserOwner(userId) || isAdmin())
+          && isSafeSavedTrackData(request.resource.data)
+          && docId is string
+          && docId.size() > 0
+          && docId.size() <= 200;
+      }
+
+      function isSafeDjLibrarySetlistDoc(data) {
+        return data != null
+          && data.keys().hasOnly([
+            'title', 'tracks', 'targetCount', 'createdAt', 'updatedAt',
+            'partyId', 'partyName', 'partyIds', 'partyNames',
+          ])
+          && isSafeText(data.title, 200)
+          && data.title.size() > 0
+          && data.tracks is list
+          && data.tracks.size() <= 1000
+          && (!('targetCount' in data)
+            || (data.targetCount is int
+              && data.targetCount >= 0
+              && data.targetCount <= 1000))
+          && isSafeOptionalText(data, 'partyId', 120)
+          && isSafeOptionalText(data, 'partyName', 200)
+          && (!('partyIds' in data)
+            || (data.partyIds is list
+              && data.partyIds.size() <= 50
+              && data.partyIds.size() >= 0))
+          && (!('partyNames' in data) || data.partyNames is map)
+          && (!('createdAt' in data) || data.createdAt is timestamp)
+          && (!('updatedAt' in data) || data.updatedAt is timestamp);
+      }
+
+      // DJ-eigene Setlisten-Bibliothek — nur users/{uid}/dj_setlists, volles CRUD.
+      match /dj_setlists/{listId} {
+        allow read: if isUserOwner(userId) || isAdmin();
+        allow delete: if isUserOwner(userId) || isAdmin();
+        allow create, update: if (isUserOwner(userId) || isAdmin())
+          && isSafeDjLibrarySetlistDoc(request.resource.data)
+          && listId is string
+          && listId.size() > 0
+          && listId.size() <= 128;
       }
 
       match /settings/{docId} {
@@ -775,6 +1746,11 @@ service cloud.firestore {
           && isSafeVenueBookmarkData(request.resource.data);
       }
 
+      match /dj_b2b_referrals/{refId} {
+        allow read: if isUserOwner(userId) || isAdmin();
+        allow write: if isAdmin();
+      }
+
       match /{subDocument=**} {
         allow read: if isUserOwner(userId) || isAdmin();
         allow delete: if isUserOwner(userId) || isAdmin();
@@ -793,6 +1769,12 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // Desktop-Tool VibesBox Sync: eine Lese-Anfrage beim Start, Schreiben nur Admin.
+    match /admin_config/sync_tool {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
     match /admin_config/apple_developer_token {
       allow read, write: if false;
     }
@@ -806,6 +1788,12 @@ service cloud.firestore {
 
     match /admin_config/vibesbox_social {
       allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Arabisch-Vorschau: Allowlist freigeschalteter DJ-UIDs (App-Sprachmenü).
+    match /admin_config/arabic_preview {
+      allow read: if request.auth != null;
       allow write: if isAdmin();
     }
 
@@ -844,7 +1832,11 @@ service cloud.firestore {
         && isSafeVenueData(request.resource.data)
         && request.resource.data.created_by == request.auth.uid;
       allow update: if request.auth != null
-        && isSafeVenueData(request.resource.data);
+        && isSafeVenueData(request.resource.data)
+        && (
+          isAdmin()
+          || resource.data.created_by == request.auth.uid
+        );
       allow delete: if isAdmin();
     }
 
@@ -877,12 +1869,170 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    /** Global eindeutige Join-Codes (privat + öffentliche Einmal-Codes). */
+    match /party_code_index/{code} {
+      allow get: if request.auth != null;
+      allow list: if false;
+      allow create: if request.auth != null
+        && request.resource.data.party_type in ['private', 'public']
+        && request.resource.data.party_id is string
+        && request.resource.data.party_id.size() > 0
+        && request.resource.data.created_by == request.auth.uid
+        && (!('scope' in request.resource.data)
+          || request.resource.data.scope == 'global')
+        && !exists(/databases/$(database)/documents/party_code_index/$(code));
+      allow delete: if request.auth != null
+        && resource.data.created_by == request.auth.uid;
+      allow update: if false;
+    }
+
+    match /party_status/{statusId} {
+      allow read: if request.auth != null
+        && (
+          isAdmin()
+          || resource.data.dj_code == request.auth.uid
+        );
+      allow create: if request.auth != null
+        && isSafePartyStatusData(request.resource.data)
+        && request.resource.data.dj_code == request.auth.uid;
+      allow update: if request.auth != null
+        && isSafePartyStatusData(request.resource.data)
+        && (
+          isAdmin()
+          || resource.data.dj_code == request.auth.uid
+        );
+      allow delete: if request.auth != null
+        && (
+          isAdmin()
+          || resource.data.dj_code == request.auth.uid
+        );
+    }
+
+    match /locations/{locationId} {
+      allow get: if request.auth != null;
+      allow list: if request.auth != null
+        && (
+          resource.data.created_by == request.auth.uid
+          || (('is_public' in resource.data) && resource.data.is_public == true)
+        );
+      allow create: if request.auth != null
+        && isSafePartyData(request.resource.data)
+        && (!('is_public' in request.resource.data) || request.resource.data.is_public is bool)
+        && request.resource.data.created_by == request.auth.uid;
+      allow update: if request.auth != null
+        && (isAdmin() || resource.data.created_by == request.auth.uid)
+        && isSafePartyData(request.resource.data)
+        && (!('is_public' in request.resource.data) || request.resource.data.is_public is bool);
+      allow delete: if isAdmin();
+    }
+
+    function isSafeDjSetlistShape(data) {
+      return data != null
+        && data.keys().hasOnly(['tracks', 'updatedAt', 'createdBy', 'targetCount', 'partyName'])
+        && data.createdBy is string
+        && data.createdBy.size() > 0
+        && data.createdBy.size() <= 128
+        && data.tracks is list
+        && data.tracks.size() <= 1000
+        && (!('targetCount' in data)
+          || (data.targetCount is int
+            && data.targetCount >= 0
+            && data.targetCount <= 1000))
+        && (!('updatedAt' in data) || data.updatedAt is timestamp)
+        && (!('partyName' in data)
+            || isSafeText(data.partyName, 200));
+    }
+
+    function isSafeDjSetlistCreate(data) {
+      return isSafeDjSetlistShape(data)
+        && data.createdBy == request.auth.uid;
+    }
+
+    function canManagePartySetlist(partyId) {
+      return request.auth != null
+        && (
+          isAdmin()
+          || isPartyOwnedByCurrentUser(partyId)
+          || (resource != null && resource.data.createdBy == request.auth.uid)
+          || isDjBrowserSession(partyId)
+        );
+    }
+
+    // Party-Setliste dj_setlists/{partyId}: DJ der Party, createdBy oder DJ-Browser.
+    match /dj_setlists/{partyId} {
+      allow get: if request.auth != null
+        && (
+          isAdmin()
+          || isPartyOwnedByCurrentUser(partyId)
+          || (resource != null && resource.data.createdBy == request.auth.uid)
+          || isDjBrowserSession(partyId)
+        );
+      allow list: if request.auth != null
+        && resource.data.createdBy == request.auth.uid;
+      allow create: if request.auth != null
+        && (isAdmin() || isPartyOwnedByCurrentUser(partyId))
+        && isSafeDjSetlistCreate(request.resource.data);
+      allow update: if canManagePartySetlist(partyId)
+        && isSafeDjSetlistShape(request.resource.data)
+        && request.resource.data.createdBy == resource.data.createdBy;
+      allow delete: if canManagePartySetlist(partyId);
+    }
+
+    function isSafeDjSongBlacklistDoc(data) {
+      return data != null
+        && data.keys().hasOnly(['entries', 'updatedAt', 'enabled', 'guest_block'])
+        && data.entries is list
+        && data.entries.size() <= 201
+        && (!('updatedAt' in data) || data.updatedAt is timestamp)
+        && (!('enabled' in data) || data.enabled is bool)
+        && (!('guest_block' in data) || data.guest_block is bool);
+    }
+
+    // Eine Blacklist pro DJ — lesen öffentlich (Gast-Submit), Writes nur der DJ selbst.
+    match /dj_song_blacklists/{djId} {
+      allow get: if true;
+      allow list: if request.auth != null
+        && (request.auth.uid == djId || isAdmin());
+      allow delete: if request.auth != null
+        && (request.auth.uid == djId || isAdmin());
+      allow create, update: if request.auth != null
+        && (request.auth.uid == djId || isAdmin())
+        && djId is string
+        && djId.size() > 0
+        && djId.size() <= 128
+        && isSafeDjSongBlacklistDoc(request.resource.data);
+    }
+
+    function isSafePartySongBlacklistDoc(data) {
+      return data != null
+        && data.keys().hasOnly(['entries', 'updatedAt'])
+        && data.entries is list
+        && data.entries.size() <= 200
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    // Temporäre Blacklist einer Party — lesen öffentlich (Gast-Submit), Writes nur Party-DJ/Admin.
+    match /party_song_blacklists/{partyId} {
+      allow get: if true;
+      allow list: if request.auth != null
+        && (isAdmin() || isPartyOwnedByCurrentUser(partyId));
+      allow delete: if request.auth != null
+        && (isAdmin() || isPartyOwnedByCurrentUser(partyId));
+      allow create, update: if request.auth != null
+        && (isAdmin() || isPartyOwnedByCurrentUser(partyId))
+        && partyId is string
+        && partyId.size() > 0
+        && partyId.size() <= 128
+        && isSafePartySongBlacklistDoc(request.resource.data);
+    }
+
     match /parties/{partyId} {
       allow get: if true;
       allow list: if partyListOwnedByAuth()
         || partyGuestDiscoveryListAllowed()
         || partyGuestJoinCodeListAllowed()
-        || partyDjJoinCodeCollisionListAllowed();
+        || partyDjJoinCodeCollisionListAllowed()
+        || partyVenueConflictListAllowed();
       allow create: if request.auth != null
         && isSafePartyData(request.resource.data)
         && (
@@ -890,10 +2040,24 @@ service cloud.firestore {
           || ('created_by' in request.resource.data && request.resource.data.created_by == request.auth.uid)
           || ('djId' in request.resource.data && request.resource.data.djId == request.auth.uid)
           || ('uid' in request.resource.data && request.resource.data.uid == request.auth.uid)
+          || ('dj_code' in request.resource.data && request.resource.data.dj_code == request.auth.uid)
         );
-      allow update: if (request.auth != null
-        && isSafePartyData(request.resource.data)
-        && (isAdmin() || isPartyOwnedByCurrentUser(partyId)))
+      allow update: if partyGraceHideWishesPatchAllowed(partyId)
+        || preWishesPausedPatchAllowed(partyId)
+        || partyPreWishSettingsPatchAllowed(partyId)
+        || djBrowserOpenWishPinPatchAllowed(partyId)
+        || partyOwnerDjLogoPatchAllowed(partyId)
+        || (request.auth != null
+          && (
+            (
+              (isAdmin() || isPartyOwnedByCurrentUser(partyId))
+              && (
+                isSafePartyData(request.resource.data)
+                || openWishOrderPartyPatchAllowed()
+                || partyOwnerLifecyclePatchAllowed(partyId)
+              )
+            )
+          ))
         || guestIncrementsOnlyTotalGuestCount(partyId);
       allow delete: if request.auth != null
         && (isAdmin() || isPartyOwnedByCurrentUser(partyId));
@@ -938,25 +2102,165 @@ service cloud.firestore {
               )
             )
           );
-        allow create, update: if canGuestWriteOwnClientDoc(guestId, request.resource.data)
-          && partyDocExists(partyId)
-          && isSafeGuestStatsData(request.resource.data);
+        allow create, update: if partyDocExists(partyId)
+          && isSafeGuestStatsData(request.resource.data)
+          && (
+            canGuestWriteOwnClientDoc(guestId, request.resource.data)
+            || (
+              guestId is string
+              && request.resource.data.client_id is string
+              && request.resource.data.client_id == guestId
+            )
+          );
+      }
+
+      /** Server-gepflegte Wunsch-Zähler (Cloud Functions) — nur Admin lesen. */
+      match /stats/{docId} {
+        allow read: if isAdmin();
+        allow write: if false;
       }
 
       function wishPartyIdMatchesPath(data) {
         return data != null
-          && ('party_id' in data)
-          && data.party_id is string
-          && data.party_id == partyId;
+          && (
+            !('party_id' in data)
+            || (
+              data.party_id is string
+              && data.party_id == partyId
+            )
+          );
+      }
+
+      function isAllowedWishStatusValue(status) {
+        return status is string
+          && status in ['pending', 'played', 'rejected'];
+      }
+
+      /** Status/Ablehnung/Wiederherstellung/Shazam — nur geänderte Felder, kein Full-Doc-isSafeWishData (Legacy-Wünsche). */
+      function wishStatusPatchChangedKeysOnly() {
+        return request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'status',
+          'status_changed_at',
+          'playedAt',
+          'played_at',
+          'rejectedAt',
+          'rejected_at',
+          'rejection_reason',
+          'auto_rejected_by_block',
+          'auto_rejected_by_blacklist',
+          'recognized_at',
+          'auto_recognized',
+          'isSeen',
+          'is_seen',
+          'is_favorite',
+        ]);
+      }
+
+      function wishStatusPatchValuesSafe() {
+        let data = request.resource.data;
+        return (!('status' in data) || isAllowedWishStatusValue(data.status))
+          && (!('auto_recognized' in data) || data.auto_recognized is bool)
+          && (!('auto_rejected_by_blacklist' in data)
+            || data.auto_rejected_by_blacklist is bool)
+          && (!('isSeen' in data) || data.isSeen is bool)
+          && (!('is_seen' in data) || data.is_seen is bool)
+          && (!('is_favorite' in data) || data.is_favorite is bool);
+      }
+
+      /** Gast (auch Auth): Dubletten-Aggregation auf Original-Wunsch derselben Party. */
+      function guestWishDuplicateAggregationPatchAllowed(partyId) {
+        return resource.data != null
+          && wishPartyIdMatchesPath(resource.data)
+          && wishPartyIdMatchesPath(request.resource.data)
+          && partyDocExists(partyId)
+          && (
+            isPartyActiveForGuestWish(resource.data)
+            || (
+              resource.data.is_pre_wish == true
+              && resource.data.pre_wish_published != true
+            )
+          )
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+            'duplicate_count',
+            'requested_by',
+            'createdAt_list',
+            'greetings',
+            'is_registered_users',
+            'duplicate_updated_at',
+            'pre_wish_published',
+          ])
+          && (!('duplicate_count' in request.resource.data)
+            || request.resource.data.duplicate_count is int)
+          && (!('pre_wish_published' in request.resource.data)
+            || request.resource.data.pre_wish_published is bool)
+          && (!('requested_by' in request.resource.data)
+            || (request.resource.data.requested_by is list
+              && request.resource.data.requested_by.size() <= 200))
+          && (!('greetings' in request.resource.data)
+            || (request.resource.data.greetings is list
+              && request.resource.data.greetings.size() <= 200))
+          && (!('duplicate_count' in request.resource.data)
+            || (
+              request.resource.data.duplicate_count is int
+              && request.resource.data.duplicate_count >= 0
+              && (
+                (!('duplicate_count' in resource.data)
+                  && request.resource.data.duplicate_count <= 1)
+                || (
+                  'duplicate_count' in resource.data
+                  && resource.data.duplicate_count is int
+                  && request.resource.data.duplicate_count <= resource.data.duplicate_count + 1
+                )
+              )
+            ));
+      }
+
+      function partyOwnerWishStatusPatchAllowed(partyId) {
+        return request.auth != null
+          && resource.data != null
+          && wishPartyIdMatchesPath(resource.data)
+          && wishPartyIdMatchesPath(request.resource.data)
+          && (isAdmin() || isPartyOwnedByCurrentUser(partyId))
+          && wishStatusPatchChangedKeysOnly()
+          && wishStatusPatchValuesSafe();
+      }
+
+      /** DJ-Browser: gezielte Wunsch-Patches ohne Full-Doc-isSafeWishData. */
+      function djBrowserWishPatchAllowed() {
+        return request.auth != null
+          && isDjBrowserSession(partyId)
+          && resource.data != null
+          && wishPartyIdMatchesPath(resource.data)
+          && wishPartyIdMatchesPath(request.resource.data)
+          && (
+            (
+              request.resource.data.diff(resource.data).changedKeys().hasOnly(['is_favorite'])
+              && request.resource.data.is_favorite is bool
+            )
+            || (
+              wishStatusPatchChangedKeysOnly()
+              && wishStatusPatchValuesSafe()
+            )
+          );
       }
 
       function wishSubcollectionReadable() {
         return (request.auth != null && (
             isAdmin()
             || isPartyOwnedByCurrentUser(partyId)
+            || isDjBrowserSession(partyId)
             || wishDocumentReadable()
+            || isPartyOwnedByRbTool(partyId)
           ))
           || (request.auth == null && partyDocExists(partyId));
+      }
+
+      function isPartyOwnedByRbTool(partyId) {
+        return isActiveRbTool()
+          && request.auth.token.ownerUid is string
+          && exists(/databases/$(database)/documents/parties/$(partyId))
+          && get(/databases/$(database)/documents/parties/$(partyId)).data.created_by
+            == request.auth.token.ownerUid;
       }
 
       match /wishes/{wishId} {
@@ -970,45 +2274,84 @@ service cloud.firestore {
                 isAdmin()
                 || canManageWishData(request.resource.data)
                 || isPartyOwnedByCurrentUser(partyId)
+                || isDjBrowserManualWishCreate(request.resource.data, partyId)
               )
             )
             || (
               request.auth == null
+              && guestWishCreateNotPrivileged(request.resource.data)
               && (
                 isPartyActiveForGuestWish(request.resource.data)
                 || isPreWishGuestCreate(request.resource.data)
               )
             )
           );
-        allow update: if isSafeWishData(request.resource.data)
-          && wishPartyIdMatchesPath(request.resource.data)
-          && wishPartyIdMatchesPath(resource.data)
-          && (
-            (
-              request.auth != null
-              && (
-                isAdmin()
-                || isPartyOwnedByCurrentUser(partyId)
-                || canManageWishData(resource.data)
-                || canManageWishData(request.resource.data)
-                || authenticatedUserOwnsWishByDisplayName()
+        allow update: if preWishPublishPatchAllowed(partyId)
+          || djBrowserWishPatchAllowed()
+          || partyOwnerWishStatusPatchAllowed(partyId)
+          || guestWishDuplicateAggregationPatchAllowed(partyId)
+          || (
+            isSafeWishData(request.resource.data)
+            && wishPartyIdMatchesPath(request.resource.data)
+            && wishPartyIdMatchesPath(resource.data)
+            && (
+              (
+                request.auth != null
+                && (
+                  isAdmin()
+                  || isPartyOwnedByCurrentUser(partyId)
+                  || isDjBrowserSession(partyId)
+                  || canManageWishData(resource.data)
+                  || canManageWishData(request.resource.data)
+                  || authenticatedUserOwnsWishByDisplayName()
+                )
+              )
+              || (
+                canGuestUpdateWishData()
+                && !request.resource.data.diff(resource.data).changedKeys()
+                  .hasAny(['status', 'is_dj_wish'])
               )
             )
-            || canGuestUpdateWishData()
           );
+        // DJ/Admin: alle Status; andere nur pending (Gast-eigene Aufräumen).
         allow delete: if request.auth != null
           && (
             isAdmin()
             || isPartyOwnedByCurrentUser(partyId)
-            || canManageWishData(resource.data)
-            || authenticatedUserOwnsWishByDisplayName()
+            || isDjBrowserSession(partyId)
+            || (
+              (!('status' in resource.data) || resource.data.status == 'pending')
+              && (
+                canManageWishData(resource.data)
+                || authenticatedUserOwnsWishByDisplayName()
+              )
+            )
           );
+      }
+
+      /** Admin-Home Wishbox-Toggle-Protokoll. */
+      match /status_logs/{logId} {
+        allow read: if isAdmin() || isPartyOwnedByCurrentUser(partyId);
+        allow create: if (isAdmin() || isPartyOwnedByCurrentUser(partyId))
+          && request.resource.data.keys().hasOnly(['status', 'timestamp', 'action_by'])
+          && request.resource.data.status is string
+          && request.resource.data.status.size() <= 40
+          && request.resource.data.action_by is string
+          && request.resource.data.action_by == request.auth.uid
+          && (!('timestamp' in request.resource.data)
+            || request.resource.data.timestamp is timestamp);
+        allow update, delete: if isAdmin();
       }
     }
 
     match /guest_fingerprints/{clientId} {
-      allow read: if request.auth != null;
-      allow create, update: if canGuestWriteOwnClientDoc(clientId, request.resource.data);
+      // PWA liest vor dem Upsert — unauth muss get dürfen.
+      allow get: if true;
+      allow list: if request.auth != null;
+      allow create, update: if clientId is string
+        && request.resource.data != null
+        && request.resource.data.client_id is string
+        && request.resource.data.client_id == clientId;
     }
 
     match /social_media_links/{uid} {
@@ -1019,14 +2362,39 @@ service cloud.firestore {
 
     match /blocked_devices/{docId} {
       allow get: if true;
-      allow list: if request.auth != null;
-      allow create, update, delete: if request.auth != null;
+      allow list: if canManageBlockResource();
+      allow create: if canWriteBlockRequest();
+      allow update, delete: if canManageBlockResource();
     }
 
     match /blocked_guests/{docId} {
       allow get: if true;
-      allow list: if request.auth != null;
-      allow create, update, delete: if request.auth != null;
+      allow list: if canManageBlockResource();
+      allow create: if canWriteBlockRequest();
+      allow update, delete: if canManageBlockResource();
+    }
+
+    // Eigene Regeln — nicht über Catch-all + isSafeHistoryData (andere Feldmenge).
+    match /block_history/{docId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+        && request.resource.data.client_id is string
+        && request.resource.data.client_id.size() > 0
+        && request.resource.data.client_id.size() <= 200
+        && request.resource.data.dj_id is string
+        && request.resource.data.dj_id == request.auth.uid
+        && request.resource.data.party_id is string
+        && request.resource.data.party_id.size() > 0
+        && request.resource.data.party_id.size() <= 120
+        && request.resource.data.timestamp is timestamp
+        && isSafeOptionalText(request.resource.data, 'blocked_as_name', 120)
+        && isSafeOptionalText(request.resource.data, 'trigger_wish_id', 120)
+        && isSafeOptionalText(request.resource.data, 'trigger_wish_title', 400);
+      allow update, delete: if request.auth != null
+        && (
+          isAdmin()
+          || (resource.data.dj_id is string && resource.data.dj_id == request.auth.uid)
+        );
     }
 
     match /block_device_fusion_log/{docId} {
@@ -1126,7 +2494,6 @@ service cloud.firestore {
           || canManagePartyByData(request.resource.data)
         );
       allow update: if request.auth != null
-        && isSafeCommonData(request.resource.data)
         && (
           isAdmin()
           || ('djId' in resource.data && resource.data.djId == request.auth.uid)
@@ -1155,50 +2522,191 @@ service cloud.firestore {
       }
     }
 
+    match /referral_codes/{codeId} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+
+    match /party_settings/{docId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if isAdmin()
+        && isSafeSettingsData(request.resource.data);
+    }
+
+    // Seed Gast/DJ bleibt möglich; Admin-Rolle nur durch Admin.
+    match /roles/{roleId} {
+      allow read: if true;
+      allow create: if isAdmin()
+        || (
+          request.resource.data.keys().hasOnly(['name', 'level'])
+          && request.resource.data.name in ['Gast', 'DJ']
+          && request.resource.data.level is int
+        );
+      allow update, delete: if isAdmin();
+    }
+
+    // Admin-To-dos: nur Admin-UI, kein DJ-/Gast-Liste.
+    match /todos/{docId} {
+      allow read: if isAdmin();
+      allow create, update: if isAdmin() && isSafeTodoData(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // Kontakt: Anlegen durch eingeloggte App; Lesen nur Admin.
+    // PWA speichert über Cloud Function (Admin SDK) in contacts.
+    match /contact_messages/{docId} {
+      allow create: if request.auth != null
+        && isSafeContactInfoData(request.resource.data);
+      allow read, update, delete: if isAdmin();
+    }
+
+    match /contacts/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Rate-Limit-Docs nur Functions (Admin SDK).
+    match /last_actions/{docId} {
+      allow read, write: if false;
+    }
+
+    match /party_sessions/{docId} {
+      allow read, update, delete: if request.auth != null
+        && (
+          isAdmin()
+          || ('dj_id' in resource.data && resource.data.dj_id == request.auth.uid)
+          || (
+            'party_id' in resource.data
+            && resource.data.party_id is string
+            && isPartyOwnedByCurrentUser(resource.data.party_id)
+          )
+        );
+      allow create: if request.auth != null
+        && (
+          isAdmin()
+          || ('dj_id' in request.resource.data && request.resource.data.dj_id == request.auth.uid)
+          || (
+            'party_id' in request.resource.data
+            && request.resource.data.party_id is string
+            && isPartyOwnedByCurrentUser(request.resource.data.party_id)
+          )
+        );
+    }
+
+    match /shazam_history/{docId} {
+      allow read, delete: if request.auth != null
+        && (
+          isAdmin()
+          || ('user_id' in resource.data && resource.data.user_id == request.auth.uid)
+          || (
+            'party_id' in resource.data
+            && resource.data.party_id is string
+            && isPartyOwnedByCurrentUser(resource.data.party_id)
+          )
+        );
+      allow create, update: if request.auth != null
+        && (
+          isAdmin()
+          || ('user_id' in request.resource.data && request.resource.data.user_id == request.auth.uid)
+        );
+    }
+
+    match /admin_stats/{docId} {
+      allow read, write: if isAdmin();
+    }
+
     match /{collection}/{docId} {
       allow read: if isCollectionWhitelisted(collection)
         && collection != 'users'
         && collection != 'parties'
+        && collection != 'party_status'
+        && collection != 'locations'
         && collection != 'wishes'
         && collection != 'music_history'
         && collection != 'countries'
         && collection != 'social_media_links'
         && collection != 'blocked_devices'
         && collection != 'blocked_guests'
-        && collection != 'admin_config';
+        && collection != 'block_history'
+        && collection != 'admin_config'
+        && collection != 'todos'
+        && collection != 'contact_messages'
+        && collection != 'contacts'
+        && collection != 'last_actions'
+        && collection != 'party_sessions'
+        && collection != 'shazam_history'
+        && collection != 'admin_stats'
+        && collection != 'roles'
+        && (request.auth != null || isUnauthPublicCollection(collection));
       allow delete: if isCollectionWhitelisted(collection)
         && collection != 'users'
         && collection != 'parties'
+        && collection != 'party_status'
+        && collection != 'locations'
         && collection != 'wishes'
         && collection != 'music_history'
         && collection != 'countries'
         && collection != 'social_media_links'
         && collection != 'blocked_devices'
         && collection != 'blocked_guests'
+        && collection != 'block_history'
         && collection != 'admin_config'
+        && collection != 'todos'
+        && collection != 'contact_messages'
+        && collection != 'contacts'
+        && collection != 'last_actions'
+        && collection != 'party_sessions'
+        && collection != 'shazam_history'
+        && collection != 'admin_stats'
+        && collection != 'roles'
         && (isAdmin() || isTopLevelDocOwner());
       allow create: if isCollectionWhitelisted(collection)
         && collection != 'users'
         && collection != 'parties'
+        && collection != 'party_status'
+        && collection != 'locations'
         && collection != 'wishes'
         && collection != 'music_history'
         && collection != 'countries'
         && collection != 'social_media_links'
         && collection != 'blocked_devices'
         && collection != 'blocked_guests'
+        && collection != 'block_history'
         && collection != 'admin_config'
+        && collection != 'todos'
+        && collection != 'contact_messages'
+        && collection != 'contacts'
+        && collection != 'last_actions'
+        && collection != 'party_sessions'
+        && collection != 'shazam_history'
+        && collection != 'admin_stats'
+        && collection != 'roles'
         && canCreateCollectionDoc(collection, request.resource.data)
-        && isSafeCollectionData(collection, request.resource.data);
+        && isSafeCollectionData(collection, request.resource.data)
+        && (
+          isAdmin()
+          || isResourceOwnerByCommonFields(request.resource.data)
+        );
       allow update: if isCollectionWhitelisted(collection)
         && collection != 'users'
         && collection != 'parties'
+        && collection != 'party_status'
+        && collection != 'locations'
         && collection != 'wishes'
         && collection != 'music_history'
         && collection != 'countries'
         && collection != 'social_media_links'
         && collection != 'blocked_devices'
         && collection != 'blocked_guests'
+        && collection != 'block_history'
         && collection != 'admin_config'
+        && collection != 'todos'
+        && collection != 'contact_messages'
+        && collection != 'contacts'
+        && collection != 'last_actions'
+        && collection != 'party_sessions'
+        && collection != 'shazam_history'
+        && collection != 'admin_stats'
+        && collection != 'roles'
         && request.auth != null
         && (isAdmin() || isTopLevelDocOwner())
         && isSafeCollectionData(collection, request.resource.data);
@@ -1213,7 +2721,9 @@ service cloud.firestore {
           && collection != 'social_media_links'
           && collection != 'blocked_devices'
           && collection != 'blocked_guests'
-          && collection != 'admin_config';
+          && collection != 'block_history'
+          && collection != 'admin_config'
+          && (request.auth != null || isUnauthPublicCollection(collection));
         allow delete: if isCollectionWhitelisted(collection)
           && collection != 'users'
           && collection != 'parties'
@@ -1223,6 +2733,7 @@ service cloud.firestore {
           && collection != 'social_media_links'
           && collection != 'blocked_devices'
           && collection != 'blocked_guests'
+          && collection != 'block_history'
           && collection != 'admin_config'
           && (isAdmin() || isTopLevelDocOwner() || isParentDocOwner(collection, docId));
         allow create, update: if isCollectionWhitelisted(collection)
@@ -1234,10 +2745,92 @@ service cloud.firestore {
           && collection != 'social_media_links'
           && collection != 'blocked_devices'
           && collection != 'blocked_guests'
+          && collection != 'block_history'
           && collection != 'admin_config'
           && request.auth != null
+          && (
+            isAdmin()
+            || isParentDocOwner(collection, docId)
+            || isResourceOwnerByCommonFields(request.resource.data)
+          )
           && isSafeCommonData(request.resource.data);
       }
+    }
+
+    match /dj_browser_codes/{codeId} {
+      allow read, write: if false;
+    }
+
+    match /dj_browser_redeem_rate/{docId} {
+      allow read, write: if false;
+    }
+
+    match /dj_browser_sessions/{sessionId} {
+      allow read: if request.auth != null
+        && request.auth.token.role == 'dj_browser'
+        && request.auth.token.sessionId == sessionId;
+      allow write: if false;
+    }
+
+    match /song_suggestions/{trackId} {
+      allow read: if isAdmin() || isActiveRbTool();
+      allow create, update: if isActiveRbTool()
+        && isSafeSongSuggestions(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /song_transitions/{trackId} {
+      allow read: if isAdmin() || isActiveRbTool();
+      allow create, update: if isActiveRbTool()
+        && isSafeSongTransitions(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /rb_tool_codes/{codeId} {
+      allow read, write: if false;
+    }
+    match /rb_tool_redeem_rate/{docId} {
+      allow read, write: if false;
+    }
+    match /rb_tool_state/{ownerUid} {
+      allow read, write: if false;
+    }
+    match /rb_tool_sessions/{sessionId} {
+      allow read: if request.auth != null
+        && request.auth.token.role == 'rb_tool'
+        && request.auth.token.sessionId == sessionId;
+      allow write: if false;
+    }
+    // Vom Tool gemeldet, Schreiben nur über die Function. Admin liest die Liste.
+    match /rb_tool_installs/{installId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /rb_tool_preview/{ownerUid} {
+      allow read: if request.auth != null
+        && request.auth.token.role == 'rb_tool'
+        && request.auth.token.ownerUid == ownerUid;
+      allow write: if false;
+    }
+
+    match /rb_tool_live/{ownerUid} {
+      allow read: if request.auth != null
+        && (
+          (isAdmin() && request.auth.uid == ownerUid)
+          || (
+            request.auth.token.role == 'rb_tool'
+            && request.auth.token.ownerUid == ownerUid
+          )
+        );
+      allow create, update: if request.auth != null
+        && request.auth.token.role == 'rb_tool'
+        && request.auth.token.ownerUid == ownerUid
+        && request.resource.data.sessionId == request.auth.token.sessionId
+        && exists(/databases/$(database)/documents/rb_tool_sessions/$(request.auth.token.sessionId))
+        && get(/databases/$(database)/documents/rb_tool_sessions/$(request.auth.token.sessionId)).data.active == true
+        && isSafeRbToolLive(request.resource.data);
+      allow delete: if false;
     }
 
     match /{document=**} {

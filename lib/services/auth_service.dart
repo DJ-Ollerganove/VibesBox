@@ -25,6 +25,9 @@ class AuthService {
     var p = uri.path;
     if (p.endsWith('/') && p.length > 1) p = p.substring(0, p.length - 1);
     if (p.toLowerCase() != '/verify') return false;
+    // Passwort-Reset teilt /verify, darf nicht als E-Mail-Verifizierung gelten.
+    final mode = (uri.queryParameters['mode'] ?? '').trim();
+    if (mode == 'resetPassword' || mode == 'recoverEmail') return false;
     final code = uri.queryParameters['oobCode'];
     return code != null && code.trim().isNotEmpty;
   }

@@ -17,11 +17,14 @@ import '../main.dart' show themeModeNotifier;
 import '../l10n/app_localizations.dart';
 import '../widgets/free_feature_locked.dart';
 import '../widgets/heartbeat_pulse_dot.dart';
+import '../widgets/settings_help_dialog.dart';
+import '../widgets/settings_info_icon_button.dart';
 import '../utils/ui_constants.dart';
 import '../utils/social_link_input_helper.dart';
 import '../utils/network_image_url.dart';
 import '../helpers/security_helper.dart';
 import '../utils/debug_log.dart';
+import '../app_scaffold_messenger.dart';
 
 // Verfügbare Social Media Portale
 class SocialMediaPlatform {
@@ -323,7 +326,7 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
 
       if (mounted) {
         final localizations = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(
               localizations.social_media_saved,
@@ -335,7 +338,7 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
     } catch (e) {
       if (mounted) {
         final localizations = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(
               '${localizations.error_saving_social_media} $e',
@@ -438,7 +441,7 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
       );
       if (!launched && mounted) {
         final localizations = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(
               localizations.error_opening_link,
@@ -450,7 +453,7 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
     } catch (e) {
       if (mounted) {
         final localizations = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(
               '${localizations.error_opening} $e',
@@ -766,6 +769,18 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
     );
   }
 
+  Widget _pageInfoButton(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
+    return SettingsInfoIconButton(
+      tooltip: l.settings_help_tooltip,
+      onPressed: () => showPageInfoHelp(
+        context,
+        titleKey: 'social_media_title',
+        prefix: 'info_page_social_media',
+      ),
+    );
+  }
+
   /// Gemeinsamer Header für Social-Media-Seite (Gast + DJ).
   Widget _buildSocialHeader(
     BuildContext context,
@@ -794,6 +809,8 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
               textAlign: isRtl ? TextAlign.right : TextAlign.left,
             ),
           ),
+          const SizedBox(width: 4),
+          _pageInfoButton(context),
           HeartbeatPulseDot(
             padding: EdgeInsetsDirectional.only(
               start: isRtl ? 0 : 8,
@@ -1403,6 +1420,8 @@ class _SocialMediaPageState extends State<SocialMediaPage> {
                       textAlign: isRtl ? TextAlign.right : TextAlign.left,
                     ),
                   ),
+                  const SizedBox(width: 4),
+                  _pageInfoButton(context),
                   HeartbeatPulseDot(
                     padding: EdgeInsetsDirectional.only(
                       start: isRtl ? 0 : 8,

@@ -7,6 +7,7 @@ import '../services/auth_service.dart';
 import '../utils/ui_constants.dart';
 import 'email_verification_result_dialog.dart';
 import '../utils/debug_log.dart';
+import '../app_scaffold_messenger.dart';
 
 /// Nach Registrierung von [LoginPage]: VibesBox-Look ([UIConstants.verificationDialogBoxDecoration]),
 /// Logo, manueller oobCode ([UIConstants.verificationOobCodeInputDecoration]),
@@ -231,7 +232,7 @@ class _EmailVerificationDialogState extends State<EmailVerificationDialog> {
                           Navigator.of(context).pop();
                         } else {
                           final msg = l.verify_email_still_pending;
-                          ScaffoldMessenger.of(context).showSnackBar(
+                          showVibesSnackBar(context, 
                             SnackBar(
                               content: Text(msg),
                               backgroundColor: Colors.orange,

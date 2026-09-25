@@ -35,11 +35,35 @@ class PreWishHelper {
   ]) {
     if (data == null || data['allow_pre_wishes'] != true) return false;
     final start = partyStartFromData(data);
-    if (start == null) return false;
+    return isPreWishWindowOpenAtStart(start, now);
+  }
+
+  /// Gäste-Vorabfenster offen (Party-Dokument oder geplanter Start).
+  static bool isPreWishWindowOpenAtStart(
+    DateTime? partyStart, [
+    DateTime? now,
+  ]) {
+    if (partyStart == null) return false;
     final n = now ?? DateTime.now();
-    if (!n.isBefore(start)) return false;
-    final deadline = start.subtract(const Duration(hours: preWishCloseHours));
+    if (!n.isBefore(partyStart)) return false;
+    final deadline = partyStart.subtract(
+      const Duration(hours: preWishCloseHours),
+    );
     return !n.isAfter(deadline);
+  }
+
+  /// DJ darf „Vorab-Wünsche erhalten“ nur ändern, wenn Start > 6 h entfernt ist.
+  static bool canConfigurePreWishesSettings(
+    DateTime? partyStart, [
+    DateTime? now,
+  ]) {
+    if (partyStart == null) return false;
+    final n = now ?? DateTime.now();
+    if (!n.isBefore(partyStart)) return false;
+    final deadline = partyStart.subtract(
+      const Duration(hours: preWishCloseHours),
+    );
+    return n.isBefore(deadline);
   }
 
   /// Alle Vorab-Wünsche für die DJ-Übersicht (Queue + bereits in Offen freigegeben).
@@ -51,6 +75,19 @@ class PreWishHelper {
   static bool isQueuedPreWish(Map<String, dynamic>? data) {
     if (data == null || data['is_pre_wish'] != true) return false;
     return data['pre_wish_published'] != true;
+  }
+
+  /// DJ hat die Vorab-Wunschbox pausiert (nur vor Partybeginn relevant).
+  static bool arePreWishesPaused(Map<String, dynamic>? data) {
+    return data != null && data['pre_wishes_paused'] == true;
+  }
+
+  /// Gäste dürfen Vorab-Wünsche senden (Fenster offen und nicht pausiert).
+  static bool isPreWishSubmissionOpen(
+    Map<String, dynamic>? data, [
+    DateTime? now,
+  ]) {
+    return isPreWishWindowOpen(data, now) && !arePreWishesPaused(data);
   }
 
   /// In Offen sichtbar, Marker [is_pre_wish] bleibt erhalten.

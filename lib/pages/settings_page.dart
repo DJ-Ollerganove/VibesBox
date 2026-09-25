@@ -7,7 +7,11 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../l10n/app_localizations.dart';
 import '../widgets/audio_settings_card.dart';
+import '../widgets/song_recommendation_settings_card.dart';
+import '../widgets/song_blacklist_settings_card.dart';
 import '../widgets/custom_page_header.dart';
+import '../widgets/settings_help_dialog.dart';
+import '../widgets/settings_info_icon_button.dart';
 import '../services/pro_feature_guard.dart';
 import '../services/shazam_service.dart';
 import '../services/translation_settings_service.dart';
@@ -25,6 +29,10 @@ import '../models/user_model.dart';
 import '../pages/diagnostic_log_page.dart';
 import '../services/app_diagnostic_log_service.dart';
 import '../utils/ui_constants.dart';
+import '../app_scaffold_messenger.dart';
+import '../widgets/vibesbox_sync_settings_section.dart';
+import '../services/vibesbox_sync_service.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
@@ -125,7 +133,7 @@ class _SettingsPageState extends State<SettingsPage> {
     } catch (e) {
       if (!context.mounted) return;
       final l = AppLocalizations.of(context)!;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text('${l.error_saving} $e'),
           backgroundColor: Colors.red,
@@ -147,7 +155,7 @@ class _SettingsPageState extends State<SettingsPage> {
       if (!status.isGranted) {
         if (context.mounted) {
           final l = AppLocalizations.of(context)!;
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(l.notification_permission_required),
               backgroundColor: Colors.orange,
@@ -210,7 +218,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
     final locale = Localizations.localeOf(context).languageCode;
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(locale);
+    final isRtl = VbTextDirection.isRtlLanguageCode(locale);
     final user = FirebaseAuth.instance.currentUser;
 
     if (_isLoading) {
@@ -240,7 +248,31 @@ class _SettingsPageState extends State<SettingsPage> {
                 title: l.settings_title,
               ),
               const SizedBox(height: 24),
-              // Zelle 1: Audio/Mikrofon
+              if (user != null)
+                ListenableBuilder(
+                  listenable: Listenable.merge([
+                    UserService().currentUser,
+                    VibesBoxSyncService.instance,
+                  ]),
+                  builder: (context, _) {
+                    if (!VibesBoxSyncService.instance.isVisibleForCurrentUser) {
+                      return const SizedBox.shrink();
+                    }
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1E1E1E),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.orange, width: 1.5),
+                      ),
+                      child: const Padding(
+                        padding: EdgeInsets.all(12.0),
+                        child: VibesBoxSyncSettingsSection(),
+                      ),
+                    );
+                  },
+                ),
+              // Zelle 1: Audio/Mikrofon (Einstellungen bleiben unabhängig von VibesBox Sync)
               if (user != null)
                 ValueListenableBuilder<SessionProStatus?>(
                   valueListenable: UserService().sessionProStatus,
@@ -273,6 +305,32 @@ class _SettingsPageState extends State<SettingsPage> {
                     );
                   },
                 ),
+
+              ValueListenableBuilder<UserModel?>(
+                valueListenable: UserService().currentUser,
+                builder: (context, userModel, _) {
+                  if (user == null || userModel == null) {
+                    return const SizedBox.shrink();
+                  }
+                  if (AppConfig.isGuestRole(userModel)) {
+                    return const SizedBox.shrink();
+                  }
+                  return const SongRecommendationSettingsCard();
+                },
+              ),
+
+              ValueListenableBuilder<UserModel?>(
+                valueListenable: UserService().currentUser,
+                builder: (context, userModel, _) {
+                  if (user == null || userModel == null) {
+                    return const SizedBox.shrink();
+                  }
+                  if (AppConfig.isGuestRole(userModel)) {
+                    return const SizedBox.shrink();
+                  }
+                  return const SongBlacklistSettingsCard();
+                },
+              ),
 
               TextScaleSettingsSection(textDirectionRtl: isRtl),
 
@@ -327,17 +385,45 @@ class _SettingsPageState extends State<SettingsPage> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            Align(
-                              alignment: AlignmentDirectional.topStart,
-                              child: Text(
-                                l.settings_section_notifications,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Align(
+                                    alignment: AlignmentDirectional.topStart,
+                                    child: Text(
+                                      l.settings_section_notifications,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 16,
+                                      ),
+                                      textAlign: TextAlign.start,
+                                    ),
+                                  ),
                                 ),
-                                textAlign: TextAlign.start,
-                              ),
+                                SettingsInfoIconButton(
+                                  tooltip: l.settings_help_tooltip,
+                                  onPressed: () => showSettingsHelpFromL10n(
+                                    context,
+                                    titleKey: 'settings_section_notifications',
+                                    introKey: 'info_settings_notify_intro',
+                                    bullets: const [
+                                      (
+                                        'info_settings_notify_wishes',
+                                        'info_settings_notify_wishes_body',
+                                      ),
+                                      (
+                                        'info_settings_notify_sound',
+                                        'info_settings_notify_sound_body',
+                                      ),
+                                      (
+                                        'info_settings_notify_status',
+                                        'info_settings_notify_status_body',
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
                             ),
                             const SizedBox(height: 4),
                             _djNotifySwitchRow(
@@ -455,6 +541,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     return const SizedBox.shrink();
                   }
                   return Container(
+                    margin: const EdgeInsets.only(bottom: 16),
                     decoration: BoxDecoration(
                       color: const Color(0xFF1E1E1E),
                       borderRadius: BorderRadius.circular(12),
@@ -467,13 +554,33 @@ class _SettingsPageState extends State<SettingsPage> {
                             ? CrossAxisAlignment.end
                             : CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            l.settings_wishbox_suggestions_title,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                            ),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  l.settings_wishbox_suggestions_title,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ),
+                              SettingsInfoIconButton(
+                                tooltip: l.settings_help_tooltip,
+                                onPressed: () => showSettingsHelpFromL10n(
+                                  context,
+                                  titleKey: 'settings_wishbox_suggestions_title',
+                                  introKey: 'info_settings_wishbox_intro',
+                                  bullets: const [
+                                    (
+                                      'info_settings_wishbox_toggle',
+                                      'info_settings_wishbox_toggle_body',
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
                           const SizedBox(height: 8),
                           SwitchListTile(
@@ -511,6 +618,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     return const SizedBox.shrink();
                   }
                   return Container(
+                    margin: const EdgeInsets.only(bottom: 16),
                     decoration: BoxDecoration(
                       color: const Color(0xFF1E1E1E),
                       borderRadius: BorderRadius.circular(12),
@@ -523,13 +631,33 @@ class _SettingsPageState extends State<SettingsPage> {
                             ? CrossAxisAlignment.end
                             : CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            l.translation_settings_title,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                            ),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  l.translation_settings_title,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ),
+                              SettingsInfoIconButton(
+                                tooltip: l.settings_help_tooltip,
+                                onPressed: () => showSettingsHelpFromL10n(
+                                  context,
+                                  titleKey: 'translation_settings_title',
+                                  introKey: 'info_settings_translation_intro',
+                                  bullets: const [
+                                    (
+                                      'info_settings_translation_toggle',
+                                      'info_settings_translation_toggle_body',
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
                           const SizedBox(height: 8),
                           SwitchListTile(
@@ -570,15 +698,15 @@ class _SettingsPageState extends State<SettingsPage> {
                       Icons.bug_report_outlined,
                       color: Colors.orange,
                     ),
-                    title: const Text(
-                      'Diagnose-Log',
-                      style: TextStyle(
+                    title: Text(
+                      l.diagnostic_log_title,
+                      style: const TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
                     subtitle: Text(
-                      'Fehler & Ereignisse auf diesem Gerät protokollieren',
+                      l.diagnostic_log_settings_subtitle,
                       style: TextStyle(
                         color: Colors.white.withValues(alpha: 0.65),
                         fontSize: 12,

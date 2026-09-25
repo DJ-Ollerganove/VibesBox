@@ -24,6 +24,8 @@ class SongRequest {
   final String? greeting;
   final bool? isDuplicate;
   final int? duplicateCount;
+  /// Gesetzt beim Dubletten-Update auf dem Original-Dokument (`duplicate_updated_at`).
+  final Timestamp? duplicateUpdatedAt;
   final Timestamp? playedAt;
   final Timestamp? recognizedAt;
   final Timestamp? statusChangedAt;
@@ -31,6 +33,7 @@ class SongRequest {
   final String? statusReason;
   final bool? deleted;
   final bool? autoRejectedByBlock;
+  final bool? autoRejectedByBlacklist;
   final bool? autoRecognized;
   final String? originalWishId;
   final String? userId; // user_id aus Firebase
@@ -38,6 +41,7 @@ class SongRequest {
   final bool? isSeen; // Read-Status: false = ungelesen (weißer Rahmen), true = gelesen (hellblauer Rahmen)
   final bool? isFavorite; // Favoriten-Markierung
   final bool? isDjWish; // Von DJ hinzugefügter Wunsch
+  final bool? fromSetlist; // Aus der DJ-Setliste nach Offen/Gespielt
   final bool? isPreWish; // Vor Partybeginn abgeschickt (Gast)
   final bool? preWishPublished; // DJ hat Wunsch in „Offen“ freigegeben
 
@@ -59,6 +63,7 @@ class SongRequest {
     this.greeting,
     this.isDuplicate,
     this.duplicateCount,
+    this.duplicateUpdatedAt,
     this.playedAt,
     this.recognizedAt,
     this.statusChangedAt,
@@ -66,6 +71,7 @@ class SongRequest {
     this.statusReason,
     this.deleted,
     this.autoRejectedByBlock,
+    this.autoRejectedByBlacklist,
     this.autoRecognized,
     this.originalWishId,
     this.userId,
@@ -73,6 +79,7 @@ class SongRequest {
     this.isSeen,
     this.isFavorite,
     this.isDjWish,
+    this.fromSetlist,
     this.isPreWish,
     this.preWishPublished,
   });
@@ -181,6 +188,7 @@ class SongRequest {
         // WICHTIG: is_duplicate exakt so abbilden wie in Firestore (kein Standardwert, der false in true verwandelt)
         isDuplicate: data['is_duplicate'] is bool ? (data['is_duplicate'] as bool) : null,
         duplicateCount: data['duplicate_count'] is int ? data['duplicate_count'] as int : null,
+        duplicateUpdatedAt: _parseTimestamp(data['duplicate_updated_at']),
         playedAt: _parseTimestamp(data['played_at'] ?? data['playedAt']),
         recognizedAt: data['recognized_at'] is Timestamp ? data['recognized_at'] as Timestamp : null,
         statusChangedAt: data['status_changed_at'] is Timestamp ? data['status_changed_at'] as Timestamp : null,
@@ -190,6 +198,8 @@ class SongRequest {
             : null,
         deleted: data['deleted'] == true,
         autoRejectedByBlock: data['auto_rejected_by_block'] == true,
+        autoRejectedByBlacklist: data['auto_rejected_by_blacklist'] == true ||
+            data['rejection_reason'] == 'song_blacklist',
         autoRecognized: data['auto_recognized'] == true,
         originalWishId: data['original_wish_id']?.toString(),
         userId: data['user_id']?.toString(),
@@ -197,6 +207,7 @@ class SongRequest {
         isSeen: data['isSeen'] is bool ? (data['isSeen'] as bool) : null,
         isFavorite: data['is_favorite'] == true,
         isDjWish: data['is_dj_wish'] == true,
+        fromSetlist: data['from_setlist'] == true,
         isPreWish: data['is_pre_wish'] == true,
         preWishPublished: data['pre_wish_published'] == true,
       );

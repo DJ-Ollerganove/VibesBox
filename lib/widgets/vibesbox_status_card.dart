@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../l10n/app_localizations.dart';
+
 /// Wiederverwendbare VibesBox-Status-Karte mit Schieberegler
 /// 
 /// Diese Karte ermöglicht es, die VibesBox (Gäste-Wünsche) manuell ein- und auszuschalten.
@@ -22,6 +24,7 @@ class VibesboxStatusCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     return cardBuilder(
       context,
       Padding(
@@ -33,16 +36,16 @@ class VibesboxStatusCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'VibesBox Status',
-                    style: TextStyle(
+                  Text(
+                    l.vibesbox_status_title,
+                    style: const TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    value ? 'Aktiviert' : 'Deaktiviert',
+                    value ? l.status_enabled : l.status_disabled,
                     style: TextStyle(
                       fontSize: 12,
                       color: Colors.grey[600],
@@ -61,4 +64,3 @@ class VibesboxStatusCard extends StatelessWidget {
     );
   }
 }
-

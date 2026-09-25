@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 import 'dart:math';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -15,6 +16,7 @@ import '../models/location_model.dart';
 import '../services/party_service.dart';
 import '../services/google_places_service.dart';
 import '../config/app_config.dart';
+import '../config/apple_review_test_dj.dart';
 import '../services/user_service.dart';
 import '../services/limit_service.dart';
 import '../services/party_limit_service.dart';
@@ -23,16 +25,17 @@ import '../utils/party_validator.dart';
 import '../widgets/common/pwa_widget_cell.dart';
 import '../helpers/security_helper.dart';
 import 'location_map_picker_page.dart';
-import '../widgets/party_creation/location_picker.dart';
+import '../utils/pre_wish_helper.dart';
 import '../services/pre_wish_limit_service.dart';
 import '../widgets/party_pre_wish_settings_field.dart';
 import '../widgets/scroll_indicator_overlay.dart';
 import '../widgets/vibesbox_info_dialog.dart';
 import '../utils/debug_log.dart';
 import '../utils/formatting_utils.dart';
+import '../utils/party_location_export_helper.dart';
 import '../widgets/party_creation/party_wizard_step_kind.dart';
 import '../widgets/party_creation/public_venue_floor_field.dart';
-import '../widgets/party_creation/dj_venue_bookmark_picker.dart';
+import '../widgets/party_creation/party_floor_name_dialog.dart';
 import '../constants/venue_constants.dart';
 import '../models/venue_model.dart';
 import '../models/floor_occupancy_info.dart';
@@ -40,9 +43,17 @@ import '../models/venue_bookmark_model.dart';
 import '../models/venue_floor.dart';
 import '../services/venue_service.dart';
 import '../services/venue_party_conflict_service.dart';
+import '../services/party_code_index_service.dart';
 import '../services/dj_venue_bookmark_service.dart';
 import '../utils/floor_key_utils.dart';
 import '../utils/venue_party_fields.dart';
+import '../models/venue_overlap_party_info.dart';
+import '../services/public_location_service.dart';
+import '../app_scaffold_messenger.dart';
+import '../services/app_diagnostic_log_service.dart';
+
+/// Kein expliziter Floor vs. Floor aus Dropdown wählen.
+enum _PublicFloorChoice { noFloor, selectFloor }
 
 // Sanitization-Funktion: Entfernt potenziell gefährliche Zeichen und HTML-Tags
 String sanitizeInput(String input) {
@@ -152,8 +163,6 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       false; // Location-Details auf QR-Code & Übersicht anzeigen
   bool _saveLocationForFutureParties =
       false; // Location für zukünftige Partys speichern
-  bool _useFixedPartyCodeForLocation =
-      false; // Immer denselben Party-Code für diesen Ort verwenden
   bool _useOneTimeEventCode =
       false; // Einmaligen Event-Code nutzen (ignoriere festen Code)
   bool _allowPreWishes = false; // Vorab-Wünsche per Party-Code vor Start
@@ -185,7 +194,12 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       VenuePartyConflictService();
   final DjVenueBookmarkService _venueBookmarkService =
       DjVenueBookmarkService();
+  final PublicLocationService _publicLocationService = PublicLocationService();
   VenueModel? _matchedVenue;
+  LocationModel? _matchedPublicLocation;
+  List<VenueOverlapPartyInfo> _overlappingParties = [];
+  bool? _venueOverlapJoinAccepted;
+  String? _overlapPromptKey;
   String? _selectedFloorKey;
   Set<String> _occupiedFloorKeys = {};
   Map<String, FloorOccupancyInfo> _floorOccupancyByKey = {};
@@ -194,6 +208,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
   bool _isFirstDjInVenueWindow = true;
   bool _venueContextLoading = false;
   String? _pendingNewFloorLabel;
+  _PublicFloorChoice _publicFloorChoice = _PublicFloorChoice.noFloor;
 
   List<PartyWizardStepKind> get _activeWizardSteps =>
       partyWizardStepsForType(_partyType);
@@ -212,11 +227,13 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       if (mounted) setState(() {});
     });
     _loadAllParties(); // Lade alle Partys für Überschneidungsprüfung
-    // Free-DJ: Limits fest auf 1 setzen (UI wird in _buildWishLimitsSection deaktiviert)
+    // Free-DJ: Limits fest auf 1 (Apple-Review-Test-DJ: wie Pro wählbar)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final user = UserService().currentUser.value;
-      if (user != null && user.isFree) {
+      if (user != null &&
+          user.isFree &&
+          !AppleReviewTestDj.usesProStyleWishLimits(user)) {
         setState(() {
           _selectedGuestLimit = 1;
           _selectedUserLimit = 1;
@@ -280,21 +297,29 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       _endMinute!,
     );
 
-    // Ermittle Admin-Status (Firestore-Rolle)
-    final isAdmin = AppConfig.isAdminRole(UserService().currentUser.value);
+    // Ermittle Admin-/Pro-/Review-Test-Status (Firestore)
+    final currentUser = UserService().currentUser.value;
+    final isAdmin = AppConfig.isAdminRole(currentUser);
+    final isPro = currentUser?.isPro == true;
+    final allowExtendedDuration = AppleReviewTestDj.matchesUser(currentUser);
 
-    // Nutze zentrale Validierungsklasse mit Admin-Status
+    // Nutze zentrale Validierungsklasse mit Admin-/Pro-Status
     final error = PartyValidator.validate(
       startDateTime,
       endDateTime,
       allParties: _allParties,
       isAdmin: isAdmin,
+      isPro: isPro,
+      allowExtendedDuration: allowExtendedDuration,
       context: context,
     );
 
     setState(() {
       _validationError = error;
     });
+    if (_partyType == 'public' && _isPublicLocationWithCoordinates) {
+      unawaited(_refreshVenueContext());
+    }
   }
 
   /// Prüft, ob alle Felder ausgefüllt sind und die Validierung erfolgreich ist
@@ -341,6 +366,22 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
     return !start.isBefore(_getMinStartDateTime());
   }
 
+  DateTime? get _plannedPartyStart {
+    if (_startDate == null || _startHour == null || _startMinute == null) {
+      return null;
+    }
+    return DateTime(
+      _startDate!.year,
+      _startDate!.month,
+      _startDate!.day,
+      _startHour!,
+      _startMinute!,
+    );
+  }
+
+  bool get _canConfigurePreWishSettings =>
+      PreWishHelper.canConfigurePreWishesSettings(_plannedPartyStart);
+
   bool get _isEndStepValid {
     if (!_isStartStepValid) return false;
     if (_endDate == null || _endHour == null || _endMinute == null) {
@@ -349,9 +390,18 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
     return _validationError == null;
   }
 
+  bool get _isPublicLocationStepValid =>
+      _isLocationStepValid && _isPublicLocationWithCoordinates;
+
   bool get _isPublicLocationFloorStepValid {
-    if (!_isPublicLocationWithCoordinates) return false;
     if (_venueContextLoading) return false;
+    if (_hasVenueOverlap && _venueOverlapJoinAccepted != true) return false;
+    if (_hasVenueOverlap && _venueOverlapJoinAccepted == true) {
+      if (_publicFloorChoice != _PublicFloorChoice.selectFloor) return false;
+    }
+    if (_publicFloorChoice == _PublicFloorChoice.noFloor) {
+      return _defaultFloorAvailable;
+    }
     if (_selectedFloorKey == null || _selectedFloorKey!.isEmpty) return false;
     if (!_defaultFloorAvailable &&
         FloorKeyUtils.isDefaultFloorKey(_selectedFloorKey)) {
@@ -415,17 +465,27 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
     if (coords == null || start == null || end == null) {
       setState(() {
         _matchedVenue = null;
+        _matchedPublicLocation = null;
         _occupiedFloorKeys = {};
+        _overlappingParties = [];
         _hasVenueOverlap = false;
         _defaultFloorAvailable = true;
         _isFirstDjInVenueWindow = true;
         _selectedFloorKey = null;
+        _venueOverlapJoinAccepted = null;
+        _overlapPromptKey = null;
       });
       return;
     }
 
     setState(() => _venueContextLoading = true);
     try {
+      final publicLocation = await _publicLocationService
+          .findMatchingPublicLocation(
+            latitude: coords.lat,
+            longitude: coords.lng,
+          );
+
       final venue = await _venueService.findMatchingVenue(
         latitude: coords.lat,
         longitude: coords.lng,
@@ -435,6 +495,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       Set<String> occupied = {};
       Map<String, FloorOccupancyInfo> occupancy = {};
       var overlap = false;
+      List<VenueOverlapPartyInfo> overlappingInfos = [];
       if (venue != null) {
         occupied = await _venueConflictService.occupiedFloorKeys(
           venueId: venue.id,
@@ -446,45 +507,82 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
           start: start,
           end: end,
         );
-        overlap = await _venueConflictService.hasVenueOverlap(
+        overlappingInfos = await _venueConflictService.findOverlappingPartyInfos(
           venueId: venue.id,
           start: start,
           end: end,
         );
+        overlap = overlappingInfos.isNotEmpty;
       }
 
       final defaultAvailable = !occupied.contains(VenueConstants.defaultFloorKey);
       String? nextFloorKey = _selectedFloorKey;
-      if (nextFloorKey == null ||
-          occupied.contains(nextFloorKey) ||
-          (!defaultAvailable &&
-              FloorKeyUtils.isDefaultFloorKey(nextFloorKey))) {
-        nextFloorKey = defaultAvailable
-            ? VenueConstants.defaultFloorKey
-            : null;
-        if (nextFloorKey == null && venue != null) {
-          for (final floor in venue.floors) {
-            if (!occupied.contains(floor.key)) {
-              nextFloorKey = floor.key;
-              break;
+      if (_publicFloorChoice == _PublicFloorChoice.selectFloor) {
+        final pendingKey =
+            _pendingNewFloorLabel != null ? _selectedFloorKey : null;
+        nextFloorKey = pendingKey ?? _selectedFloorKey;
+        if (pendingKey == null &&
+            (nextFloorKey == null ||
+                occupied.contains(nextFloorKey) ||
+                (!defaultAvailable &&
+                    FloorKeyUtils.isDefaultFloorKey(nextFloorKey)))) {
+          nextFloorKey = defaultAvailable
+              ? VenueConstants.defaultFloorKey
+              : null;
+          if (nextFloorKey == null && venue != null) {
+            for (final floor in venue.floors) {
+              if (!occupied.contains(floor.key)) {
+                nextFloorKey = floor.key;
+                break;
+              }
             }
           }
         }
+      } else {
+        nextFloorKey = null;
       }
 
       if (!mounted) return;
+      final promptKey =
+          '${venue?.id ?? 'none'}_${start.millisecondsSinceEpoch}_${end.millisecondsSinceEpoch}';
+      final shouldPromptOverlap =
+          overlap && promptKey != _overlapPromptKey;
+
       setState(() {
-        _matchedVenue = venue;
+        _matchedPublicLocation = publicLocation;
+        _matchedVenue = _mergePendingFloorIntoVenue(venue);
         _occupiedFloorKeys = occupied;
         _floorOccupancyByKey = occupancy;
+        _overlappingParties = overlappingInfos;
         _hasVenueOverlap = overlap;
         _defaultFloorAvailable = defaultAvailable;
         _isFirstDjInVenueWindow = !overlap;
-        _selectedFloorKey = nextFloorKey;
-        if (_hasVenueOverlap) {
+        if (publicLocation?.fixedPartyCode != null) {
           _useOneTimeEventCode = false;
         }
+        if (_publicFloorChoice == _PublicFloorChoice.selectFloor) {
+          _selectedFloorKey = nextFloorKey ?? _selectedFloorKey;
+        } else {
+          _selectedFloorKey = null;
+        }
+        if (_hasVenueOverlap && !_defaultFloorAvailable) {
+          _publicFloorChoice = _PublicFloorChoice.selectFloor;
+        }
+        if (_hasVenueOverlap) {
+          _useOneTimeEventCode = false;
+          if (shouldPromptOverlap) {
+            _venueOverlapJoinAccepted = null;
+            _overlapPromptKey = promptKey;
+          }
+        } else {
+          _venueOverlapJoinAccepted = null;
+          _overlapPromptKey = null;
+        }
       });
+
+      if (shouldPromptOverlap && mounted) {
+        await _showVenueOverlapDialog(overlappingInfos);
+      }
     } catch (e) {
       debugLog('⚠️ Venue-Kontext: $e');
     } finally {
@@ -492,108 +590,397 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
     }
   }
 
-  Future<void> _applyVenueBookmark(VenueBookmarkModel bookmark) async {
+  void _applySelectedLocationModel(
+    LocationModel locationModel,
+    bool useOneTimeEventCode,
+  ) {
     setState(() {
-      _locationSelectionMode = 'search';
-      _selectedLocationId = null;
-      _selectedLocationModel = null;
-      locationId = null;
-      _locationNameController.text = bookmark.locationName;
-      _currentTimezoneId = bookmark.timezoneId;
-      _selectedGooglePlace = LocationResult(
-        placeId: bookmark.venueId ?? '',
-        name: bookmark.locationName,
-        address: bookmark.address ?? '',
-        latitude: bookmark.latitude ?? 0,
-        longitude: bookmark.longitude ?? 0,
-        timezoneId: bookmark.timezoneId,
-      );
-      _wasMapAdjusted = bookmark.latitude != null && bookmark.longitude != null;
+      _selectedLocationModel = locationModel;
+      _selectedLocationId = locationModel.id;
+      _locationSelectionMode = 'dropdown';
+      _selectedGooglePlace = null;
+      _locationNameController.clear();
+      _currentTimezoneId = locationModel.timezoneId ?? 'UTC';
+      locationId = locationModel.id;
+      _saveLocationForFutureParties = false;
+      _useOneTimeEventCode =
+          _partyType == 'private' ? true : useOneTimeEventCode;
     });
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid != null) {
-      unawaited(
-        _venueBookmarkService.touchBookmark(
-          djId: uid,
-          bookmarkId: bookmark.id,
-        ),
-      );
-    }
+    debugLog('✅ Location ausgewählt: ${locationModel.locationName}');
     if (_partyType == 'public') {
-      await _refreshVenueContext();
+      _refreshVenueContext();
     }
   }
 
-  Future<void> _showAddFloorDialog() async {
-    final l = AppLocalizations.of(context)!;
-    final controller = TextEditingController();
-    final label = await showDialog<String>(
+  Future<void> _selectSavedLocationById(String? locationId) async {
+    if (locationId == null || locationId.isEmpty || !mounted) return;
+    final locationDoc = await FirebaseFirestore.instance
+        .collection('locations')
+        .doc(locationId)
+        .get();
+    if (!locationDoc.exists || !mounted) return;
+
+    final locationModel = LocationModel.fromFirestore(locationDoc);
+    if (_partyType == 'private') {
+      _applySelectedLocationModel(locationModel, true);
+      return;
+    }
+    if (locationModel.fixedPartyCode == null) {
+      _applySelectedLocationModel(locationModel, false);
+      return;
+    }
+
+    var useCustomCode = false;
+    final loc = AppLocalizations.of(context)!;
+    await showDialog<void>(
       context: context,
-      builder: (ctx) {
-        return AlertDialog(
-          backgroundColor: UIConstants.bgGradientEnd,
-          title: Text(l.party_floor_add_dialog_title),
-          content: TextField(
-            controller: controller,
-            decoration: InputDecoration(
-              hintText: l.party_floor_add_dialog_hint,
+      builder: (confirmContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final fixedCode = locationModel.fixedPartyCode ?? '';
+          return AlertDialog(
+            backgroundColor: UIConstants.djShellPageBackground,
+            insetPadding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: const BorderSide(color: UIConstants.appOrange, width: 2),
             ),
-            autofocus: true,
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: Text(l.cancel),
+            title: Text(
+              locationModel.locationName,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
             ),
-            FilledButton(
-              onPressed: () =>
-                  Navigator.pop(ctx, controller.text.trim()),
-              child: Text(l.save),
+            content: SizedBox(
+              width: 300,
+              child: CheckboxListTile(
+                value: useCustomCode,
+                onChanged: (value) {
+                  setDialogState(() => useCustomCode = value ?? false);
+                },
+                activeColor: UIConstants.appOrange,
+                checkColor: Colors.black,
+                controlAffinity: ListTileControlAffinity.leading,
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: Text(
+                  loc.party_one_time_event_code,
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                ),
+                subtitle: Text(
+                  useCustomCode
+                      ? loc.party_one_time_code_range_hint
+                      : loc.party_fixed_code_in_use_hint(fixedCode),
+                  style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                ),
+              ),
             ),
-          ],
-        );
-      },
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(
+                  loc.cancel,
+                  style: TextStyle(color: Colors.grey.shade400),
+                ),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: UIConstants.appOrange,
+                  foregroundColor: Colors.black,
+                ),
+                onPressed: () {
+                  Navigator.pop(context);
+                  _applySelectedLocationModel(
+                    locationModel,
+                    useCustomCode,
+                  );
+                },
+                child: Text(loc.button_select),
+              ),
+            ],
+          );
+        },
+      ),
     );
-    controller.dispose();
+  }
+
+  Widget _buildSavedLocationsDropdown(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade900,
+        border: Border.all(color: UIConstants.appOrange, width: 2),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          isExpanded: true,
+          value: _selectedLocationId,
+          hint: Text(
+            l10n.select_location,
+            style: TextStyle(color: Colors.grey.shade400),
+          ),
+          dropdownColor: UIConstants.djShellPageBackground,
+          iconEnabledColor: UIConstants.appOrange,
+          style: const TextStyle(color: Colors.white),
+          items: _locations.map((loc) {
+            final id = loc['id'] as String;
+            final name =
+                loc['location_name'] as String? ?? l10n.unnamed_location;
+            final code = loc['fixed_party_code'] as String?;
+            final isPublic = loc['is_public'] == true;
+            final uid = FirebaseAuth.instance.currentUser?.uid;
+            final isOwn = uid != null && loc['created_by'] == uid;
+            var label = name;
+            if (code != null && code.isNotEmpty) {
+              label = '$name · $code';
+            }
+            if (isPublic && !isOwn) {
+              label = '$label (${l10n.party_public_location_badge})';
+            }
+            return DropdownMenuItem<String>(
+              value: id,
+              child: Text(label, overflow: TextOverflow.ellipsis),
+            );
+          }).toList(),
+          onChanged: _selectSavedLocationById,
+        ),
+      ),
+    );
+  }
+
+  List<VenueFloor> get _displayFloors {
+    final base = _matchedVenue?.floors ?? const <VenueFloor>[];
+    final label = _pendingNewFloorLabel?.trim();
+    final key = _selectedFloorKey;
+    if (label == null || label.isEmpty || key == null || key.isEmpty) {
+      return base;
+    }
+    if (base.any((f) => f.key == key)) return base;
+    return [...base, VenueFloor(key: key, label: label)];
+  }
+
+  VenueModel? _mergePendingFloorIntoVenue(VenueModel? venue) {
+    final label = _pendingNewFloorLabel?.trim();
+    final key = _selectedFloorKey;
+    if (venue == null || label == null || label.isEmpty || key == null) {
+      return venue;
+    }
+    if (venue.floorByKey(key) != null) return venue;
+    return venue.copyWithFloors([
+      ...venue.floors,
+      VenueFloor(key: key, label: label),
+    ]);
+  }
+
+  Future<void> _showAddFloorDialog() async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    if (!mounted) return;
+
+    final label = await PartyFloorNameDialog.show(context);
     if (label == null || label.isEmpty) return;
     if (!mounted) return;
 
     final key = FloorKeyUtils.slugFromLabel(label);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() {
+        _publicFloorChoice = _PublicFloorChoice.selectFloor;
+        _pendingNewFloorLabel = label;
+        _selectedFloorKey = key;
+        _matchedVenue = _mergePendingFloorIntoVenue(_matchedVenue);
+      });
+    });
+  }
+
+  void _onPublicFloorChoiceChanged(_PublicFloorChoice choice) {
     setState(() {
-      _pendingNewFloorLabel = label;
-      _selectedFloorKey = key;
-      if (_matchedVenue != null &&
-          _matchedVenue!.floorByKey(key) == null) {
-        _matchedVenue = VenueModel(
-          id: _matchedVenue!.id,
-          name: _matchedVenue!.name,
-          address: _matchedVenue!.address,
-          latitude: _matchedVenue!.latitude,
-          longitude: _matchedVenue!.longitude,
-          timezoneId: _matchedVenue!.timezoneId,
-          fixedPartyCode: _matchedVenue!.fixedPartyCode,
-          placeId: _matchedVenue!.placeId,
-          floors: [
-            ..._matchedVenue!.floors,
-            VenueFloor(key: key, label: label),
-          ],
-          createdBy: _matchedVenue!.createdBy,
-          createdAt: _matchedVenue!.createdAt,
-          updatedAt: _matchedVenue!.updatedAt,
-        );
+      _publicFloorChoice = choice;
+      if (choice == _PublicFloorChoice.noFloor) {
+        _selectedFloorKey = null;
+        _pendingNewFloorLabel = null;
+      } else if (_selectedFloorKey == null && _defaultFloorAvailable) {
+        _selectedFloorKey = VenueConstants.defaultFloorKey;
       }
     });
   }
 
   void _resetVenueFloorState() {
     _matchedVenue = null;
+    _matchedPublicLocation = null;
     _selectedFloorKey = null;
     _occupiedFloorKeys = {};
+    _overlappingParties = [];
     _hasVenueOverlap = false;
     _defaultFloorAvailable = true;
     _isFirstDjInVenueWindow = true;
     _venueContextLoading = false;
     _pendingNewFloorLabel = null;
+    _publicFloorChoice = _PublicFloorChoice.noFloor;
+    _venueOverlapJoinAccepted = null;
+    _overlapPromptKey = null;
+  }
+
+  Future<void> _showVenueOverlapDialog(
+    List<VenueOverlapPartyInfo> parties,
+  ) async {
+    if (!mounted || parties.isEmpty) return;
+    final l = AppLocalizations.of(context)!;
+    final locale = Localizations.localeOf(context).toString();
+
+    final accepted = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: UIConstants.djShellPageBackground,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: UIConstants.appOrange, width: 2),
+        ),
+        title: Text(
+          l.party_venue_overlap_dialog_title,
+          style: const TextStyle(color: Colors.white),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                l.party_venue_overlap_dialog_intro,
+                style: TextStyle(color: Colors.grey.shade300),
+              ),
+              const SizedBox(height: 12),
+              ...parties.map((p) {
+                final startStr = DateFormat.yMMMd(locale).add_Hm().format(p.start);
+                final endStr = DateFormat.Hm(locale).format(p.end);
+                final dj = p.djDisplayName?.trim().isNotEmpty == true
+                    ? p.djDisplayName!.trim()
+                    : l.party_dj_fallback;
+                final partyLabel = p.partyName.trim().isNotEmpty
+                    ? p.partyName.trim()
+                    : l.unnamed_party;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    l.party_venue_overlap_party_line(
+                      partyLabel,
+                      dj,
+                      startStr,
+                      endStr,
+                    ),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                );
+              }),
+              const SizedBox(height: 12),
+              Text(
+                l.party_venue_overlap_join_floor_question,
+                style: TextStyle(color: Colors.grey.shade300),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(l.no),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: UIConstants.appOrange,
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(l.yes),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _venueOverlapJoinAccepted = accepted == true;
+      if (accepted == true) {
+        _publicFloorChoice = _PublicFloorChoice.selectFloor;
+      }
+    });
+    if (accepted == false && mounted) {
+      showVibesSnackBar(context, 
+        SnackBar(
+          content: Text(l.party_venue_overlap_decline_hint),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    }
+  }
+
+  Widget _buildMatchedPublicLocationBanner(BuildContext context) {
+    final loc = _matchedPublicLocation;
+    if (loc == null || loc.fixedPartyCode == null) return const SizedBox.shrink();
+    final l = AppLocalizations.of(context)!;
+    final currentUid = FirebaseAuth.instance.currentUser?.uid;
+    final isOwn = currentUid != null && loc.createdBy == currentUid;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.grey.shade900,
+          border: Border.all(color: UIConstants.appOrange, width: 2),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.place, color: UIConstants.appOrange, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    isOwn
+                        ? l.party_public_location_matched_own_title
+                        : l.party_public_location_matched_title,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              loc.locationName,
+              style: const TextStyle(color: Colors.white),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              l.party_fixed_code_display(loc.fixedPartyCode!),
+              style: const TextStyle(
+                color: UIConstants.appOrange,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            if (!isOwn) ...[
+              const SizedBox(height: 4),
+              Text(
+                l.party_public_location_matched_body,
+                style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 
   void _clampWizardStepForPartyType() {
@@ -614,9 +1001,16 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       case PartyWizardStepKind.partyName:
         return _isPartyNameStepValid;
       case PartyWizardStepKind.location:
-        return _isLocationStepValid;
-      case PartyWizardStepKind.locationWithFloor:
+        return _partyType == 'public'
+            ? _isPublicLocationStepValid
+            : _isLocationStepValid;
+      case PartyWizardStepKind.floor:
         return _isPublicLocationFloorStepValid;
+      case PartyWizardStepKind.partyCode:
+        return true;
+      case PartyWizardStepKind.locationWithFloor:
+        return _isPublicLocationFloorStepValid &&
+            _isPublicLocationStepValid;
       case PartyWizardStepKind.startTime:
         return _isStartStepValid;
       case PartyWizardStepKind.endTime:
@@ -644,8 +1038,9 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
     if (_scrollController.hasClients) {
       _scrollController.jumpTo(0);
     }
-    if (_activeWizardSteps[nextStep] ==
-        PartyWizardStepKind.locationWithFloor) {
+    if (_activeWizardSteps[nextStep] == PartyWizardStepKind.floor ||
+        _activeWizardSteps[nextStep] ==
+            PartyWizardStepKind.locationWithFloor) {
       _refreshVenueContext();
     }
   }
@@ -722,26 +1117,37 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
   }
 
   /// Prüft, ob der Ortsname ein expliziter POI-Name ist (z.B. Hotel, Club) und nicht nur Adresse/Straße/Ort.
-  /// Wenn name == address/street/city, handelt es sich um eine Dublette → false.
   bool _isExplicitLocationName(
     String name,
     String address,
     String? street,
     String? city,
-  ) {
-    final n = name.trim();
-    if (n.isEmpty) return false;
-    final a = address.trim().toLowerCase();
-    final s = (street ?? '').trim().toLowerCase();
-    final c = (city ?? '').trim().toLowerCase();
-    final nLower = n.toLowerCase();
-    if (a.isNotEmpty && nLower == a) return false;
-    if (s.isNotEmpty && nLower == s) return false;
-    if (c.isNotEmpty && nLower == c) return false;
-    return true;
+  ) =>
+      PartyLocationExportHelper.isExplicitLocationName(
+        name,
+        street: street,
+        city: city,
+        address: address,
+      );
+
+  /// Name für Firestore: manuell eingegeben oder expliziter POI — nie Straße/Ort allein.
+  String? _resolvePartyLocationName() {
+    final manual = _locationNameController.text.trim();
+    if (manual.isNotEmpty) return manual;
+    final place = _selectedGooglePlace;
+    if (place == null) return null;
+    if (_isExplicitLocationName(
+      place.name,
+      place.address,
+      place.street,
+      place.city,
+    )) {
+      return place.name.trim();
+    }
+    return null;
   }
 
-  /// Lädt alle gespeicherten Locations des aktuellen DJs
+  /// Lädt eigene und öffentliche Locations für die Auswahl.
   Future<void> _loadLocations() async {
     try {
       final user = FirebaseAuth.instance.currentUser;
@@ -750,134 +1156,29 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
         return;
       }
 
-      debugLog('🔍 Lade Locations für User: …');
+      final models =
+          await _publicLocationService.loadSelectableLocations(user.uid);
+      if (!mounted) return;
 
-      // Versuche zuerst mit orderBy
-      try {
-        final locationsSnapshot = await FirebaseFirestore.instance
-            .collection('locations')
-            .where('created_by', isEqualTo: user.uid)
-            .orderBy('location_name')
-            .get();
-
-        setState(() {
-          _locations = locationsSnapshot.docs.map((doc) {
-            final data = doc.data();
-            return {
-              'id': doc.id,
-              'location_name': data['location_name'] ?? '',
-              'address': data['address'] ?? '',
-              'latitude': data['latitude'],
-              'longitude': data['longitude'],
-              'timezone_id': data['timezone_id'] ?? 'UTC',
-              'fixed_party_code': data['fixed_party_code'],
-              'party_code':
-                  data['party_code'] ?? '', // Altes Feld (für Kompatibilität)
-              'created_by': data['created_by'] ?? '',
-            };
-          }).toList();
-        });
-
-        debugLog('✅ Locations geladen (mit orderBy): ${_locations.length}');
-      } catch (e) {
-        // Falls orderBy fehlschlägt (z.B. wegen fehlendem Index), versuche ohne orderBy
-        debugLog('⚠️ Fehler mit orderBy, versuche ohne: $e');
-        try {
-          final locationsSnapshot = await FirebaseFirestore.instance
-              .collection('locations')
-              .where('created_by', isEqualTo: user.uid)
-              .get();
-
-          final locationsList = locationsSnapshot.docs.map((doc) {
-            final data = doc.data();
-            return {
-              'id': doc.id,
-              'location_name': data['location_name'] ?? '',
-              'address': data['address'] ?? '',
-              'latitude': data['latitude'],
-              'longitude': data['longitude'],
-              'timezone_id': data['timezone_id'] ?? 'UTC',
-              'fixed_party_code': data['fixed_party_code'],
-              'party_code':
-                  data['party_code'] ?? '', // Altes Feld (für Kompatibilität)
-              'created_by': data['created_by'] ?? '',
-            };
-          }).toList();
-
-          // Sortiere manuell nach location_name
-          locationsList.sort((a, b) {
-            final nameA = (a['location_name'] as String).toLowerCase();
-            final nameB = (b['location_name'] as String).toLowerCase();
-            return nameA.compareTo(nameB);
-          });
-
-          setState(() {
-            _locations = locationsList;
-          });
-
-          debugLog(
-            '✅ Locations geladen (ohne orderBy, manuell sortiert): ${_locations.length}',
-          );
-        } catch (e2) {
-          debugLog('❌ Fehler beim Laden ohne orderBy: $e2');
-          // Als letzter Fallback: Lade alle Locations (ohne Filter)
-          debugLog('⚠️ Versuche alle Locations zu laden (ohne Filter)...');
-          try {
-            final allLocationsSnapshot = await FirebaseFirestore.instance
-                .collection('locations')
-                .get();
-
-            // Filtere manuell nach created_by
-            final filteredLocations = allLocationsSnapshot.docs
-                .where((doc) {
-                  final data = doc.data();
-                  final createdBy = data['created_by'] as String?;
-                  return createdBy == user.uid;
-                })
-                .map((doc) {
-                  final data = doc.data();
-                  return {
-                    'id': doc.id,
-                    'location_name': data['location_name'] ?? '',
-                    'address': data['address'] ?? '',
-                    'latitude': data['latitude'],
-                    'longitude': data['longitude'],
-                    'timezone_id': data['timezone_id'] ?? 'UTC',
-                    'fixed_party_code': data['fixed_party_code'],
-                    'party_code':
-                        data['party_code'] ??
-                        '', // Altes Feld (für Kompatibilität)
-                    'created_by': data['created_by'] ?? '',
-                  };
-                })
-                .toList();
-
-            filteredLocations.sort((a, b) {
-              final nameA = (a['location_name'] as String).toLowerCase();
-              final nameB = (b['location_name'] as String).toLowerCase();
-              return nameA.compareTo(nameB);
-            });
-
-            setState(() {
-              _locations = filteredLocations;
-            });
-
-            debugLog(
-              '✅ Locations geladen (manuell gefiltert): ${_locations.length}',
-            );
-          } catch (e3) {
-            debugLog('❌ Fehler beim Laden aller Locations: $e3');
-          }
-        }
-      }
-
-      // Debug: Zeige alle geladenen Locations
-      debugLog('📋 Finale Locations-Liste: ${_locations.length}');
-      for (var location in _locations) {
-        debugLog(
-          '  ✅ Location: ${location['location_name']} (ID: ${location['id']})',
-        );
-      }
+      setState(() {
+        _locations = models
+            .map(
+              (m) => {
+                'id': m.id,
+                'location_name': m.locationName,
+                'address': m.address ?? '',
+                'latitude': m.latitude,
+                'longitude': m.longitude,
+                'timezone_id': m.timezoneId,
+                'fixed_party_code': m.fixedPartyCode,
+                'party_code': m.fixedPartyCode ?? '',
+                'created_by': m.createdBy,
+                'is_public': m.isPublic,
+              },
+            )
+            .toList();
+      });
+      debugLog('✅ Locations geladen: ${_locations.length}');
     } catch (e) {
       debugLog('❌ Fehler beim Laden der Locations: $e');
     }
@@ -1126,7 +1427,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
           plannedStartDate: picked,
         );
         if (!canCreate && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(
                 AppLocalizations.of(context)!
@@ -1159,7 +1460,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
   Future<void> _selectStartTime() async {
     // Wenn noch kein Datum gewählt, zeige Fehler
     if (_startDate == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(
             AppLocalizations.of(context)!.party_validation_start_date_first,
@@ -1224,9 +1525,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                         children: [
                           IconButton(
                             icon: Transform.flip(
-                              flipX: ['ar', 'he', 'fa', 'ur'].contains(
-                                Localizations.localeOf(context).languageCode,
-                              ),
+                              flipX: VbTextDirection.isRtl(context),
                               child: const Icon(
                                 Icons.arrow_back,
                                 color: UIConstants.appOrange,
@@ -1525,7 +1824,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
 
   Future<void> _selectEndDate() async {
     if (_startDate == null || _startHour == null || _startMinute == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(
             AppLocalizations.of(context)!.party_validation_start_required,
@@ -1633,9 +1932,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                         children: [
                           IconButton(
                             icon: Transform.flip(
-                              flipX: ['ar', 'he', 'fa', 'ur'].contains(
-                                Localizations.localeOf(context).languageCode,
-                              ),
+                              flipX: VbTextDirection.isRtl(context),
                               child: const Icon(
                                 Icons.arrow_back,
                                 color: UIConstants.appOrange,
@@ -1837,7 +2134,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
 
   Future<void> _selectEndMinute() async {
     if (_endDate == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(
             AppLocalizations.of(context)!.party_validation_end_date_first,
@@ -1848,7 +2145,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       return;
     }
     if (_endHour == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(
             AppLocalizations.of(context)!.party_validation_end_hour_first,
@@ -1948,7 +2245,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
   Future<void> _selectEndTime() async {
     // Wenn noch kein Startdatum/Startzeit gewählt, zeige Fehler
     if (_startDate == null || _startHour == null || _startMinute == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(
             AppLocalizations.of(context)!.party_validation_start_required,
@@ -1961,7 +2258,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
 
     // Wenn noch kein Enddatum gewählt, zeige Fehler
     if (_endDate == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(
             AppLocalizations.of(context)!.party_validation_end_date_first,
@@ -1988,38 +2285,65 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
     await _selectEndHour();
   }
 
-  void _showLocationSelectionDialog(BuildContext context) {
-    LocationPicker.show(
-      context: context,
-      locations: _locations,
-      onLocationSelected: (locationModel, useOneTimeEventCode) {
-        setState(() {
-          _selectedLocationModel = locationModel;
-          _selectedLocationId = locationModel.id;
-          _locationSelectionMode = 'dropdown';
-          _selectedGooglePlace = null;
-          _locationNameController.clear();
-          _currentTimezoneId = locationModel.timezoneId ?? 'UTC';
-          locationId = locationModel.id;
-          _saveLocationForFutureParties = false;
-          _useFixedPartyCodeForLocation = false;
-          _useOneTimeEventCode = useOneTimeEventCode;
-        });
-        debugLog('✅ Location ausgewählt: ${locationModel.locationName}');
-        debugLog('   Einmaligen Code generieren: $useOneTimeEventCode');
-        if (locationModel.fixedPartyCode != null) {
-          debugLog('   Fester Code vorhanden: ${locationModel.fixedPartyCode}');
-        }
-        if (_partyType == 'public') {
-          _refreshVenueContext();
-        }
-      },
+  /// Party-Code gemäß Typ, Venue und Einmal-Code-Toggle (für Erstversuch und Retries).
+  Future<String> _generatePartyCodeForSave({
+    required String createdBy,
+    required VenueModel? resolvedVenue,
+    required bool isCoVenueDj,
+    required String? locationIdForPartyCode,
+  }) async {
+    if (_partyType == 'private') {
+      final code = await PartyService.generatePartyCode(
+        isFixedCode: false,
+        createdBy: createdBy,
+      );
+      debugLog('✅ Dynamischer Party-Code (privat): $code');
+      return code;
+    }
+
+    if (_partyType == 'public' && resolvedVenue != null) {
+      final useOneTime = _useOneTimeEventCode &&
+          !isCoVenueDj &&
+          _isFirstDjInVenueWindow;
+      if (useOneTime) {
+        final code = await PartyService.generatePartyCode(
+          isFixedCode: false,
+          createdBy: createdBy,
+        );
+        debugLog('✅ Einmal-Code (öffentlich): $code');
+        return code;
+      }
+      final code = resolvedVenue.fixedPartyCode ??
+          await PartyService.generatePartyCode(
+            isFixedCode: true,
+            createdBy: createdBy,
+          );
+      debugLog('✅ Venue-Festcode: $code');
+      return code;
+    }
+
+    if (_partyType == 'public' &&
+        locationIdForPartyCode != null &&
+        !_useOneTimeEventCode) {
+      final fixedFromLocation = _selectedLocationModel?.fixedPartyCode ??
+          _matchedPublicLocation?.fixedPartyCode;
+      if (fixedFromLocation != null && fixedFromLocation.isNotEmpty) {
+        debugLog('✅ Verwende festen Code der Location: $fixedFromLocation');
+        return fixedFromLocation;
+      }
+    }
+
+    final code = await PartyService.generatePartyCode(
+      isFixedCode: false,
+      createdBy: createdBy,
     );
+    debugLog('✅ Dynamischer Party-Code generiert: $code');
+    return code;
   }
 
   Future<void> _saveParty() async {
     if (_partyNameController.text.trim().length < 3) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(AppLocalizations.of(context)!.party_name_min_length),
           backgroundColor: Colors.red,
@@ -2039,7 +2363,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
         _endDate == null ||
         _endHour == null ||
         _endMinute == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(l10n.validation_all_datetimes_required),
           backgroundColor: Colors.red,
@@ -2067,7 +2391,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
     // Validierung: Startzeit muss mindestens 5 Minuten in der Zukunft sein
     final minStartDateTime = _getMinStartDateTime();
     if (startDateTime.isBefore(minStartDateTime)) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(l10n.party_validation_start_min_future),
           backgroundColor: Colors.red,
@@ -2076,20 +2400,25 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       return;
     }
 
-    // Ermittle Admin-Status (Firestore-Rolle)
-    final isAdmin = AppConfig.isAdminRole(UserService().currentUser.value);
+    // Ermittle Admin-/Pro-/Review-Test-Status (Firestore)
+    final currentUser = UserService().currentUser.value;
+    final isAdmin = AppConfig.isAdminRole(currentUser);
+    final isPro = currentUser?.isPro == true;
+    final allowExtendedDuration = AppleReviewTestDj.matchesUser(currentUser);
 
-    // Nutze zentrale Validierungsklasse mit Admin-Status
+    // Nutze zentrale Validierungsklasse mit Admin-/Pro-Status
     final validationError = PartyValidator.validate(
       startDateTime,
       endDateTime,
       allParties: _allParties,
       isAdmin: isAdmin,
+      isPro: isPro,
+      allowExtendedDuration: allowExtendedDuration,
       context: context,
     );
 
     if (validationError != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(content: Text(validationError), backgroundColor: Colors.red),
       );
       return;
@@ -2097,7 +2426,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
 
     // Validierung der Limits
     if (_selectedGuestLimit == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(l10n.validation_guest_limit_required_new),
           backgroundColor: Colors.red,
@@ -2107,7 +2436,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
     }
 
     if (_selectedUserLimit == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(l10n.validation_user_limit_required_new),
           backgroundColor: Colors.red,
@@ -2116,21 +2445,37 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       return;
     }
 
-    // Free-DJ: Limits hart auf 1 (Safety Check – unabhängig vom State)
+    // Free-DJ: Limits hart auf 1 — Apple-Review-Test-DJ: wie Pro (gewählte Limits)
     final userModel = UserService().currentUser.value;
     final isFree = userModel != null && userModel.isFree;
-    final guestLimit = isFree ? 1 : _selectedGuestLimit!;
-    final userLimit = isFree ? 1 : _selectedUserLimit!;
+    final lockFreeWishLimits =
+        isFree && !AppleReviewTestDj.usesProStyleWishLimits(userModel);
+    final guestLimit = lockFreeWishLimits ? 1 : _selectedGuestLimit!;
+    final userLimit = lockFreeWishLimits ? 1 : _selectedUserLimit!;
 
     if (_partyType == 'public') {
-      if (!_isPublicLocationFloorStepValid) {
-        ScaffoldMessenger.of(context).showSnackBar(
+      if (!_isPublicLocationStepValid) {
+        showVibesSnackBar(context, 
           SnackBar(
-            content: Text(
-              _isPublicLocationWithCoordinates
-                  ? l10n.party_floor_select_hint
-                  : l10n.party_public_location_coords_required,
-            ),
+            content: Text(l10n.party_public_location_coords_required),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+      if (_hasVenueOverlap && _venueOverlapJoinAccepted != true) {
+        showVibesSnackBar(context, 
+          SnackBar(
+            content: Text(l10n.party_venue_overlap_decline_hint),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+      if (!_isPublicLocationFloorStepValid) {
+        showVibesSnackBar(context, 
+          SnackBar(
+            content: Text(l10n.party_floor_select_hint),
             backgroundColor: Colors.red,
           ),
         );
@@ -2146,6 +2491,14 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       // Hole aktuellen User (DJ)
       final user = FirebaseAuth.instance.currentUser;
       final createdBy = user?.uid ?? '';
+      if (createdBy.isEmpty) {
+        throw Exception(l10n.snackbar_party_not_logged_in_long);
+      }
+      try {
+        await user!.getIdToken(true);
+      } catch (e) {
+        debugLog('⚠️ Auth-Token-Refresh vor Party-Speichern: $e');
+      }
       final createdByEmail = user?.email ?? '';
 
       // ✅ Hole DJ-Logo aus User-Profil für Party-Dokument
@@ -2219,17 +2572,22 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       } else if (_locationSelectionMode == 'search' &&
           _selectedGooglePlace != null) {
         // "Anderen Ort suchen" wurde gewählt und Google Place ausgewählt (inkl. address_components)
-        locationName = _selectedGooglePlace!.name;
         locationAddress = _selectedGooglePlace!.address;
         locationZip = _selectedGooglePlace!.postalCode;
         locationCity = _selectedGooglePlace!.city;
         locationStreet = _selectedGooglePlace!.street;
+        locationName = _resolvePartyLocationName();
         latitude = _selectedGooglePlace!.latitude;
         longitude = _selectedGooglePlace!.longitude;
         timezoneId = _selectedGooglePlace!.timezoneId;
         placeId = _selectedGooglePlace!.placeId;
         locationIdForPartyCode =
             null; // Wird später gesetzt wenn Location gespeichert wird
+        if (_matchedPublicLocation != null &&
+            _matchedPublicLocation!.fixedPartyCode != null &&
+            !_useOneTimeEventCode) {
+          locationIdForPartyCode = _matchedPublicLocation!.id;
+        }
         debugLog('✅ Google Place ausgewählt: $locationName');
       } else {
         // "Mein aktueller Standort" wurde gewählt oder keine Location ausgewählt
@@ -2281,7 +2639,8 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
           placeId: placeId,
         );
 
-        if (_pendingNewFloorLabel != null &&
+        if (_publicFloorChoice == _PublicFloorChoice.selectFloor &&
+            _pendingNewFloorLabel != null &&
             _selectedFloorKey != null &&
             resolvedVenue.floorByKey(_selectedFloorKey!) == null) {
           resolvedVenue = await _venueService.addFloor(
@@ -2291,90 +2650,47 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
           );
         }
 
-        isCoVenueDj = await _venueConflictService.hasVenueOverlap(
-          venueId: resolvedVenue.id,
-          start: startDateTime,
-          end: endDateTime,
-        );
+        try {
+          isCoVenueDj = await _venueConflictService.hasVenueOverlap(
+            venueId: resolvedVenue.id,
+            start: startDateTime,
+            end: endDateTime,
+          );
+        } on FirebaseException catch (e) {
+          debugLog('⚠️ Venue-Overlap beim Speichern (nicht blockierend): $e');
+          isCoVenueDj = false;
+        }
       }
 
-      // Nutze PartyService für Code-Generierung mit Retry-Logik
-      try {
-        if (_partyType == 'public' && resolvedVenue != null) {
-          final useOneTime = _useOneTimeEventCode &&
-              !isCoVenueDj &&
-              _isFirstDjInVenueWindow;
-          if (useOneTime) {
-            partyCode = await PartyService.generatePartyCode(
-              isFixedCode: false,
-              createdBy: createdBy,
+      // Code-Generierung mit Retry (gleiche Logik wie Erstversuch)
+      const maxCodeGenRetries = 4;
+      Object? lastCodeError;
+      for (var attempt = 1; attempt <= maxCodeGenRetries; attempt++) {
+        try {
+          if (attempt > 1) {
+            await Future.delayed(Duration(milliseconds: 500 * attempt));
+            debugLog(
+              '🔄 Wiederhole Code-Generierung (Versuch $attempt/$maxCodeGenRetries)...',
             );
-            debugLog('✅ Einmal-Code (öffentlich): $partyCode');
-          } else {
-            partyCode = resolvedVenue.fixedPartyCode ??
-                await PartyService.generatePartyCode(
-                  isFixedCode: true,
-                  createdBy: createdBy,
-                );
-            debugLog('✅ Venue-Festcode: $partyCode');
           }
-        } else {
-          bool shouldUseFixedCode = false;
-          if (_partyType == 'public' &&
-              locationIdForPartyCode != null &&
-              _selectedLocationModel != null &&
-              _selectedLocationModel!.fixedPartyCode != null &&
-              !_useOneTimeEventCode) {
-            shouldUseFixedCode = true;
-          }
-
-          if (shouldUseFixedCode) {
-            partyCode = _selectedLocationModel!.fixedPartyCode!;
-            debugLog('✅ Verwende festen Code der Location: $partyCode');
-          } else {
-            partyCode = await PartyService.generatePartyCode(
-              isFixedCode: false,
-              createdBy: createdBy,
-            );
-            debugLog('✅ Dynamischer Party-Code generiert: $partyCode');
-          }
-        }
-      } catch (e) {
-        debugLog('❌ Fehler bei Party-Code-Generierung: $e');
-        // Retry-Logik: Versuche es nochmal (max. 3 Versuche)
-        bool codeGenerated = false;
-        int retryCount = 0;
-        const maxRetries = 3;
-
-        while (!codeGenerated && retryCount < maxRetries) {
-          retryCount++;
-          debugLog(
-            '🔄 Wiederhole Code-Generierung (Versuch $retryCount/$maxRetries)...',
+          partyCode = await _generatePartyCodeForSave(
+            createdBy: createdBy,
+            resolvedVenue: resolvedVenue,
+            isCoVenueDj: isCoVenueDj,
+            locationIdForPartyCode: locationIdForPartyCode,
           );
-
-          try {
-            // Warte kurz bevor Retry (um Race Conditions zu vermeiden)
-            await Future.delayed(Duration(milliseconds: 500 * retryCount));
-
-            partyCode = await PartyService.determinePartyCodeForNewParty(
-              partyType: _partyType,
-              locationId: locationIdForPartyCode,
-              createdBy: createdBy,
-            );
-            codeGenerated = true;
-            debugLog('✅ Party-Code nach Retry generiert: $partyCode');
-          } catch (retryError) {
-            debugLog('❌ Retry $retryCount fehlgeschlagen: $retryError');
-            if (retryCount >= maxRetries) {
-              // Alle Versuche fehlgeschlagen
-              throw Exception(l10n.party_code_retry_exhausted(maxRetries));
-            }
+          lastCodeError = null;
+          break;
+        } catch (e) {
+          lastCodeError = e;
+          debugLog('❌ Code-Generierung Versuch $attempt fehlgeschlagen: $e');
+          if (attempt >= maxCodeGenRetries) {
+            throw Exception(l10n.party_code_retry_exhausted(maxCodeGenRetries));
           }
         }
-
-        if (!codeGenerated) {
-          throw Exception(l10n.party_code_generate_failed_retry);
-        }
+      }
+      if (lastCodeError != null) {
+        throw Exception(l10n.party_code_generate_failed_retry);
       }
 
       // locationId wird nur für öffentliche Partys mit vorhandenen Locations verwendet
@@ -2501,14 +2817,16 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       }
 
       if (_partyType == 'public' && resolvedVenue != null) {
-        final floorLabel = _selectedFloorKey != null &&
-                !FloorKeyUtils.isDefaultFloorKey(_selectedFloorKey)
-            ? resolvedVenue.floorByKey(_selectedFloorKey!)?.label ??
-                _pendingNewFloorLabel
+        final explicitFloor = _publicFloorChoice == _PublicFloorChoice.selectFloor;
+        final floorKey = explicitFloor ? _selectedFloorKey : null;
+        final floorLabel = explicitFloor &&
+                floorKey != null &&
+                !FloorKeyUtils.isDefaultFloorKey(floorKey)
+            ? resolvedVenue.floorByKey(floorKey)?.label ?? _pendingNewFloorLabel
             : null;
         final venueFields = VenuePartyFields.build(
           venueId: resolvedVenue.id,
-          floorKey: _selectedFloorKey,
+          floorKey: floorKey,
           floorLabel: floorLabel,
           isCoVenueDj: isCoVenueDj,
         );
@@ -2564,16 +2882,19 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       // Privatsphäre-Einstellung
       partyData['show_location_publicly'] = _showLocationPublicly;
       partyData['allow_pre_wishes'] =
-          _partyType == 'public' ? false : _allowPreWishes;
+          _canConfigurePreWishSettings && _allowPreWishes;
       partyData['pre_wish_limit_per_guest'] =
           PreWishLimitService.clampForSave(
         _preWishLimitPerGuest,
-        allowPreWishes: _partyType == 'public' ? false : _allowPreWishes,
+        allowPreWishes: _canConfigurePreWishSettings && _allowPreWishes,
       );
 
-      // ✅ Füge DJ-Logo hinzu (Key: dj_logo für PWA-Kompatibilität)
+      // ✅ Füge DJ-Logo hinzu (Key: dj_logo für PWA-Kompatibilität, max. Firestore-Regel)
       if (djLogoUrl != null && djLogoUrl.isNotEmpty) {
-        partyData['dj_logo'] = djLogoUrl; // Key ohne _url für PWA
+        final logo = djLogoUrl.length > 512
+            ? djLogoUrl.substring(0, 512)
+            : djLogoUrl;
+        partyData['dj_logo'] = logo;
       }
 
       // Debug-Logs für Permission-Denied-Fehler
@@ -2596,29 +2917,153 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
               await PartyLimitService.countActivePartiesInCurrentPeriod(
                 userModel,
               );
-          if (activeCount >= 1) saveAsStandby = true;
+          final activeQuota = PartyLimitService.freeActivePartyQuota(userModel);
+          if (activeCount >= activeQuota) saveAsStandby = true;
         }
       }
       partyData['lifecycle_status'] = saveAsStandby ? 'standby' : 'active';
 
-      DocumentReference? docRef;
-      try {
-        docRef = await FirebaseFirestore.instance
-            .collection('parties')
-            .add(SecurityHelper.sanitizeMap(partyData));
+      final usesVenueSharedJoinCode = _partyType == 'public' &&
+          ((resolvedVenue != null &&
+                  !(_useOneTimeEventCode &&
+                      !isCoVenueDj &&
+                      _isFirstDjInVenueWindow)) ||
+              (locationIdForPartyCode != null &&
+                  (_selectedLocationModel?.fixedPartyCode != null ||
+                      _matchedPublicLocation?.fixedPartyCode != null) &&
+                  !_useOneTimeEventCode));
 
-        debugLog('Party gespeichert mit ID: ${docRef.id}');
+      DocumentReference? docRef;
+      final newPartyId =
+          FirebaseFirestore.instance.collection('parties').doc().id;
+      final indexService = PartyCodeIndexService.instance;
+      const maxIndexRetries = 5;
+      var indexSaved = false;
+
+      try {
+        for (var indexAttempt = 0;
+            indexAttempt < maxIndexRetries && !indexSaved;
+            indexAttempt++) {
+          if (indexAttempt > 0) {
+            if (usesVenueSharedJoinCode) {
+              break;
+            }
+            debugLog(
+              '🔄 Index-Kollision – neuer Code (Versuch ${indexAttempt + 1}/$maxIndexRetries)',
+            );
+            partyCode = await PartyService.generatePartyCode(
+              isFixedCode: false,
+              createdBy: createdBy,
+            );
+            partyData['party_code'] = partyCode;
+          }
+
+          final sanitizedPartyData = SecurityHelper.sanitizeMap(partyData);
+          try {
+            if (_partyType == 'private') {
+              await indexService.createPartyWithGloballyUniqueCode(
+                partyCode: partyCode,
+                partyId: newPartyId,
+                createdBy: createdBy,
+                partyType: 'private',
+                partyData: sanitizedPartyData,
+              );
+            } else if (usesVenueSharedJoinCode) {
+              await indexService.createPublicVenueSharedCodeParty(
+                partyCode: partyCode,
+                partyId: newPartyId,
+                partyData: sanitizedPartyData,
+                venueId: resolvedVenue?.id,
+                locationId: locationIdForPartyCode,
+              );
+            } else {
+              await indexService.createPartyWithGloballyUniqueCode(
+                partyCode: partyCode,
+                partyId: newPartyId,
+                createdBy: createdBy,
+                partyType: 'public',
+                partyData: sanitizedPartyData,
+              );
+            }
+            indexSaved = true;
+            docRef =
+                FirebaseFirestore.instance.collection('parties').doc(newPartyId);
+            debugLog('Party gespeichert mit ID: ${docRef.id}');
+          } on PartyCodeIndexConflictException catch (e) {
+            debugLog('❌ Party-Code-Kollision (Index): $e');
+            if (usesVenueSharedJoinCode ||
+                indexAttempt >= maxIndexRetries - 1) {
+              rethrow;
+            }
+          }
+        }
+
+        if (!indexSaved) {
+          throw PartyCodeIndexConflictException(partyCode);
+        }
+      } on PartyCodeIndexConflictException catch (e) {
+        debugLog('❌ Party-Code-Kollision (Index, erschöpft): $e');
+        if (mounted) {
+          showVibesSnackBar(context, 
+            SnackBar(
+              content: Text(AppLocalizations.of(context)!.error_generating_party_code),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        setState(() => _isLoading = false);
+        return;
+      } on PartyCodeCrossVenueConflictException catch (e) {
+        debugLog('❌ Party-Code-Kollision (anderer Ort): $e');
+        if (mounted) {
+          showVibesSnackBar(context, 
+            SnackBar(
+              content: Text(AppLocalizations.of(context)!.error_generating_party_code),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        setState(() => _isLoading = false);
+        return;
       } on FirebaseException catch (e) {
         if (e.code == 'permission-denied') {
-          debugLog('❌ Permission Denied - DJ');
+          final step =
+              usesVenueSharedJoinCode ? 'venue-shared' : 'global-index';
+          debugLog('❌ Permission Denied beim Party-Speichern: ${e.message}');
+          debugLog('❌ Schritt: $step');
           debugLog('❌ Location ID: ${locationIdForPartyCode ?? "null"}');
+          debugLog('❌ Venue: ${resolvedVenue?.id ?? "null"}');
+          debugLog('❌ usesVenueSharedJoinCode: $usesVenueSharedJoinCode');
+          debugLog('❌ party_code: $partyCode');
+          AppDiagnosticLogService.instance.recordPartySaveFailure(
+            step: step,
+            error: e,
+            context: {
+              'party_type': _partyType,
+              'party_code': partyCode,
+              'party_name': partyName,
+              'venue_id': resolvedVenue?.id ?? '—',
+              'location_id': locationIdForPartyCode ?? '—',
+              'usesVenueSharedJoinCode': usesVenueSharedJoinCode,
+              'firebase_message': e.message ?? '—',
+              'firebase_code': e.code,
+            },
+          );
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
+            final detail = (e.message ?? '').trim();
+            showVibesSnackBar(
+              context,
               SnackBar(
-                content: Text(AppLocalizations.of(context)!.party_save_permission_denied),
+                content: Text(
+                  detail.isNotEmpty
+                      ? '${AppLocalizations.of(context)!.party_save_permission_denied}\n$detail'
+                      : AppLocalizations.of(context)!.party_save_permission_denied,
+                ),
                 backgroundColor: Colors.red,
-                duration: const Duration(seconds: 5),
+                duration: const Duration(seconds: 8),
               ),
+              tag: 'PartySave',
+              error: e,
             );
           }
           setState(() {
@@ -2687,24 +3132,25 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                   longitude != null))) {
         try {
           String? fixedPartyCode;
-          if (_useFixedPartyCodeForLocation) {
-            // Generiere festen Party-Code (900k-Bereich) für die Location
-            // Dieser Code wird dann für zukünftige Partys an dieser Location verwendet
-            fixedPartyCode = await PartyService.generatePartyCode(
+          if (_partyType == 'public') {
+            fixedPartyCode = _matchedPublicLocation?.fixedPartyCode;
+            fixedPartyCode ??= await PartyService.generatePartyCode(
               isFixedCode: true,
               createdBy: createdBy,
             );
             debugLog(
-              '✅ Fester Party-Code für Location generiert: $fixedPartyCode',
+              '✅ Fester Party-Code für gespeicherte Location: $fixedPartyCode',
             );
 
-            // Aktualisiere die gerade erstellte Party mit diesem festen Code
-            // (nur wenn noch kein fester Code von der Location verwendet wurde)
-            if (locationIdForPartyCode == null) {
+            final partyUsesMatchedPublicCode =
+                partyCode == (_matchedPublicLocation?.fixedPartyCode ?? '');
+            if (locationIdForPartyCode == null &&
+                !_useOneTimeEventCode &&
+                !partyUsesMatchedPublicCode) {
               await docRef.update(
                 SecurityHelper.sanitizeMap({'party_code': fixedPartyCode}),
               );
-              partyCode = fixedPartyCode; // Aktualisiere für party_status
+              partyCode = fixedPartyCode;
               debugLog(
                 '✅ Party-Code auf festen Location-Code aktualisiert: $fixedPartyCode',
               );
@@ -2721,6 +3167,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
             createdBy: createdBy,
             fixedPartyCode: fixedPartyCode,
             updateExisting: true,
+            isPublic: _partyType == 'public',
           );
 
           debugLog('✅ Location gespeichert/aktualisiert: $savedLocationId');
@@ -2737,7 +3184,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
           // Fehler beim Speichern der Location ist nicht kritisch, Party wurde bereits erstellt
           // Zeige Warnung aber keine Fehlermeldung
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
+            showVibesSnackBar(context, 
               SnackBar(
                 content: Text(
                   AppLocalizations.of(context)!
@@ -2751,18 +3198,22 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
         }
       }
 
-      // Erstelle Eintrag in party_status Collection
-      await FirebaseFirestore.instance
-          .collection('party_status')
-          .add(
-            SecurityHelper.sanitizeMap({
-              'party_code': partyCode,
-              'dj_code': createdBy, // User-ID des aktuellen DJ-Users
-              'status': true, // true = aktiv, false = inaktiv
-              'created_at': Timestamp.now(),
-              'party_id': docRef.id, // Referenz zur Party-Dokument-ID
-            }),
-          );
+      // Erstelle Eintrag in party_status Collection (nicht kritisch für Party-Erstellung)
+      try {
+        await FirebaseFirestore.instance
+            .collection('party_status')
+            .add(
+              SecurityHelper.sanitizeMap({
+                'party_code': partyCode,
+                'dj_code': createdBy,
+                'status': true,
+                'created_at': Timestamp.now(),
+                'party_id': docRef.id,
+              }),
+            );
+      } catch (e) {
+        debugLog('⚠️ party_status konnte nicht geschrieben werden: $e');
+      }
 
       debugLog(
         'Party-Status gespeichert für Party-Code: $partyCode, DJ-Code: $createdBy',
@@ -2771,7 +3222,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
 
       if (mounted) {
         if (saveAsStandby) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(
                 AppLocalizations.of(context)!.party_saved_standby_free_limit,
@@ -2781,7 +3232,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
             ),
           );
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Row(
                 children: [
@@ -2821,46 +3272,23 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
           errorMessage = '${loc.error_saving_party} ${e.toString()}';
         }
 
-        // Zeige Fehler-Dialog im Schwarz/Orange Design
-        showDialog(
-          context: context,
-          builder: (dialogContext) => AlertDialog(
-            backgroundColor: UIConstants.djShellPageBackground,
-            title: Row(
-              children: [
-                const Icon(
-                  Icons.error_outline,
-                  color: UIConstants.appOrange,
-                  size: 24,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  AppLocalizations.of(dialogContext)!.error,
-                  style: const TextStyle(color: Colors.white, fontSize: 18),
-                ),
-              ],
-            ),
-            content: Text(
-              errorMessage,
-              style: const TextStyle(color: Colors.white70, fontSize: 14),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext),
-                child: Text(
-                  loc.ok,
-                  style: const TextStyle(
-                    color: UIConstants.appOrange,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ],
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-              side: const BorderSide(color: UIConstants.appOrange, width: 2),
-            ),
+        showVibesSnackBar(
+          context,
+          SnackBar(
+            content: Text(errorMessage),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 8),
           ),
+          tag: 'PartySave',
+          error: e,
+        );
+        AppDiagnosticLogService.instance.recordPartySaveFailure(
+          step: 'save-catch',
+          error: e,
+          context: {
+            'party_type': _partyType,
+            'error_message': errorMessage,
+          },
         );
       }
     } finally {
@@ -2966,7 +3394,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
     );
   }
 
-  /// Berechnet die maximale Endzeit (Startzeit + 23:55 Stunden)
+  /// Max. Endzeit: Free 23:55, Pro / Apple-Review-Test-DJ bis 14 Tage
   DateTime? _getMaxEndDateTime() {
     if (_startDate == null || _startHour == null || _startMinute == null) {
       return null;
@@ -2978,8 +3406,13 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       _startHour!,
       _startMinute!,
     );
-    // Maximal 23 Stunden und 55 Minuten später
-    return startDateTime.add(const Duration(hours: 23, minutes: 55));
+    final currentUser = UserService().currentUser.value;
+    final maxDur = PartyValidator.maxDurationFor(
+      isAdmin: AppConfig.isAdminRole(currentUser),
+      isPro: currentUser?.isPro == true,
+      allowExtendedDuration: AppleReviewTestDj.matchesUser(currentUser),
+    );
+    return startDateTime.add(maxDur);
   }
 
   /// Berechnet verfügbare Startstunden basierend auf gewähltem Datum (12:51-Fix: bei Aufrunden auf 60 Min Stunde ausschließen)
@@ -3042,16 +3475,8 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       return [];
     }
 
-    final startDateTime = DateTime(
-      _startDate!.year,
-      _startDate!.month,
-      _startDate!.day,
-      _startHour!,
-      _startMinute!,
-    );
-    final maxEndDateTime = startDateTime.add(
-      const Duration(hours: 23, minutes: 55),
-    );
+    final maxEndDateTime = _getMaxEndDateTime();
+    if (maxEndDateTime == null) return [];
 
     // Wenn Enddatum == Startdatum
     if (_endDate!.year == _startDate!.year &&
@@ -3059,31 +3484,31 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
         _endDate!.day == _startDate!.day) {
       // minHour ist die aktuelle Startstunde
       final minHour = _startHour!;
-      // maxHour ist 23, außer wenn das 23:55h-Limit noch am selben Tag endet
+      // maxHour ist 23, außer wenn das Dauer-Limit noch am selben Tag endet
       int maxHour;
       if (maxEndDateTime.year == _startDate!.year &&
           maxEndDateTime.month == _startDate!.month &&
           maxEndDateTime.day == _startDate!.day) {
-        // 23:55h-Limit endet noch am selben Tag: maxHour = Stunde von maxEndDateTime
+        // Limit endet noch am selben Tag: maxHour = Stunde von maxEndDateTime
         maxHour = maxEndDateTime.hour;
       } else {
-        // 23:55h-Limit endet am nächsten Tag: maxHour = 23
+        // Limit endet an einem späteren Tag: maxHour = 23
         maxHour = 23;
       }
       debugLog('DEBUG: minHour: $minHour, maxHour: $maxHour');
       debugLog('DEBUG: maxEndDateTime: $maxEndDateTime');
       return List.generate(maxHour - minHour + 1, (index) => minHour + index);
     } else {
-      // Enddatum ist später: prüfe ob Enddatum der Tag des 23:55h-Limits ist
+      // Enddatum ist später: prüfe ob Enddatum der Tag des Dauer-Limits ist
       final maxEndDate = maxEndDateTime;
       int maxHour;
       if (_endDate!.year == maxEndDate.year &&
           _endDate!.month == maxEndDate.month &&
           _endDate!.day == maxEndDate.day) {
-        // Enddatum ist der Tag des 23:55h-Limits: maxHour = Stunde von maxEndDateTime
+        // Enddatum ist der Tag des Dauer-Limits: maxHour = Stunde von maxEndDateTime
         maxHour = maxEndDateTime.hour;
       } else {
-        // Enddatum ist später: maxHour auf 23 setzen
+        // Enddatum ist früher als Limit-Tag: maxHour auf 23 setzen
         maxHour = 23;
       }
       return List.generate(maxHour + 1, (index) => index);
@@ -3101,16 +3526,8 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       return [];
     }
 
-    final startDateTime = DateTime(
-      _startDate!.year,
-      _startDate!.month,
-      _startDate!.day,
-      _startHour!,
-      _startMinute!,
-    );
-    final maxEndDateTime = startDateTime.add(
-      const Duration(hours: 23, minutes: 55),
-    );
+    final maxEndDateTime = _getMaxEndDateTime();
+    if (maxEndDateTime == null) return [];
 
     // Fall "Gleicher Tag & Gleiche Stunde": nur Minuten > Startminute
     if (_endDate!.year == _startDate!.year &&
@@ -3205,8 +3622,8 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                 if (value == 'public' && _locationSelectionMode == 'current') {
                   _locationSelectionMode = 'search';
                 }
-                if (value == 'public') {
-                  _allowPreWishes = false;
+                if (value == 'private') {
+                  _useOneTimeEventCode = true;
                 }
                 _resetVenueFloorState();
                 _clampWizardStepForPartyType();
@@ -3317,12 +3734,10 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                         ),
                       ),
                       Text(
-                        _partyType == 'public'
-                            ? l.party_wizard_step_number_only(_wizardStep + 1)
-                            : l.party_wizard_step_indicator(
-                                _wizardStep + 1,
-                                _wizardStepCount,
-                              ),
+                        l.party_wizard_step_indicator(
+                          _wizardStep + 1,
+                          _wizardStepCount,
+                        ),
                         style: TextStyle(
                           fontSize: 11,
                           color: Colors.grey.shade400,
@@ -3418,6 +3833,10 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
         return _buildPartyNameSection(context);
       case PartyWizardStepKind.location:
         return _buildLocationSection(context);
+      case PartyWizardStepKind.floor:
+        return _buildPublicFloorStepSection(context);
+      case PartyWizardStepKind.partyCode:
+        return const SizedBox.shrink();
       case PartyWizardStepKind.locationWithFloor:
         return _buildPublicLocationFloorSection(context);
       case PartyWizardStepKind.startTime:
@@ -3429,6 +3848,98 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
       case PartyWizardStepKind.preWishes:
         return _buildPreWishesStepSection(context);
     }
+  }
+
+  Widget _buildPublicFloorStepSection(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          l.party_floor_label,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
+        const SizedBox(height: 8),
+        RadioListTile<_PublicFloorChoice>(
+          value: _PublicFloorChoice.noFloor,
+          groupValue: _publicFloorChoice,
+          onChanged: (_hasVenueOverlap && _venueOverlapJoinAccepted == true) ||
+                  !_defaultFloorAvailable
+              ? null
+              : (v) {
+                  if (v != null) _onPublicFloorChoiceChanged(v);
+                },
+          activeColor: UIConstants.appOrange,
+          title: Text(
+            l.party_floor_mode_none,
+            style: TextStyle(
+              color: _defaultFloorAvailable
+                  ? Colors.white
+                  : Colors.grey.shade600,
+            ),
+          ),
+          subtitle: !_defaultFloorAvailable
+              ? Text(
+                  l.party_floor_select_hint,
+                  style: TextStyle(
+                    color: Colors.orange.shade200,
+                    fontSize: 12,
+                  ),
+                )
+              : null,
+          contentPadding: EdgeInsets.zero,
+        ),
+        RadioListTile<_PublicFloorChoice>(
+          value: _PublicFloorChoice.selectFloor,
+          groupValue: _publicFloorChoice,
+          onChanged: (v) {
+            if (v != null) _onPublicFloorChoiceChanged(v);
+          },
+          activeColor: UIConstants.appOrange,
+          title: Text(
+            l.party_floor_mode_select,
+            style: const TextStyle(color: Colors.white),
+          ),
+          contentPadding: EdgeInsets.zero,
+        ),
+        if (_hasVenueOverlap && _venueOverlapJoinAccepted == false)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              l.party_venue_overlap_decline_hint,
+              style: const TextStyle(color: Colors.orange, fontSize: 12),
+            ),
+          ),
+        if (_hasVenueOverlap && _venueOverlapJoinAccepted == null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              l.party_venue_overlap_join_floor_question,
+              style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+            ),
+          ),
+        if (_publicFloorChoice == _PublicFloorChoice.selectFloor) ...[
+          const SizedBox(height: 8),
+          PublicVenueFloorField(
+            floors: _displayFloors,
+            selectedFloorKey: _selectedFloorKey,
+            defaultFloorAvailable: _defaultFloorAvailable,
+            occupiedFloorKeys: _occupiedFloorKeys,
+            hasVenueOverlap: _hasVenueOverlap,
+            isLoading: _venueContextLoading,
+            floorOccupancy: _floorOccupancyByKey,
+            floorsOnlyInDropdown: true,
+            showOccupiedInDropdown: false,
+            onFloorSelected: (key) => setState(() => _selectedFloorKey = key),
+            onAddFloor: _showAddFloorDialog,
+          ),
+        ],
+      ],
+    );
   }
 
   Widget _buildPublicLocationFloorSection(BuildContext context) {
@@ -3448,53 +3959,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
           ),
         if (_isPublicLocationWithCoordinates) ...[
           const SizedBox(height: 16),
-          PublicVenueFloorField(
-            floors: _matchedVenue?.floors ?? const [],
-            selectedFloorKey: _selectedFloorKey,
-            defaultFloorAvailable: _defaultFloorAvailable,
-            occupiedFloorKeys: _occupiedFloorKeys,
-            hasVenueOverlap: _hasVenueOverlap,
-            isLoading: _venueContextLoading,
-            floorOccupancy: _floorOccupancyByKey,
-            onFloorSelected: (key) => setState(() => _selectedFloorKey = key),
-            onOccupiedFloorTap: (key, info) async {
-              if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    AppLocalizations.of(context)!.party_floor_swap_after_save_hint,
-                  ),
-                ),
-              );
-            },
-            onAddFloor: _showAddFloorDialog,
-          ),
-          if (_isFirstDjInVenueWindow &&
-              !_hasVenueOverlap &&
-              (_matchedVenue?.fixedPartyCode != null ||
-                  _selectedLocationModel?.fixedPartyCode != null)) ...[
-            const SizedBox(height: 12),
-            SwitchListTile(
-              title: Text(
-                l.party_one_time_event_code,
-                style: const TextStyle(color: Colors.white),
-              ),
-              subtitle: Text(
-                _useOneTimeEventCode
-                    ? l.party_one_time_code_range_hint
-                    : l.party_fixed_code_in_use_hint(
-                        _matchedVenue?.fixedPartyCode ??
-                            _selectedLocationModel!.fixedPartyCode!,
-                      ),
-                style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
-              ),
-              value: _useOneTimeEventCode,
-              activeThumbColor: UIConstants.appOrange,
-              onChanged: (value) {
-                setState(() => _useOneTimeEventCode = value);
-              },
-            ),
-          ],
+          _buildPublicFloorStepSection(context),
         ],
       ],
     );
@@ -3513,6 +3978,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
         PartyPreWishSettingsField(
           allowPreWishes: _allowPreWishes,
           limitPerGuest: _preWishLimitPerGuest,
+          settingsEditable: _canConfigurePreWishSettings,
           onAllowChanged: (v) => setState(() => _allowPreWishes = v),
           onLimitChanged: (n) => setState(() => _preWishLimitPerGuest = n),
         ),
@@ -3523,6 +3989,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
   // Helper-Methoden für die einzelnen Sektionen
   Widget _buildLocationSection(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
+    final hasSavedLocations = _locations.isNotEmpty;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -3535,26 +4002,6 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
           ),
         ),
         const SizedBox(height: 8),
-        DjVenueBookmarkPicker(onBookmarkSelected: _applyVenueBookmark),
-        // Button für gespeicherte Locations (bei beiden Party-Typen)
-        if (_locations.isNotEmpty) ...[
-          ElevatedButton.icon(
-            onPressed: () => _showLocationSelectionDialog(context),
-            icon: const Icon(Icons.location_on, color: Colors.white),
-            label: Text(l10n.party_from_saved_locations),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.black,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
-              side: const BorderSide(color: UIConstants.appOrange, width: 2),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-        ],
-        // Radiobuttons für Standort-Auswahl
         RadioGroup<String>(
           groupValue: _locationSelectionMode,
           onChanged: (String? value) {
@@ -3571,7 +4018,11 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                 _wasMapAdjusted = false;
               } else if (value == 'search') {
                 _saveLocationForFutureParties = false;
-                _useFixedPartyCodeForLocation = false;
+                _useOneTimeEventCode = false;
+              } else if (value == 'dropdown') {
+                _selectedGooglePlace = null;
+                _locationNameController.clear();
+                _saveLocationForFutureParties = false;
                 _useOneTimeEventCode = false;
               }
             });
@@ -3594,6 +4045,17 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                   dense: true,
                   activeColor: UIConstants.appOrange,
                 ),
+              if (hasSavedLocations)
+                RadioListTile<String>(
+                  title: Text(
+                    l10n.party_saved_locations_radio,
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                  value: 'dropdown',
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  activeColor: UIConstants.appOrange,
+                ),
               RadioListTile<String>(
                 title: Text(
                   _partyType == 'public'
@@ -3609,6 +4071,10 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
             ],
           ),
         ),
+        if (_locationSelectionMode == 'dropdown' && hasSavedLocations) ...[
+          const SizedBox(height: 8),
+          _buildSavedLocationsDropdown(context),
+        ],
         const SizedBox(height: 8),
         // Hybrid-Suche: PlacesAutocompleteField + Karten-Button
         if (_locationSelectionMode == 'search') ...[
@@ -3626,7 +4092,6 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                         _locationNameController.clear();
                         _updateSystemTimezone();
                         _saveLocationForFutureParties = false;
-                        _useFixedPartyCodeForLocation = false;
                         _useOneTimeEventCode = false;
                         _wasMapAdjusted = false;
                       });
@@ -3655,10 +4120,9 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                         );
                         _locationNameController.text = isExplicitName
                             ? refined.name
-                            : '';
+                            : _locationNameController.text;
                         _currentTimezoneId = refined.timezoneId;
                         _saveLocationForFutureParties = false;
-                        _useFixedPartyCodeForLocation = false;
                         _useOneTimeEventCode = false;
                         _wasMapAdjusted = true;
                       });
@@ -3718,10 +4182,9 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                         );
                         _locationNameController.text = isExplicitName
                             ? result.name
-                            : '';
+                            : _locationNameController.text;
                         _currentTimezoneId = result.timezoneId;
                         _saveLocationForFutureParties = false;
-                        _useFixedPartyCodeForLocation = false;
                         _useOneTimeEventCode = false;
                         _wasMapAdjusted = true;
                         debugLog(
@@ -3754,6 +4217,32 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
               ),
             ],
           ),
+          if (_selectedGooglePlace != null) ...[
+            const SizedBox(height: 8),
+            TextFormField(
+              controller: _locationNameController,
+              style: const TextStyle(color: Colors.white),
+              maxLength: 120,
+              decoration: InputDecoration(
+                labelText: l10n.location_name_label,
+                hintText: l10n.location_name_hint,
+                labelStyle: TextStyle(color: Colors.grey.shade400),
+                hintStyle: TextStyle(color: Colors.grey.shade600),
+                enabledBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: Colors.grey.shade700),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderSide: const BorderSide(
+                    color: UIConstants.appOrange,
+                    width: 2,
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                counterStyle: TextStyle(color: Colors.grey.shade500),
+              ),
+            ),
+          ],
           // Zeige ausgewählten Google Place an
           if (_selectedGooglePlace != null)
             Padding(
@@ -3808,7 +4297,6 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                           _locationNameController.clear();
                           _updateSystemTimezone();
                           _saveLocationForFutureParties = false;
-                          _useFixedPartyCodeForLocation = false;
                           _useOneTimeEventCode = false;
                           _wasMapAdjusted = false;
                         });
@@ -3831,48 +4319,28 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                 border: Border.all(color: UIConstants.appOrange, width: 2),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  CheckboxListTile(
-                    title: Text(
-                      l10n.party_save_location_future,
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                    value: _saveLocationForFutureParties,
-                    activeColor: UIConstants.appOrange,
-                    checkColor: Colors.white,
-                    onChanged: (value) {
-                      setState(() {
-                        _saveLocationForFutureParties = value ?? false;
-                        if (!_saveLocationForFutureParties) {
-                          _useFixedPartyCodeForLocation = false;
-                        }
-                      });
-                    },
-                  ),
-                  if (_saveLocationForFutureParties)
-                    Padding(
-                      padding: const EdgeInsetsDirectional.only(start: 48.0),
-                      child: CheckboxListTile(
-                        title: Text(
-                          l10n.party_fixed_code_same_venue,
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 14,
-                          ),
+              child: CheckboxListTile(
+                title: Text(
+                  l10n.party_save_location_future,
+                  style: const TextStyle(color: Colors.white),
+                ),
+                subtitle: _partyType == 'public'
+                    ? Text(
+                        l10n.party_fixed_code_same_venue,
+                        style: TextStyle(
+                          color: Colors.grey.shade400,
+                          fontSize: 12,
                         ),
-                        value: _useFixedPartyCodeForLocation,
-                        activeColor: UIConstants.appOrange,
-                        checkColor: Colors.white,
-                        onChanged: (value) {
-                          setState(() {
-                            _useFixedPartyCodeForLocation = value ?? false;
-                          });
-                        },
-                      ),
-                    ),
-                ],
+                      )
+                    : null,
+                value: _saveLocationForFutureParties,
+                activeColor: UIConstants.appOrange,
+                checkColor: Colors.white,
+                onChanged: (value) {
+                  setState(() {
+                    _saveLocationForFutureParties = value ?? false;
+                  });
+                },
               ),
             ),
           ],
@@ -3923,7 +4391,8 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                             fontSize: 12,
                           ),
                         ),
-                        if (_selectedLocationModel!.fixedPartyCode != null) ...[
+                        if (_partyType == 'public' &&
+                            _selectedLocationModel!.fixedPartyCode != null) ...[
                           const SizedBox(height: 4),
                           Text(
                             _useOneTimeEventCode
@@ -3959,43 +4428,18 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
               ),
             ),
           ),
-          // Code-Option nur für ersten DJ am Ort (kein Venue-Overlap)
-          if (_partyType == 'public' &&
-              _isFirstDjInVenueWindow &&
-              !_hasVenueOverlap &&
-              _selectedLocationModel!.fixedPartyCode != null) ...[
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade900,
-                border: Border.all(color: UIConstants.appOrange, width: 2),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: SwitchListTile(
-                title: Text(
-                  l10n.party_one_time_event_code,
-                  style: const TextStyle(color: Colors.white),
-                ),
-                subtitle: Text(
-                  _useOneTimeEventCode
-                      ? l10n.party_one_time_code_range_hint
-                      : l10n.party_fixed_code_in_use_hint(
-                          _selectedLocationModel!.fixedPartyCode!,
-                        ),
-                  style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
-                ),
-                value: _useOneTimeEventCode,
-                activeThumbColor: UIConstants.appOrange,
-                onChanged: (value) {
-                  setState(() {
-                    _useOneTimeEventCode = value;
-                  });
-                },
-              ),
-            ),
-          ],
         ],
+        if (_partyType == 'public') _buildMatchedPublicLocationBanner(context),
+        if (_partyType == 'public' &&
+            !_isPublicLocationWithCoordinates &&
+            (_selectedGooglePlace != null || _selectedLocationModel != null))
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              l10n.party_public_location_coords_required,
+              style: const TextStyle(color: Colors.orange, fontSize: 12),
+            ),
+          ),
         // Hinweistext
         Padding(
           padding: const EdgeInsets.only(top: 8.0),
@@ -4345,8 +4789,11 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
     Widget _buildWishLimitsSection(BuildContext context) {
     final user = UserService().currentUser.value;
     final isFree = user != null && user.isFree;
-    final effectiveGuestLimit = isFree ? 1 : _selectedGuestLimit;
-    final effectiveUserLimit = isFree ? 1 : _selectedUserLimit;
+    final lockFreeWishLimits =
+        isFree && !AppleReviewTestDj.usesProStyleWishLimits(user);
+    final effectiveGuestLimit =
+        lockFreeWishLimits ? 1 : _selectedGuestLimit;
+    final effectiveUserLimit = lockFreeWishLimits ? 1 : _selectedUserLimit;
     final loc = AppLocalizations.of(context)!;
 
     return Column(
@@ -4368,10 +4815,10 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                   border: const OutlineInputBorder(),
                   prefixIcon: Icon(
                     Icons.person_outline,
-                    color: isFree ? Colors.grey : null,
+                    color: lockFreeWishLimits ? Colors.grey : null,
                   ),
-                  filled: isFree,
-                  fillColor: isFree ? Colors.grey.shade800 : null,
+                  filled: lockFreeWishLimits,
+                  fillColor: lockFreeWishLimits ? Colors.grey.shade800 : null,
                 ),
                 items: _guestLimitOptions.map((int value) {
                   return DropdownMenuItem<int>(
@@ -4379,7 +4826,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                     child: Text(value.toString()),
                   );
                 }).toList(),
-                onChanged: isFree
+                onChanged: lockFreeWishLimits
                     ? null
                     : (int? newValue) {
                         setState(() {
@@ -4404,7 +4851,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                   border: const OutlineInputBorder(),
                   prefixIcon: Icon(
                     Icons.person,
-                    color: isFree ? Colors.grey : null,
+                    color: lockFreeWishLimits ? Colors.grey : null,
                   ),
                   suffixIcon: IconButton(
                     icon: Icon(
@@ -4415,8 +4862,8 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                     tooltip: loc.party_registered_app_guest_info_title,
                     onPressed: () => _showRegisteredAppGuestInfo(context),
                   ),
-                  filled: isFree,
-                  fillColor: isFree ? Colors.grey.shade800 : null,
+                  filled: lockFreeWishLimits,
+                  fillColor: lockFreeWishLimits ? Colors.grey.shade800 : null,
                 ),
                 items: _userLimitOptions.map((int value) {
                   return DropdownMenuItem<int>(
@@ -4424,7 +4871,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
                     child: Text(value.toString()),
                   );
                 }).toList(),
-                onChanged: isFree
+                onChanged: lockFreeWishLimits
                     ? null
                     : (int? newValue) {
                         setState(() {
@@ -4441,7 +4888,7 @@ class _NeuePartyPageState extends State<NeuePartyPage> {
             ),
           ],
         ),
-        if (isFree) ...[
+        if (lockFreeWishLimits) ...[
           const SizedBox(height: 6),
           Text(
             loc.free_limit_info,

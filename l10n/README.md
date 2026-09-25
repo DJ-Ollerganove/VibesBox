@@ -43,7 +43,13 @@ Alias: `./scripts/l10n_sync_all.sh` (ruft dasselbe auf).
 
 **Welche Sprache „Uhr“ / „uur“ / nichts?** → siehe [`DATETIME_RULES.md`](DATETIME_RULES.md) (Recherche + Tabelle).
 
-**BabelEdit** = nur Texte in `l10n/app_*.arb` und `public/vb/babel/locales/*.json`.
+**BabelEdit** = Texte in `l10n/app_*.arb`, `public/vb/babel/locales/*.json` und `public/dj/babel/locales/*.json`.
+
+**Nur exportieren** (Dart/JS → ARB/JSON zum Übersetzen, ohne Regenerierung):
+
+```bash
+./scripts/i18n-export-for-translation.sh
+```
 
 ---
 

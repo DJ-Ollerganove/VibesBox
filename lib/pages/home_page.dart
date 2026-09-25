@@ -4,6 +4,7 @@ import 'dart:async';
 
 import '../config/app_config.dart';
 import '../services/user_service.dart';
+import '../services/party_session_service.dart';
 import '../utils/ui_constants.dart';
 import 'home/home_admin.dart';
 import 'home/home_dj.dart';
@@ -85,11 +86,16 @@ class HomePageState extends State<HomePage> {
 
     Widget child;
     if (user == null) {
+      final guestSvc = PartySessionService.instance;
+      final hasJoinedParty = guestSvc.hasSession &&
+          (guestSvc.partyId ?? '').isNotEmpty &&
+          guestSvc.partyId != 'manual';
       child = HomeGuestPublic(
         cardBuilder: _wrapInGuestStyledCard,
         onLoginRequested: widget.onLoginRequested,
         onRegisterRequested: widget.onRegisterRequested,
         onOpenParty: widget.onOpenParty,
+        hasJoinedParty: hasJoinedParty,
       );
     } else if (isAdmin) {
       child = HomeAdmin(

@@ -17,7 +17,7 @@ class PremiumFeatureDialog {
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                'VibesBox Pro',
+                l.vibesbox_pro,
                 style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
               ),
             ),

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,13 +10,19 @@ import '../l10n/app_localizations.dart';
 import '../services/active_party_service.dart';
 import '../services/party_autostart_service.dart';
 import '../services/shazam_service.dart';
+import '../services/vibesbox_sync_service.dart';
+import '../utils/camelot_helper.dart';
 import '../utils/ios_microphone_settings.dart';
 import '../services/user_service.dart';
 import '../utils/party_helper.dart';
-import '../utils/wish_paths.dart';
 import '../utils/role_helper.dart' show hasRole, hasAnyRole;
 import '../utils/ui_constants.dart';
 import '../utils/debug_log.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
+import '../services/song_recommendation_service.dart';
+import '../services/song_recommendation_settings_service.dart';
+import '../services/pro_feature_guard.dart';
+import 'song_recommendation_edge_panel.dart';
 
 /// Persistent Footer für Musikerkennung
 /// Zeigt aktuelles Ergebnis und Switch zum Aktivieren/Deaktivieren
@@ -32,8 +37,6 @@ class _ShazamFooterState extends State<ShazamFooter> {
   final ShazamService _shazamService = ShazamService();
   bool _isEnabled = false;
   Map<String, dynamic>? _currentSong;
-  bool? _isMatchedWithWish;
-  String? _currentPartyId;
   StreamSubscription<ShazamScanStatus>? _statusSubscription;
   StreamSubscription<Map<String, dynamic>?>? _resultSubscription;
   StreamSubscription<Map<String, String>>? _wishMatchSubscription;
@@ -41,6 +44,10 @@ class _ShazamFooterState extends State<ShazamFooter> {
   bool _isCheckingRole = true;
   bool _isScanning = false;
   bool _isTestMode = false; // True wenn keine aktive Party (Testmodus)
+  final OverlayPortalController _recOverlay = OverlayPortalController();
+  final GlobalKey _footerBarKey = GlobalKey();
+  double _recOverlayBottom = 80;
+  (String, String)? _dismissedRecSeed;
 
   @override
   void didChangeDependencies() {
@@ -66,6 +73,23 @@ class _ShazamFooterState extends State<ShazamFooter> {
     setState(() {
       _isEnabled = active;
     });
+    if (!active && !VibesBoxSyncService.instance.enabled) {
+      SongRecommendationService.instance.clearRuntimeCaches();
+      if (_recOverlay.isShowing) {
+        _recOverlay.hide();
+      }
+    }
+  }
+
+  void _onVibesBoxSyncChanged() {
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  void _onRecSettingsChanged() {
+    if (!mounted) return;
+    // Nur UI neu bauen (Panel an/aus) — kein OpenAI-Prefetch mehr.
+    setState(() {});
   }
 
   @override
@@ -73,9 +97,14 @@ class _ShazamFooterState extends State<ShazamFooter> {
     super.initState();
     _isEnabled = _shazamService.isEnabled; // Lokale Kopie für Fehlerpfade in _onSwitchChanged
     _currentSong = _shazamService.lastResult;
+    unawaited(SongRecommendationSettingsService.instance.ensureLoaded());
+    SongRecommendationSettingsService.instance.notifier.addListener(
+      _onRecSettingsChanged,
+    );
     _shazamService.recognitionActiveNotifier.addListener(
       _onRecognitionActiveNotifier,
     );
+    VibesBoxSyncService.instance.addListener(_onVibesBoxSyncChanged);
     
     // Höre auf Status-Updates
     _statusSubscription = _shazamService.statusStream.listen((status) {
@@ -101,9 +130,8 @@ class _ShazamFooterState extends State<ShazamFooter> {
       setState(() {
         _currentSong = result;
       });
-      if (!_isTestMode) {
-        _checkMatchWithWishes(result);
-      }
+      // Wunsch-Abgleich nur in ShazamService (_checkAndUpdateWishes) —
+      // kein zweiter Pending-Query im Footer.
     });
 
     // RMS nur über StreamBuilder unten (kein zweites Abo auf rmsStream).
@@ -114,7 +142,7 @@ class _ShazamFooterState extends State<ShazamFooter> {
         final title = match['title'] ?? '';
         final artist = match['artist'] ?? '';
         final l10n = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(l10n.shazamSongMoved(title, artist)),
             backgroundColor: Colors.green,
@@ -135,8 +163,17 @@ class _ShazamFooterState extends State<ShazamFooter> {
   }
   
   Future<void> _checkUserRole() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        if (mounted) {
+          setState(() {
+            _isDJOrAdmin = false;
+            _isCheckingRole = false;
+          });
+        }
+        return;
+      }
       final isDJOrAdmin = await _checkIfUserIsDJOrAdmin(user);
       if (mounted) {
         setState(() {
@@ -144,10 +181,11 @@ class _ShazamFooterState extends State<ShazamFooter> {
           _isCheckingRole = false;
         });
       }
-    } else {
+    } catch (e) {
+      debugLog('ShazamFooter Rolle: $e');
       if (mounted) {
         setState(() {
-          _isDJOrAdmin = false;
+          _isDJOrAdmin = true;
           _isCheckingRole = false;
         });
       }
@@ -159,12 +197,19 @@ class _ShazamFooterState extends State<ShazamFooter> {
     _shazamService.recognitionActiveNotifier.removeListener(
       _onRecognitionActiveNotifier,
     );
+    VibesBoxSyncService.instance.removeListener(_onVibesBoxSyncChanged);
+    SongRecommendationSettingsService.instance.notifier.removeListener(
+      _onRecSettingsChanged,
+    );
     ActivePartyService.storedSessionNotifier.removeListener(
       _onStoredPartySessionChanged,
     );
     _statusSubscription?.cancel();
     _resultSubscription?.cancel();
     _wishMatchSubscription?.cancel();
+    if (_recOverlay.isShowing) {
+      _recOverlay.hide();
+    }
     super.dispose();
   }
 
@@ -177,7 +222,6 @@ class _ShazamFooterState extends State<ShazamFooter> {
       if (mounted) {
         final pid = partyData['party_id'];
         setState(() {
-          _currentPartyId = pid;
           _isTestMode =
               pid == null || pid.isEmpty || pid == 'manual';
         });
@@ -187,53 +231,8 @@ class _ShazamFooterState extends State<ShazamFooter> {
     }
   }
 
-  Future<void> _checkMatchWithWishes(Map<String, dynamic> song) async {
-    try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) return;
-
-      final songTitle = song['title'] as String?;
-      final songArtist = song['artist'] as String?;
-
-      if (songTitle == null || songArtist == null) return;
-
-      final partyId = _currentPartyId;
-      if (partyId == null || partyId.isEmpty || partyId == 'manual') return;
-      final wishesSnapshot = await WishPaths.partyWishes(partyId)
-          .where('status', isEqualTo: 'pending')
-          .get();
-
-      bool isMatched = false;
-      for (var doc in wishesSnapshot.docs) {
-        final wishData = doc.data();
-        final wishTitle = (wishData['title'] as String?)?.toLowerCase() ?? '';
-        final wishArtist = (wishData['artist'] as String?)?.toLowerCase() ?? '';
-
-        final songTitleLower = songTitle.toLowerCase();
-        final songArtistLower = songArtist.toLowerCase();
-
-        if (wishTitle == songTitleLower && wishArtist == songArtistLower) {
-          isMatched = true;
-          break;
-        }
-      }
-
-      if (mounted) {
-        setState(() {
-          _isMatchedWithWish = isMatched;
-        });
-      }
-    } catch (e) {
-      debugLog('Fehler beim Prüfen der Wünsche: $e');
-      if (mounted) {
-        setState(() {
-          _isMatchedWithWish = false;
-        });
-      }
-    }
-  }
-  
   Future<void> _onSwitchChanged(bool value) async {
+    if (VibesBoxSyncService.instance.enabled) return;
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       // Zurück setzen wenn kein User
@@ -342,7 +341,27 @@ class _ShazamFooterState extends State<ShazamFooter> {
           });
         }
         if (context.mounted) {
-          await _showRecognitionLockedDialog();
+          final takeover = await _showRecognitionLockedDialog();
+          if (takeover == true && context.mounted) {
+            try {
+              await _shazamService.forceClearRecognitionLockForCurrentParty();
+              final retry = await PartyAutostartService()
+                  .setManualRecognitionEnabled(true);
+              if (retry == RecognitionStartOutcome.started ||
+                  retry == RecognitionStartOutcome.alreadyRunning) {
+                if (mounted) {
+                  setState(() => _isEnabled = _shazamService.isEnabled);
+                }
+                return;
+              }
+              if (retry == RecognitionStartOutcome.blockedByOtherDevice &&
+                  context.mounted) {
+                await _showRecognitionLockedDialog();
+              }
+            } catch (e) {
+              debugLog('⚠️ Recognition-Lock Übernahme fehlgeschlagen: $e');
+            }
+          }
         }
         return;
       }
@@ -353,14 +372,14 @@ class _ShazamFooterState extends State<ShazamFooter> {
           });
         }
         final l10n = AppLocalizations.of(context);
-        final messenger = appRootScaffoldMessengerKey.currentState;
-        if (l10n != null && messenger != null) {
-          messenger.showSnackBar(
+        if (l10n != null) {
+          showRootVibesSnackBar(
             SnackBar(
               content: Text(l10n.recognition_lock_acquire_failed),
               backgroundColor: UIConstants.appOrange,
               behavior: SnackBarBehavior.floating,
             ),
+            tag: 'ShazamFooter',
           );
         }
         return;
@@ -369,16 +388,18 @@ class _ShazamFooterState extends State<ShazamFooter> {
     } else {
       debugLog('🛑 Stoppe Musikerkennung...');
       await PartyAutostartService().setManualRecognitionEnabled(false);
+      SongRecommendationService.instance.clearRuntimeCaches();
+      if (_recOverlay.isShowing) {
+        _recOverlay.hide();
+      }
       debugLog('✅ Musikerkennung gestoppt');
     }
   }
 
-  Future<void> _showRecognitionLockedDialog() async {
+  Future<bool?> _showRecognitionLockedDialog() async {
     final l10n = AppLocalizations.of(context)!;
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(
-      Localizations.localeOf(context).languageCode,
-    );
-    await showDialog<void>(
+    final isRtl = VbTextDirection.isRtl(context);
+    return showDialog<bool>(
       context: context,
       builder: (dialogCtx) {
         return Dialog(
@@ -424,6 +445,17 @@ class _ShazamFooterState extends State<ShazamFooter> {
                   ),
                   textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
                 ),
+                const SizedBox(height: 16),
+                FilledButton(
+                  onPressed: () async {
+                    Navigator.of(dialogCtx).pop(true);
+                  },
+                  style: FilledButton.styleFrom(
+                    backgroundColor: UIConstants.appOrange,
+                    foregroundColor: Colors.black,
+                  ),
+                  child: Text(l10n.recognition_lock_takeover_button),
+                ),
               ],
             ),
           ),
@@ -432,12 +464,114 @@ class _ShazamFooterState extends State<ShazamFooter> {
     );
   }
   
+  (String, String)? get _recognizedTitleArtist {
+    final title = ((_currentSong?['title'] as String?) ?? '').trim();
+    final artist = ((_currentSong?['artist'] as String?) ?? '').trim();
+    if (title.isEmpty || artist.isEmpty || title == '-' || artist == '-') {
+      return null;
+    }
+    return (title, artist);
+  }
+
+  bool get _showRecPanel {
+    // Eigene Suche nur bei aktiver Musikerkennung. Sync darf die Liste zeigen.
+    if (!_isEnabled && !VibesBoxSyncService.instance.enabled) return false;
+    final recognized = _recognizedTitleArtist;
+    if (recognized == null) return false;
+    if (!SongRecommendationSettingsService.instance.notifier.value.enabled) {
+      return false;
+    }
+    if (_dismissedRecSeed != null &&
+        _dismissedRecSeed!.$1 == recognized.$1 &&
+        _dismissedRecSeed!.$2 == recognized.$2) {
+      return false;
+    }
+    return true;
+  }
+
+  void _scheduleRecOverlayLayout() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final box =
+          _footerBarKey.currentContext?.findRenderObject() as RenderBox?;
+      if (box == null || !box.hasSize) return;
+      final h = box.size.height;
+      if ((h - _recOverlayBottom).abs() > 0.5) {
+        setState(() => _recOverlayBottom = h);
+      }
+    });
+  }
+
+  Widget _buildRecOverlay(BuildContext context) {
+    return ValueListenableBuilder<SessionProStatus?>(
+      valueListenable: UserService().sessionProStatus,
+      builder: (context, _, __) {
+        return ValueListenableBuilder<SongRecommendationSettings>(
+      valueListenable: SongRecommendationSettingsService.instance.notifier,
+      builder: (context, _, __) {
+        if (!ProFeatureGuard.canUseProExclusiveNow()) {
+          return const SizedBox.shrink();
+        }
+        if (!_showRecPanel) return const SizedBox.shrink();
+        final recognized = _recognizedTitleArtist;
+        if (recognized == null) return const SizedBox.shrink();
+        return SizedBox.expand(
+          child: Stack(
+            children: [
+              Positioned(
+                left: 0,
+                bottom: _recOverlayBottom,
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: SongRecommendationEdgePanel(
+                    key: ValueKey('${recognized.$1}|${recognized.$2}'),
+                    seedTitle: recognized.$1,
+                    seedArtist: recognized.$2,
+                    seedBpm: (_currentSong?['bpm'] as num?)?.toDouble(),
+                    seedCamelot:
+                        ((_currentSong?['camelot'] as String?) ?? '').trim(),
+                    useExternalSource: VibesBoxSyncService.instance.enabled,
+                    externalItems: VibesBoxSyncService.instance.suggestions,
+                    externalLoading:
+                        VibesBoxSyncService.instance.suggestionsLoading,
+                    onDismissPermanently: () {
+                      if (!mounted) return;
+                      setState(() => _dismissedRecSeed = recognized);
+                    },
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+      },
+    );
+  }
+
   /// Zeile 2: zuletzt erkanntes Stück (Titel und/oder Interpret wie Benachrichtigungszeile).
   String _songStatusLine(AppLocalizations l10n) {
+    if (VibesBoxSyncService.instance.enabled &&
+        (_currentSong?['idle'] == true ||
+            ShazamService.formatRecognizedTrackLabel(
+                  ((_currentSong?['title'] as String?) ?? '').trim(),
+                  ((_currentSong?['artist'] as String?) ?? '').trim(),
+                ) ==
+                null)) {
+      return l10n.vibesbox_sync_no_song;
+    }
     final artist = ((_currentSong?['artist'] as String?) ?? '').trim();
     final title = ((_currentSong?['title'] as String?) ?? '').trim();
     final line = ShazamService.formatRecognizedTrackLabel(title, artist);
-    if (line != null) return line;
+    if (line != null) {
+      final bits = <String>[line];
+      final bpm = CamelotHelper.formatBpm(_currentSong?['bpm'] as num?);
+      if (bpm != null) bits.add(bpm);
+      final camelot = ((_currentSong?['camelot'] as String?) ?? '').trim();
+      if (camelot.isNotEmpty) bits.add(camelot);
+      return bits.join(' · ');
+    }
     if (_isScanning) {
       return l10n.recognition_running;
     }
@@ -464,18 +598,45 @@ class _ShazamFooterState extends State<ShazamFooter> {
     final canToggle = user != null && (isAdmin || _isDJOrAdmin);
     
     // RTL-Erkennung
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
+
+    _scheduleRecOverlayLayout();
+    if (!_recOverlay.isShowing) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !_recOverlay.isShowing) {
+          _recOverlay.show();
+        }
+      });
+    }
         
     return Directionality(
       textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
-      child: SafeArea(
-        bottom: true,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+      child: OverlayPortal(
+        controller: _recOverlay,
+        overlayLocation: OverlayChildLocation.rootOverlay,
+        overlayChildBuilder: _buildRecOverlay,
+        child: SafeArea(
+          key: _footerBarKey,
+          bottom: true,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
             ValueListenableBuilder<bool>(
               valueListenable: _shazamService.recognitionActiveNotifier,
               builder: (context, isRecognitionActive, child) {
+                final syncOn = VibesBoxSyncService.instance.enabled;
+                if (syncOn) {
+                  return IgnorePointer(
+                    ignoring: true,
+                    child: Container(
+                      height: 3,
+                      width: double.infinity,
+                      color: VibesBoxSyncService.instance.connected
+                          ? UIConstants.appOrange
+                          : Colors.grey[700],
+                    ),
+                  );
+                }
                 return IgnorePointer(
                   ignoring: true,
                   child: isRecognitionActive
@@ -499,7 +660,8 @@ class _ShazamFooterState extends State<ShazamFooter> {
                               barColor = Colors.red;
                             }
 
-                            return Stack(
+                            return RepaintBoundary(
+                              child: Stack(
                               children: [
                                 Container(
                                   height: 3,
@@ -514,6 +676,7 @@ class _ShazamFooterState extends State<ShazamFooter> {
                                       : Colors.grey[700],
                                 ),
                               ],
+                            ),
                             );
                           },
                         )
@@ -526,7 +689,7 @@ class _ShazamFooterState extends State<ShazamFooter> {
               },
             ),
             Container(
-              padding: const EdgeInsetsDirectional.fromSTEB(12, 10, 12, 10),
+              padding: const EdgeInsetsDirectional.fromSTEB(12, 5, 12, 5),
               decoration: BoxDecoration(
                 color: Colors.black.withValues(alpha: 0.85),
                 image: const DecorationImage(
@@ -547,6 +710,35 @@ class _ShazamFooterState extends State<ShazamFooter> {
                     valueListenable:
                         _shazamService.recognitionActiveNotifier,
                     builder: (context, isRecognitionActive, _) {
+                      final syncOn = VibesBoxSyncService.instance.enabled;
+                      if (syncOn) {
+                        return Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          textDirection:
+                              isRtl ? TextDirection.rtl : TextDirection.ltr,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                l10n.vibesbox_sync_title,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleSmall
+                                    ?.copyWith(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.white,
+                                      height: 1.1,
+                                    ),
+                                textDirection: isRtl
+                                    ? TextDirection.rtl
+                                    : TextDirection.ltr,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        );
+                      }
                       return Row(
                         crossAxisAlignment: CrossAxisAlignment.center,
                         textDirection:
@@ -574,7 +766,7 @@ class _ShazamFooterState extends State<ShazamFooter> {
                               ),
                             ),
                             child: Transform.scale(
-                              scale: 0.88,
+                              scale: 0.78,
                               alignment: isRtl
                                   ? Alignment.centerRight
                                   : Alignment.centerLeft,
@@ -597,7 +789,7 @@ class _ShazamFooterState extends State<ShazamFooter> {
                               ),
                             ),
                           ),
-                          const SizedBox(width: 10),
+                          const SizedBox(width: 8),
                           Expanded(
                             child: Text(
                               l10n.music_recognition,
@@ -605,15 +797,15 @@ class _ShazamFooterState extends State<ShazamFooter> {
                                   .textTheme
                                   .titleSmall
                                   ?.copyWith(
-                                    fontSize: 16,
+                                    fontSize: 14,
                                     fontWeight: FontWeight.w600,
                                     color: Colors.white,
-                                    height: 1.2,
+                                    height: 1.1,
                                   ),
                               textDirection: isRtl
                                   ? TextDirection.rtl
                                   : TextDirection.ltr,
-                              maxLines: 2,
+                              maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
@@ -621,26 +813,36 @@ class _ShazamFooterState extends State<ShazamFooter> {
                       );
                     },
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    _songStatusLine(l10n),
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          fontSize: 13.5,
-                          height: 1.3,
-                          color: Colors.white.withValues(alpha: 0.88),
-                        ),
+                  const SizedBox(height: 2),
+                  Row(
                     textDirection:
                         isRtl ? TextDirection.rtl : TextDirection.ltr,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          _songStatusLine(l10n),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                fontSize: 12,
+                                height: 1.2,
+                                color: Colors.white.withValues(alpha: 0.88),
+                              ),
+                          textDirection: isRtl
+                              ? TextDirection.rtl
+                              : TextDirection.ltr,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
                   ),
                   if (_isTestMode) ...[
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 3),
                     Text(
                       l10n.music_recognition_test_mode_no_save_hint,
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                            fontSize: 11,
-                            height: 1.25,
+                            fontSize: 10,
+                            height: 1.15,
                             fontStyle: FontStyle.italic,
                             color: Colors.white.withValues(alpha: 0.45),
                           ),
@@ -654,6 +856,7 @@ class _ShazamFooterState extends State<ShazamFooter> {
               ),
             ),
           ],
+        ),
         ),
       ),
     );

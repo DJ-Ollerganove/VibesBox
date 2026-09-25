@@ -1,8 +1,6 @@
 {
   "sourceLanguage": "de",
-  "excludeFromMenu": [
-    "ar"
-  ],
+  "excludeFromMenu": [],
   "languages": [
     {
       "code": "de",
@@ -111,6 +109,12 @@
       "name": "Czech",
       "icon": "cs",
       "langKey": "lang_czech"
+    },
+    {
+      "code": "th",
+      "name": "Thai",
+      "icon": "th",
+      "langKey": "lang_thai"
     },
     {
       "code": "ar",

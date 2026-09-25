@@ -16,14 +16,32 @@
   <!-- reCAPTCHA Enterprise: defer verhindert Render-Blockierung des Hauptdokuments -->
   <script defer src="https://www.google.com/recaptcha/enterprise.js?render=6LdoeDcsAAAAAIORb90GjRovm2tW5qE4v9q5J-u5"></script>
   <script src="/vb/scripts/default-pwa-languages.js"></script>
+  <script src="/vb/scripts/generated/party-locale-opts.js"></script>
+  <script src="/pwa-text-direction.js?v=2"></script>
+  <script>
+    (function () {
+      try {
+        var c = '';
+        try { c = (new URLSearchParams(location.search).get('lang') || '').trim().toLowerCase().split('-')[0]; } catch (e0) {}
+        if (!c) c = (localStorage.getItem('pwa_language') || localStorage.getItem('language') || '').trim().toLowerCase().split('-')[0];
+        if (c === 'ar' || c === 'he' || c === 'fa' || c === 'ur') {
+          document.documentElement.setAttribute('dir', 'rtl');
+          document.documentElement.lang = c;
+          document.documentElement.className = (document.documentElement.className + ' pwa-rtl').trim();
+        }
+      } catch (e) {}
+    })();
+  </script>
   <script src="/lang-menu-columns.js"></script>
-  <script src="/lang_menu_shared.js"></script>
+  <script src="/lang_menu_shared.js?v=9"></script>
+  <link rel="stylesheet" href="/pwa-rtl.css?v=2">
+  <script src="/legal-modal-shared.js?v=2"></script>
   <!-- Party-Code-Prüfung nur noch in /vb/ (party_shared.js dort) -->
   <script>
     (function() {
       window.IS_DEBUG = (new URLSearchParams(window.location.search).get('x') === '99');
       if (window.IS_DEBUG) console.log('Root Loader: Sprachen nur lokal (DEFAULT_PWA_LANGUAGES / pwaAvailableLanguages).');
-      var LANGUAGE_NAMES = { de: 'Deutsch', en: 'English', fr: 'Français', ru: 'Русский', zh: '中文', es: 'Español', tr: 'Türkçe', pt: 'Português', hi: 'Hindi' };
+      var LANGUAGE_NAMES = { de: 'Deutsch', en: 'English', fr: 'Français', ru: 'Русский', zh: '中文', es: 'Español', tr: 'Türkçe', pt: 'Português', hi: 'Hindi', ar: 'العربية' };
       var STORAGE_KEY = 'language_stats_date';
       var PERMANENT_LOCALE_KEY = 'permanent_user_locale';
 
@@ -93,6 +111,11 @@
             window.setVbPreferredLangForSession(langCode);
           }
         } catch (eVb) {}
+        try {
+          if (typeof window.pwaApplyTextDirection === 'function') {
+            window.pwaApplyTextDirection(langCode);
+          }
+        } catch (eDir) {}
       }
 
       function removeLangParamFromUrl() {
@@ -192,9 +215,9 @@
         window.updatePageTitle = function updatePageTitle() {
           if (typeof window.translations === 'undefined') return;
           var lang = getTitleLang();
-          var t = window.translations[lang] || window.translations['de'] || window.translations['en'] || {};
+          var t = window.translations[lang] || window.translations['en'] || {};
           var pageTitle = t['main_hero_title'] || t['main_meta_title'] || 'VibesBox';
-          document.title = (pageTitle.indexOf('VibesBox') === -1 ? pageTitle + ' - VibesBox' : pageTitle) || 'VibesBox – Dein interaktives Event-Erlebnis';
+          document.title = (pageTitle.indexOf('VibesBox') === -1 ? pageTitle + ' - VibesBox' : pageTitle) || 'VibesBox';
         };
         window.getTranslation = function getTranslation(key) {
           try {
@@ -209,7 +232,6 @@
                 ? window.resolvePwaLanguage(codes)
                 : ((navigator.language && navigator.language.split('-')[0]) || 'en'));
             if (typeof window.translations !== 'undefined' && window.translations[lang] && window.translations[lang][key]) return window.translations[lang][key];
-            if (typeof window.translations !== 'undefined' && window.translations['de'] && window.translations['de'][key]) return window.translations['de'][key];
             if (typeof window.translations !== 'undefined' && window.translations['en'] && window.translations['en'][key]) return window.translations['en'][key];
           } catch (e) {}
           return key;
@@ -217,6 +239,9 @@
         if (typeof window.updatePageTitle === 'function') window.updatePageTitle();
         if (window.IS_DEBUG) console.log('Root Loader: Übersetzungen geladen, Sprache:', loadedLang || '(Fallback)');
         scheduleRootDomI18n();
+        if (typeof window.pwaApplyTextDirection === 'function' && loadedLang) {
+          window.pwaApplyTextDirection(loadedLang);
+        }
         window.dispatchEvent(new Event('translationsReady'));
       }
 
@@ -243,7 +268,7 @@
       }
       /** Lädt Sprachdatei. jsPath optional (z. B. "/vb/lang/de.js"), sonst /vb/lang/<langCode>.js */
       function loadLangScript(langCode, onDone, jsPath) {
-        var bust = window.IS_DEBUG ? ('?v=' + Date.now()) : '';
+      var bust = window.IS_DEBUG ? ('?v=' + Date.now()) : ('?v=' + (window.PWA_LANG_ASSET_V || window.VB_LANG_ASSET_V || '20260909l10n'));
         var scriptUrl = (jsPath && (jsPath.indexOf('/') !== -1 || jsPath.indexOf('.js') !== -1))
           ? (jsPath.indexOf('?') !== -1 ? jsPath : jsPath + bust)
           : '/vb/lang/' + langCode + '.js' + bust;
@@ -304,7 +329,6 @@
         var rawLangParam = (urlParams.get('lang') || '').trim();
         var hadUrlLang = !!rawLangParam;
         var langParamTrim = rawLangParam.toLowerCase();
-        if (langParamTrim === 'ar') langParamTrim = '';
         var initialLang = (typeof window.resolvePwaLanguage === 'function')
           ? window.resolvePwaLanguage(codes)
           : ((codes.indexOf('en') !== -1) ? 'en' : (codes[0] || 'en'));
@@ -478,16 +502,72 @@
       height: 44px;
       width: auto;
     }
+    .header-brand {
+      display: flex;
+      flex-direction: row;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.65rem 0.85rem;
+      min-width: 0;
+      flex: 1 1 auto;
+      margin-right: 1rem;
+    }
+    .header-brand > a {
+      flex-shrink: 0;
+      line-height: 0;
+    }
     .header-schriftzug {
       height: 45px;
       width: auto;
       display: block;
       vertical-align: middle;
     }
+    .header-store-badges {
+      display: flex;
+      flex-direction: row;
+      flex-wrap: nowrap;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0;
+      background: none;
+      box-shadow: none;
+      border: none;
+    }
+    .header-store-badge {
+      display: inline-flex;
+      line-height: 0;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.45);
+      background: transparent;
+      box-shadow: none;
+      overflow: hidden;
+      transition: opacity 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+    }
+    .header-store-badge:hover {
+      opacity: 0.92;
+      border-color: rgba(255, 255, 255, 0.75);
+      transform: translateY(-1px);
+    }
+    .header-store-badge img {
+      display: block;
+      height: 32px;
+      width: auto;
+    }
+    .header-store-badge-google img {
+      height: 46px;
+      margin-left: -2px;
+    }
+    @media (max-width: 640px) {
+      .header-store-badge img { height: 26px; }
+      .header-store-badge-google img { height: 38px; }
+      .header-schriftzug { height: 36px; }
+      .header-brand { gap: 0.45rem 0.6rem; margin-right: 0.5rem; }
+    }
     .header-nav {
       display: flex;
       align-items: center;
       gap: 1.5rem;
+      flex-shrink: 0;
     }
     .header-nav a {
       color: var(--text-muted);
@@ -841,6 +921,17 @@
       color: var(--text-muted);
       font-size: 0.9rem;
     }
+    .visual-image {
+      display: block;
+      width: 100%;
+      height: auto;
+      max-width: 560px;
+      margin: 0 auto;
+      border-radius: 16px;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+      border: 1px solid rgba(212, 131, 77, 0.35);
+      background: #0a0a12;
+    }
 
     /* Typografie – Schlagworte in Kupfer */
     .accent-large {
@@ -877,9 +968,10 @@
       overflow: hidden;
     }
     .hero-logo {
-      width: 160px;
+      width: min(320px, 72vw);
       height: auto;
       margin-bottom: 2rem;
+      filter: drop-shadow(0 8px 28px rgba(0, 200, 255, 0.25));
     }
     .hero h1 {
       font-size: clamp(1.5rem, 4vw, 2.25rem);
@@ -966,7 +1058,7 @@
       margin-bottom: 1rem;
     }
 
-    /* Feature cards – 3 nebeneinander, Rahmen + Schatten */
+    /* Feature cards – Gast + DJ in einer Zeile, Stores als eigene Zeile darunter */
     .features-grid {
       display: grid;
       grid-template-columns: 1fr;
@@ -974,7 +1066,7 @@
       margin-top: 2rem;
     }
     @media (min-width: 720px) {
-      .features-grid { grid-template-columns: repeat(3, 1fr); gap: 1.75rem; }
+      .features-grid { grid-template-columns: repeat(2, 1fr); gap: 1.75rem; }
     }
     .feature-card {
       background: var(--bg-card-on-dark);
@@ -994,6 +1086,52 @@
       margin-bottom: 0;
       font-size: 0.95rem;
       line-height: 1.6;
+    }
+    /* App-Download: eigener Sektions-Block (nicht Teil von Features) */
+    section.app-download-block {
+      margin-left: calc(50% - 50vw);
+      margin-right: calc(50% - 50vw);
+      width: 100vw;
+      max-width: none;
+      box-sizing: border-box;
+      padding: 5rem 1.5rem;
+      text-align: center;
+    }
+    section.app-download-block h2 {
+      margin-bottom: 1.75rem;
+      color: #fff;
+    }
+    .app-download-inner {
+      max-width: 560px;
+      margin: 0 auto;
+    }
+    .app-download-block .store-badges {
+      display: flex;
+      flex-direction: row;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem 1rem;
+    }
+    .app-download-block .store-badge {
+      display: inline-flex;
+      line-height: 0;
+      border-radius: 8px;
+      transition: opacity 0.15s ease, transform 0.15s ease;
+    }
+    .app-download-block .store-badge:hover {
+      opacity: 0.92;
+      transform: translateY(-1px);
+    }
+    .app-download-block .store-badge img {
+      display: block;
+      height: 44px;
+      width: auto;
+      max-width: 100%;
+    }
+    .app-download-block .store-badge-google img {
+      height: 64px;
+      margin-left: -8px;
     }
 
     /* Philosophie – Karte mit Rahmen + Schatten */
@@ -1204,15 +1342,67 @@
     .overlay-error.show { display: block; }
     .overlay-error.future { border-color: rgba(129, 199, 132, 0.6); background: rgba(129, 199, 132, 0.1); color: #a5d6a7; }
     .overlay-error.ended-info { border-color: rgba(212, 131, 77, 0.55); background: rgba(212, 131, 77, 0.12); color: var(--text); }
+
+    /* Extra-Fenster: Party noch nicht gestartet / beendet (von /vb/ zurückgeleitet) */
+    .party-status-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(5, 5, 5, 0.9);
+      z-index: 320;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }
+    .party-status-overlay.show { display: flex; }
+    .party-status-box {
+      background: var(--bg-card-on-light);
+      border-radius: 16px;
+      padding: 2rem;
+      max-width: 420px;
+      width: 100%;
+      text-align: center;
+      border: 2px solid var(--accent);
+      box-shadow: 0 8px 32px rgba(26, 26, 26, 0.55);
+    }
+    .party-status-box.future { border-color: #66bb6a; box-shadow: 0 8px 32px rgba(40, 167, 69, 0.28); }
+    .party-status-box.ended { border-color: #e53935; box-shadow: 0 8px 32px rgba(229, 57, 53, 0.28); }
+    .party-status-icon { font-size: 2.5rem; line-height: 1; margin-bottom: 1rem; }
+    .party-status-box.future .party-status-icon { color: #66bb6a; }
+    .party-status-box.ended .party-status-icon { color: #e53935; }
+    .party-status-message { font-size: 1rem; line-height: 1.6; margin-bottom: 1.5rem; color: var(--text); }
+    .party-status-box .btn { width: 100%; }
   </style>
 </head>
 <body>
   <header class="header">
-    <a href="/" aria-label="VibesBox – Startseite">
-      <img src="/vb-schriftzug.png" alt="VibesBox" class="header-schriftzug">
-    </a>
+    <div class="header-brand">
+      <a href="/" aria-label="VibesBox – Startseite">
+        <img src="/vb-schriftzug.png" alt="VibesBox" class="header-schriftzug">
+      </a>
+      <div class="header-store-badges" aria-label="App download">
+        <a
+          class="header-store-badge header-store-badge-apple"
+          href="https://apps.apple.com/app/vibesbox/id6767363203"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Download on the App Store"
+        >
+          <img src="/assets/store/app-store-badge.svg" width="120" height="36" alt="Download on the App Store">
+        </a>
+        <a
+          class="header-store-badge header-store-badge-google"
+          href="https://play.google.com/store/apps/details?id=com.vibesbox.dj"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Get it on Google Play"
+        >
+          <img src="/assets/store/google-play-badge.png" width="135" height="52" alt="Get it on Google Play">
+        </a>
+      </div>
+    </div>
     <nav class="header-nav">
-      <div class="lang-switcher" id="langSwitcher" aria-label="Sprache wählen"></div>
+      <div class="lang-switcher" id="langSwitcher" aria-label="Select language"></div>
       <div class="nav-uber" id="navUber">
         <span class="nav-uber-trigger" id="navUberTrigger" aria-haspopup="true" aria-expanded="false" data-i18n="main_nav_uber">ÜBER</span>
         <div class="nav-uber-dropdown" role="menu">
@@ -1240,66 +1430,6 @@
     (function() {
       var navUber = document.getElementById('navUber');
       var navUberTrigger = document.getElementById('navUberTrigger');
-      var legalOverlay = document.getElementById('legalOverlay');
-      var legalModalBody = document.getElementById('legalModalBody');
-      var legalModalTitle = document.getElementById('legalModalTitle');
-      var legalModalClose = document.getElementById('legalModalClose');
-
-      function getCurrentLang() {
-        try {
-          if (typeof window.getEffectiveLangForMenu === 'function') {
-            return window.getEffectiveLangForMenu();
-          }
-          return window.localStorage.getItem('permanent_user_locale') || window.localStorage.getItem('pwa_language') || window.localStorage.getItem('language') || (navigator.language && navigator.language.split('-')[0]) || 'en';
-        } catch (e) {
-          return 'en';
-        }
-      }
-
-      function getLegalContent(type) {
-        if (typeof translations === 'undefined') return { title: type, html: '<p>Übersetzungen werden geladen…</p>' };
-        var lang = getCurrentLang();
-        var t = translations[lang] || translations['de'] || {};
-        var tDe = translations['de'] || {};
-        var title = '';
-        var html = '';
-
-        if (type === 'impressum') {
-          title = t['imprint_title'] || tDe['imprint_title'] || 'Impressum';
-          if (t['legal_language_notice']) {
-            html += '<p style="font-weight: bold; margin-bottom: 16px;">' + t['legal_language_notice'] + '</p>';
-          }
-          html += (tDe['imprint_html_content'] || '');
-        } else if (type === 'datenschutz') {
-          title = t['privacy_title'] || tDe['privacy_title'] || 'Datenschutz';
-          if (t['legal_language_notice']) {
-            html += '<p style="font-weight: bold; margin-bottom: 16px;">' + t['legal_language_notice'] + '</p>';
-          }
-          html += (t['privacy_html_content'] || tDe['privacy_html_content'] || '');
-        } else if (type === 'agb') {
-          title = t['terms_title'] || tDe['terms_title'] || 'AGB';
-          if (t['agb_intro']) {
-            html += '<p style="margin-bottom: 16px;">' + t['agb_intro'] + '</p>';
-          }
-          html += (t['terms_html_content'] || tDe['terms_html_content'] || '');
-        }
-
-        html += '<div style="margin-top: 32px; padding-top: 16px; border-top: 1px solid rgba(212,131,77,0.3); text-align: center; font-size: 0.85rem; color: var(--text-muted);">© VibesBox 2026</div>';
-        return { title: title, html: html };
-      }
-
-      function openLegalModal(type) {
-        var data = getLegalContent(type);
-        legalModalTitle.textContent = data.title;
-        legalModalBody.innerHTML = data.html;
-        legalModalBody.querySelectorAll('a[href^="http"]').forEach(function(a) {
-          a.setAttribute('target', '_blank');
-          a.setAttribute('rel', 'noopener noreferrer');
-        });
-        legalOverlay.classList.add('show');
-        legalOverlay.setAttribute('aria-hidden', 'false');
-        legalModalBody.scrollTop = 0;
-      }
 
       if (navUberTrigger) {
         navUberTrigger.addEventListener('click', function(e) {
@@ -1309,32 +1439,13 @@
         });
       }
       document.querySelectorAll('.nav-uber-dropdown a[data-legal]').forEach(function(a) {
-        a.addEventListener('click', function(e) {
-          e.preventDefault();
-          var page = this.getAttribute('data-legal');
-          if (!page) return;
-          var type = page.replace('.html', '');
-          openLegalModal(type);
-          navUber.classList.remove('open');
-          navUberTrigger.setAttribute('aria-expanded', 'false');
+        a.addEventListener('click', function() {
+          if (navUber) navUber.classList.remove('open');
+          if (navUberTrigger) navUberTrigger.setAttribute('aria-expanded', 'false');
         });
       });
-      if (legalModalClose) {
-        legalModalClose.addEventListener('click', function() {
-          legalOverlay.classList.remove('show');
-          legalOverlay.setAttribute('aria-hidden', 'true');
-        });
-      }
-      if (legalOverlay) {
-        legalOverlay.addEventListener('click', function(e) {
-          if (e.target === legalOverlay) {
-            legalOverlay.classList.remove('show');
-            legalOverlay.setAttribute('aria-hidden', 'true');
-          }
-        });
-      }
       document.addEventListener('click', function(e) {
-        if (navUber && !navUber.contains(e.target)) {
+        if (navUber && navUberTrigger && !navUber.contains(e.target)) {
           navUber.classList.remove('open');
           navUberTrigger.setAttribute('aria-expanded', 'false');
         }
@@ -1358,7 +1469,7 @@
       window.mainT = function(key) {
         var lang = getMainLang();
         if (typeof translations === 'undefined') return key;
-        var t = translations[lang] || translations['de'] || {};
+        var t = translations[lang] || translations['en'] || {};
         return t[key] != null ? t[key] : key;
       };
 
@@ -1367,7 +1478,7 @@
           document.title = title + " - VibesBox";
         } else if (typeof translations !== 'undefined') {
           var lang = getMainLang();
-          var t = translations[lang] || translations['de'] || {};
+          var t = translations[lang] || translations['en'] || {};
           var pageTitle = t['main_hero_title'] || t['main_meta_title'] || 'VibesBox';
           document.title = pageTitle + (pageTitle.indexOf('VibesBox') === -1 ? ' - VibesBox' : '');
         }
@@ -1376,7 +1487,7 @@
       function updateContent() {
         if (typeof translations === 'undefined') return;
         var lang = getMainLang();
-        var t = translations[lang] || translations['de'] || {};
+        var t = translations[lang] || translations['en'] || {};
         document.querySelectorAll('[data-i18n]').forEach(function(el) {
           var key = el.getAttribute('data-i18n');
           if (t[key] != null) el.textContent = t[key];
@@ -1409,7 +1520,7 @@
           if (fc) fc.textContent = window.__pdfFooterText;
         }
         var closeBtn = document.getElementById('legalModalClose');
-        if (closeBtn && typeof window.getTranslation === 'function') closeBtn.setAttribute('aria-label', window.getTranslation('button_close') || 'Schließen');
+        if (closeBtn && typeof window.getTranslation === 'function') closeBtn.setAttribute('aria-label', window.getTranslation('button_close') || 'Close');
       }
       if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', runWhenTranslationsAndDOMReady);
@@ -1422,7 +1533,10 @@
 
   <main>
     <section class="hero">
-      <img src="/icon/vibesbox-logo.png" alt="VibesBox" class="hero-logo">
+      <picture>
+        <source type="image/webp" srcset="/icon/vibesbox-logo.webp">
+        <img src="/icon/vibesbox-logo.png" alt="VibesBox" class="hero-logo" width="1024" height="1024">
+      </picture>
       <h1 data-i18n="main_hero_title">VIBESBOX – Die Verbindung zwischen DJ und Gast.</h1>
       <p class="tagline" data-i18n="main_hero_tagline">Das digitale Herzstück für jede Party. Modern, direkt und ohne Barrieren.</p>
       <button type="button" class="btn btn-primary" id="heroCodeBtn" data-i18n="main_hero_btn_code">Party-Code eingeben</button>
@@ -1437,14 +1551,25 @@
           <p data-i18n="main_intro_paragraph2"></p>
         </div>
         <div class="two-col-visual">
-          <div class="visual-placeholder" aria-hidden="true" data-i18n="main_visual_placeholder">Bild-Platzhalter</div>
+          <picture>
+            <source type="image/webp" srcset="/assets/vibesbox-promo.webp">
+            <img
+              class="visual-image"
+              src="/assets/vibesbox-promo.jpg"
+              alt="VibesBox – Features"
+              width="1600"
+              height="1600"
+              loading="lazy"
+              decoding="async"
+            >
+          </picture>
         </div>
       </div>
     </section>
 
     <section id="features" class="features-wrap section-features-hero-bg">
-      <p class="accent-large" data-i18n="main_features_accent">3 Bereiche, eine Plattform</p>
-      <h2 data-i18n="main_features_title">Für Gäste, DJs und den reibungslosen Ablauf</h2>
+      <p class="accent-large" data-i18n="main_features_accent">2 Bereiche, eine Plattform</p>
+      <h2 data-i18n="main_features_title">Für Gäste und DJs</h2>
       <div class="features-grid">
         <div class="feature-card">
           <h3 data-i18n="main_feature_guest_title">Für Gäste</h3>
@@ -1454,12 +1579,40 @@
           <h3 data-i18n="main_feature_dj_title">Für DJs</h3>
           <p data-i18n="main_feature_dj_body">Professionelles Management aller Musikwünsche per App. Behalte die volle Kontrolle über den Flow der Party und reagiere sofort auf die Tanzfläche.</p>
         </div>
-        <div class="feature-card">
-          <h3 data-i18n="main_feature_auto_title">Automatisierung</h3>
-          <p data-i18n="main_feature_auto_body">VIBESBOX hält im Hintergrund alle Fäden zusammen – von der intelligenten Wunschliste bis zur automatischen Dokumentation des Abends.</p>
+      </div>
+    </section>
+
+    <hr class="section-divider" aria-hidden="true">
+
+    <section id="app-download" class="app-download-block section-bg-1">
+      <div class="app-download-inner">
+        <h2 data-i18n="main_feature_stores_title">App herunterladen</h2>
+        <div class="store-badges">
+          <a
+            class="store-badge store-badge-apple"
+            href="https://apps.apple.com/app/vibesbox/id6767363203"
+            target="_blank"
+            rel="noopener noreferrer"
+            data-aria-i18n="main_feature_stores_app_store_aria"
+            aria-label="Im App Store laden"
+          >
+            <img src="/assets/store/app-store-badge.svg" width="148" height="44" alt="Download on the App Store">
+          </a>
+          <a
+            class="store-badge store-badge-google"
+            href="https://play.google.com/store/apps/details?id=com.vibesbox.dj"
+            target="_blank"
+            rel="noopener noreferrer"
+            data-aria-i18n="main_feature_stores_play_store_aria"
+            aria-label="Bei Google Play laden"
+          >
+            <img src="/assets/store/google-play-badge.png" width="166" height="64" alt="Get it on Google Play">
+          </a>
         </div>
       </div>
     </section>
+
+    <hr class="section-divider" aria-hidden="true">
 
     <section id="philosophy" class="section-two-col section-bg-2">
       <div class="two-col-grid reverse">
@@ -1470,7 +1623,18 @@
           </div>
         </div>
         <div class="two-col-visual">
-          <div class="visual-placeholder" aria-hidden="true" data-i18n="main_visual_placeholder">Bild-Platzhalter</div>
+          <picture>
+            <source type="image/webp" srcset="/assets/vibesbox-promo.webp">
+            <img
+              class="visual-image"
+              src="/assets/vibesbox-promo.jpg"
+              alt="VibesBox"
+              width="1600"
+              height="1600"
+              loading="lazy"
+              decoding="async"
+            >
+          </picture>
         </div>
       </div>
     </section>
@@ -1513,7 +1677,18 @@
           </form>
         </div>
         <div class="two-col-visual">
-          <div class="visual-placeholder" aria-hidden="true" data-i18n="main_visual_placeholder">Bild-Platzhalter</div>
+          <picture>
+            <source type="image/webp" srcset="/assets/vibesbox-promo.webp">
+            <img
+              class="visual-image"
+              src="/assets/vibesbox-promo.jpg"
+              alt="VibesBox"
+              width="1600"
+              height="1600"
+              loading="lazy"
+              decoding="async"
+            >
+          </picture>
         </div>
       </div>
     </section>
@@ -1539,6 +1714,14 @@
       <p id="codeOverlayError" class="overlay-error" aria-live="polite"></p>
       <button type="button" class="btn btn-primary" id="codeSubmitBtn" data-i18n="main_overlay_btn_submit" disabled></button>
       <button type="button" class="overlay-close" id="codeOverlayClose" data-i18n="main_overlay_btn_close"></button>
+    </div>
+  </div>
+
+  <div class="party-status-overlay" id="partyStatusOverlay" aria-hidden="true">
+    <div class="party-status-box" id="partyStatusBox">
+      <div class="party-status-icon" id="partyStatusIcon" aria-hidden="true"></div>
+      <p class="party-status-message" id="partyStatusMessage"></p>
+      <button type="button" class="btn btn-primary" id="partyStatusOkBtn">OK</button>
     </div>
   </div>
 
@@ -1598,7 +1781,7 @@
           codeOverlayError.textContent = msg || mainOverlayT('party_ended');
           codeOverlayError.classList.add('ended-info');
         } else if (isFuture && msg && msg.indexOf('<') !== -1) {
-          codeOverlayError.innerHTML = msg;
+          codeOverlayError.innerHTML = sanitizePartyStatusHtml(msg);
           codeOverlayError.classList.add('future');
         } else {
           codeOverlayError.textContent = msg || fallback;
@@ -1666,15 +1849,87 @@
 
       updateCodeSubmitEnabled();
 
-      /** Legacy: altes Flag entfernen – kein zweites Party-Code-Overlay mehr nach Party-Ende. */
-      function maybeShowPartyEndedFromWishbox() {
-        try {
-          if (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('vb_party_ended_notice') === '1') {
-            sessionStorage.removeItem('vb_party_ended_notice');
-          }
-        } catch (eEnd) {}
+      function sanitizePartyStatusHtml(html) {
+        return String(html || '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/&lt;br\s*\/?&gt;/gi, '<br>')
+          .replace(/&lt;strong&gt;/gi, '<strong>')
+          .replace(/&lt;\/strong&gt;/gi, '</strong>');
       }
-      maybeShowPartyEndedFromWishbox();
+
+      function hidePartyStatusOverlay() {
+        var ov = document.getElementById('partyStatusOverlay');
+        if (!ov) return;
+        ov.classList.remove('show');
+        ov.setAttribute('aria-hidden', 'true');
+      }
+
+      function showPartyStatusOverlay(notice) {
+        var ov = document.getElementById('partyStatusOverlay');
+        var box = document.getElementById('partyStatusBox');
+        var icon = document.getElementById('partyStatusIcon');
+        var msg = document.getElementById('partyStatusMessage');
+        var btn = document.getElementById('partyStatusOkBtn');
+        if (!ov || !box || !msg) return;
+        var type = notice && notice.type === 'future' ? 'future' : 'ended';
+        box.classList.remove('future', 'ended');
+        box.classList.add(type);
+        if (icon) icon.textContent = type === 'future' ? '◷' : '!';
+        var html = notice && notice.html ? notice.html : '';
+        if (!html) {
+          html = type === 'future'
+            ? mainOverlayT('main_party_not_started_intro')
+            : (mainOverlayT('main_party_ended_returned_home') || mainOverlayT('party_ended'));
+          msg.textContent = html;
+        } else {
+          msg.innerHTML = sanitizePartyStatusHtml(html);
+        }
+        if (btn) btn.textContent = mainOverlayT('button_ok') || 'OK';
+        ov.classList.add('show');
+        ov.setAttribute('aria-hidden', 'false');
+        if (btn) btn.focus();
+      }
+
+      function readPartyStatusNotice() {
+        try {
+          if (typeof sessionStorage === 'undefined') return null;
+          var raw = sessionStorage.getItem('vb_party_status_notice');
+          if (raw) {
+            sessionStorage.removeItem('vb_party_status_notice');
+            try { return JSON.parse(raw); } catch (eP) { return { type: 'ended', html: '' }; }
+          }
+          if (sessionStorage.getItem('vb_party_ended_notice') === '1') {
+            sessionStorage.removeItem('vb_party_ended_notice');
+            return { type: 'ended', html: '' };
+          }
+        } catch (eN) {}
+        return null;
+      }
+
+      (function bindPartyStatusOverlay() {
+        var ov = document.getElementById('partyStatusOverlay');
+        var btn = document.getElementById('partyStatusOkBtn');
+        if (btn) btn.addEventListener('click', hidePartyStatusOverlay);
+        if (ov) {
+          ov.addEventListener('click', function (e) {
+            if (e.target === ov) hidePartyStatusOverlay();
+          });
+        }
+        document.addEventListener('keydown', function (e) {
+          if (e.key === 'Escape' && ov && ov.classList.contains('show')) hidePartyStatusOverlay();
+        });
+        var notice = readPartyStatusNotice();
+        if (notice) showPartyStatusOverlay(notice);
+        window.addEventListener('translationsReady', function () {
+          var ovReady = document.getElementById('partyStatusOverlay');
+          var btnReady = document.getElementById('partyStatusOkBtn');
+          if (ovReady && ovReady.classList.contains('show') && btnReady) {
+            btnReady.textContent = mainOverlayT('button_ok') || 'OK';
+          }
+        });
+      })();
 
       // Kontaktformular – vereinheitlicht mit VR-Seite (Felder, Validierung, Cloud Function, Kupfer-Design)
       const contactForm = document.getElementById('contactForm');
@@ -1833,7 +2088,7 @@
             console.warn('[Kontakt] reCAPTCHA fehlgeschlagen (unterdrückt):', recaptchaErr && recaptchaErr.message);
           }
           if (!recaptchaToken || typeof recaptchaToken !== 'string') {
-            showContactError(contactT('contact_error_sending') || contactT('contact_error_recaptcha_token_missing') || 'reCAPTCHA konnte nicht geladen werden. Bitte Seite neu laden.');
+            showContactError(contactT('contact_error_recaptcha_token_missing') || contactT('contact_error_sending') || 'reCAPTCHA could not be loaded. Please reload the page.');
             contactSubmitBtn.disabled = false;
             contactSubmitBtn.textContent = contactT('main_contact_btn_submit');
             if (window.updateMainContent) window.updateMainContent();

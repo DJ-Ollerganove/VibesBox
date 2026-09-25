@@ -4,17 +4,28 @@
   },
   "functions": { "source": "functions" },
   "firestore": { "rules": "firestore.rules", "indexes": "firestore.indexes.json" },
-  "storage": { "rules": "storage.rules" },
+  "storage": [
+    { "bucket": "dj-ollerganove.firebasestorage.app", "rules": "storage.rules" },
+    { "bucket": "dj-ollerganove.appspot.com", "rules": "storage.rules" }
+  ],
   "hosting": {
     "public": "public",
     "ignore": ["firebase.json", "**/node_modules/**"],
     "rewrites": [
+      { "source": "/invite", "destination": "/invite.html" },
+      { "source": "/invite/**", "destination": "/invite.html" },
+      { "source": "/dj", "destination": "/dj/index.html" },
+      { "source": "/dj-admin", "destination": "/dj-admin/index.html" },
+      { "source": "/dj-admin/**", "destination": "/dj-admin/index.html" },
       { "source": "/delete-account", "destination": "/delete-account.html" },
       { "source": "/delete-account/", "destination": "/delete-account.html" },
       { "source": "/verify", "destination": "/vb/verify.html" },
       { "source": "/verify/**", "destination": "/vb/verify.html" },
       { "source": "/vb/verify", "destination": "/vb/verify.html" },
       { "source": "/vb/**", "destination": "/vb/index.html" },
+      { "source": "/sync", "destination": "/sync/index.html" },
+      { "source": "/sync/", "destination": "/sync/index.html" },
+      { "source": "/download/vibesbox-sync-mac", "destination": "/sync/VibesBox-Sync-1.0.1-mac.pkg" },
       { "source": "**", "destination": "/index.html" }
     ],
     "headers": [
@@ -31,12 +42,99 @@
         "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
       },
       {
+        "source": "/vb/lang/**",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/vb/scripts/vb-url-lang.js",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
         "source": "/vb/app.js",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/party_shared.js",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/vb",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/vb/",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/vb/index.html",
         "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
       },
       {
         "source": "/vb/styles/main.css",
         "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/dj/dj-l10n.js",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/dj/l10n-data.js",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/dj/app.js",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/dj/wish-grouping.js",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/dj-admin/wish-grouping.js",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/dj/styles.css",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/dj-admin/index.html",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/dj-admin/dj-lang-init.js",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/dj/dj-text-direction.js",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/dj-admin/dj-l10n.js",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/dj-admin/l10n-data.js",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/dj-admin/app.js",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/dj-admin/styles.css",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/dj-admin/dj-admin-lang-bootstrap.js",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/sync/*.pkg",
+        "headers": [
+          { "key": "Content-Type", "value": "application/octet-stream" },
+          { "key": "Content-Disposition", "value": "attachment" }
+        ]
       },
       {
         "source": "**",

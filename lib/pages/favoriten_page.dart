@@ -15,10 +15,10 @@ import '../utils/wish_grouping_helper.dart';
 import '../models/song_request.dart';
 import '../widgets/empty_list_message.dart';
 import '../widgets/sticky_pagination_layout.dart';
-import '../widgets/custom_page_header.dart';
 import '../widgets/no_active_party_display.dart';
 import '../widgets/wish_card.dart';
 import '../utils/debug_log.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 class FavoritenPage extends StatefulWidget {
   final List<SongRequest> requests;
@@ -116,9 +116,32 @@ class _FavoritenPageState extends State<FavoritenPage> {
     }
   }
 
+  Widget _buildFavoritesPageHeading(BuildContext context, AppLocalizations l) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 8, 16, 4),
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.arrow_back, color: Colors.white),
+            onPressed: () => Navigator.pop(context),
+            tooltip: l.back,
+          ),
+          Text(
+            l.favorites_page_title,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.9),
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildPaginationButtons(int currentPage, int totalPages, BuildContext context) {
     final l = AppLocalizations.of(context)!;
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
 
     if (totalPages <= 1) {
       return const SizedBox.shrink();
@@ -192,19 +215,11 @@ class _FavoritenPageState extends State<FavoritenPage> {
     final l = AppLocalizations.of(context)!;
 
     return Scaffold(
-      backgroundColor: Colors.transparent,
+      backgroundColor: Colors.black,
       body: SafeArea(
         child: Column(
           children: [
-            // Titelleiste mit CustomPageHeader
-            CustomPageHeader(
-              icon: Icons.favorite,
-              title: l.favorites_page_title,
-              trailing: IconButton(
-                icon: const Icon(Icons.arrow_back, color: Colors.white),
-                onPressed: () => Navigator.pop(context),
-              ),
-            ),
+            _buildFavoritesPageHeading(context, l),
             // Content-Bereich
             Expanded(
               child: StickyPaginationLayout(

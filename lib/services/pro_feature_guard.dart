@@ -40,6 +40,14 @@ class ProFeatureGuard {
     return canUseMusicRecognitionNow(user: user);
   }
 
+  /// Pro, Pro Life, Trial, DJ B2B und Admin — für KI-Songvorschläge und DJ-Setlisten.
+  static bool canUseProExclusiveNow({User? user}) {
+    final u = user ?? FirebaseAuth.instance.currentUser;
+    if (u == null) return false;
+    if (isAdmin(u)) return true;
+    return DjProSessionService.instance.isProActive;
+  }
+
   /// Kompatibilität: früher Firestore-Cache; Session wird live gelesen.
   static void invalidateCache() {}
 }

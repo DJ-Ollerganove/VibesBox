@@ -25,6 +25,7 @@ class LanguageMenuEntry {
 abstract final class LanguageMenuEntries {
   static const List<LanguageMenuEntry> sorted = [
     LanguageMenuEntry(code: 'sq', name: 'Albanian', flag: '🇦🇱'),
+    LanguageMenuEntry(code: 'ar', name: 'Arabic', flag: '🇸🇦'),
     LanguageMenuEntry(code: 'zh', name: 'Chinese', flag: '🇨🇳'),
     LanguageMenuEntry(code: 'cs', name: 'Czech', flag: '🇨🇿'),
     LanguageMenuEntry(code: 'nl', name: 'Dutch', flag: '🇳🇱'),
@@ -39,20 +40,44 @@ abstract final class LanguageMenuEntries {
     LanguageMenuEntry(code: 'pt', name: 'Portuguese', flag: '🇵🇹'),
     LanguageMenuEntry(code: 'ru', name: 'Russian', flag: '🇷🇺'),
     LanguageMenuEntry(code: 'es', name: 'Spanish', flag: '🇪🇸'),
+    LanguageMenuEntry(code: 'th', name: 'Thai', flag: '🇹🇭'),
     LanguageMenuEntry(code: 'tr', name: 'Turkish', flag: '🇹🇷'),
     LanguageMenuEntry(code: 'uk', name: 'Ukrainian', flag: '🇺🇦'),
     LanguageMenuEntry(code: 'vi', name: 'Vietnamese', flag: '🇻🇳'),
   ];
 
+  /// Nur App-Admin sichtbar (z. B. Arabisch zum Testen).
+  static const List<LanguageMenuEntry> adminOnlySorted = [
+  ];
+
   /// Sprachen pro Spalte (Menü: Spalte 1 Albanian…English, Spalte 2 French…).
   static const int rowsPerColumn = 5;
 
+  static List<LanguageMenuEntry> _mergeForMenu({
+    required bool includeAdminOnly,
+  }) {
+    if (!includeAdminOnly || adminOnlySorted.isEmpty) {
+      return List<LanguageMenuEntry>.from(sorted);
+    }
+    final merged = <LanguageMenuEntry>[...sorted, ...adminOnlySorted];
+    merged.sort(
+      (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+    );
+    return merged;
+  }
+
   /// Alphabetisch sortiert, in Spalten à [rowsPerColumn] (zeilenweise gefüllt).
-  static List<List<LanguageMenuEntry>> get columns {
+  static List<List<LanguageMenuEntry>> get columns =>
+      columnsFor(includeAdminOnly: false);
+
+  static List<List<LanguageMenuEntry>> columnsFor({
+    bool includeAdminOnly = false,
+  }) {
+    final entries = _mergeForMenu(includeAdminOnly: includeAdminOnly);
     final out = <List<LanguageMenuEntry>>[];
-    for (var i = 0; i < sorted.length; i += rowsPerColumn) {
+    for (var i = 0; i < entries.length; i += rowsPerColumn) {
       final end = i + rowsPerColumn;
-      out.add(sorted.sublist(i, end > sorted.length ? sorted.length : end));
+      out.add(entries.sublist(i, end > entries.length ? entries.length : end));
     }
     return out;
   }

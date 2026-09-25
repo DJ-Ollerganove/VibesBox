@@ -438,7 +438,8 @@ final class ShazamKitChannel: NSObject, SHSessionDelegate {
 
   private func sendRmsThrottled(_ value: Double) {
     let now = CFAbsoluteTimeGetCurrent()
-    if now - lastRmsSentAt < 0.05 { return }
+    // ~8 Updates/s (statt 20) — weniger UI-Last auf Flutter-Seite.
+    if now - lastRmsSentAt < 0.12 { return }
     lastRmsSentAt = now
     guard let sink = rmsEventSink else { return }
     DispatchQueue.main.async {

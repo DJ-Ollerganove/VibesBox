@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../config/apple_review_test_dj.dart';
 import '../models/user_model.dart';
 import '../utils/time_utils.dart';
 import '../utils/wish_paths.dart';
@@ -91,9 +92,10 @@ class LimitService {
     return (start: start, end: periodEnd);
   }
 
-  /// Dynamische Slot-Validierung (Downgrade-resistent): Pro Abrechnungszeitraum zählt nur die
-  /// zeitlich erste Party (nach start_date) als aktiv. Alle weiteren Partys im selben Zeitraum
-  /// gelten als isQuotaExceeded (Standby). Gilt nur für [user.isFree].
+  /// Dynamische Slot-Validierung (Downgrade-resistent): Pro Abrechnungszeitraum zählen die
+  /// zeitlich ersten N Partys (nach start_date) als aktiv. Alle weiteren im selben Zeitraum
+  /// gelten als isQuotaExceeded (Standby). Free: N=1; Apple-Review-Test-DJ: N=5.
+  /// Gilt nur für [user.isFree].
   /// [parties]: Liste der Party-Docs (z. B. nicht beendete Partys des DJs).
   /// Returns: Set von Party-IDs, die das Kontingent überschritten haben (Standby im Zeitraum).
   static Set<String> getQuotaExceededPartyIds(
@@ -102,6 +104,10 @@ class LimitService {
   ) {
     final result = <String>{};
     if (!user.isFree || parties.isEmpty) return result;
+
+    final activeSlots = AppleReviewTestDj.matchesUser(user)
+        ? AppleReviewTestDj.freePartiesPerPeriod
+        : 1;
 
     final anchorDay = getAnchorDay(user);
     final withStartDate = <String, DateTime>{};
@@ -124,7 +130,9 @@ class LimitService {
     }
     for (final partyIds in byPeriod.values) {
       partyIds.sort((a, b) => withStartDate[a]!.compareTo(withStartDate[b]!));
-      for (var i = 1; i < partyIds.length; i++) result.add(partyIds[i]);
+      for (var i = activeSlots; i < partyIds.length; i++) {
+        result.add(partyIds[i]);
+      }
     }
     return result;
   }
@@ -180,13 +188,17 @@ class LimitService {
   /// Prüft, ob der User im Abrechnungszeitraum für [plannedStartDate] noch eine Party anlegen darf.
   /// Ohne [plannedStartDate] wird der Zeitraum für heute berechnet.
   /// Es zählen: 1) Partys mit start_date im Zeitraum, 2) usedPartySlots (fälschungssicher).
-  /// Gilt nur für Free-DJs (planType == 'free').
+  /// Gilt nur für Free-DJs (planType == 'free'). Free: max. 1; Apple-Review-Test-DJ: max. 5.
   /// Returns: true = darf erstellen, false = Limit erreicht.
   static Future<bool> checkPartyCreationLimit(
     UserModel user, {
     DateTime? plannedStartDate,
   }) async {
     if (!user.isFree) return true;
+
+    final maxParties = AppleReviewTestDj.matchesUser(user)
+        ? AppleReviewTestDj.freePartiesPerPeriod
+        : 1;
 
     final anchorDay = getAnchorDay(user);
     final zielDatum = plannedStartDate ?? DateTime.now();
@@ -210,8 +222,12 @@ class LimitService {
         d = DateTime(d.year, d.month + 1, d.day);
       }
     }
-    if (usedSlots.contains(periodSlotKey) || usedSlots.any((m) => legacyMonthKeys.contains(m))) {
-      return false; // Limit erreicht durch usedPartySlots
+    // Normal-Free: ein used-Slot blockiert den ganzen Zeitraum.
+    // Review-Test-DJ: usedPartySlots ignorieren — Kontingent nur über Party-Anzahl.
+    final usedSlotConsumed = usedSlots.contains(periodSlotKey) ||
+        usedSlots.any((m) => legacyMonthKeys.contains(m));
+    if (usedSlotConsumed && maxParties <= 1) {
+      return false;
     }
 
     // Prüfung 2: Bestehende Partys im Zeitraum
@@ -227,13 +243,19 @@ class LimitService {
       final t = startDate.toDate();
       if (!t.isBefore(period.start) && !t.isAfter(period.end)) count++;
     }
-    return count < 1;
+    return count < maxParties;
   }
 
   /// Prüft, ob bei einem Free-DJ die erlaubte Partydauer (12h) abgelaufen ist.
   /// [partyStart]: Startzeit der Party (lokal oder UTC, konsistent mit Nutzung).
   /// [planType]: 'free' → 12h-Check; sonst → nicht abgelaufen (false).
-  static bool isPartyDurationExpired(DateTime partyStart, String planType) {
+  /// [createdBy]: Party-Owner-UID — Apple-Review-Test-DJ: kein 12h-Cutoff.
+  static bool isPartyDurationExpired(
+    DateTime partyStart,
+    String planType, {
+    String? createdBy,
+  }) {
+    if (AppleReviewTestDj.isUid(createdBy)) return false;
     if (planType != 'free') return false;
     final end = partyStart.add(const Duration(hours: freePartyMaxDurationHours));
     return DateTime.now().isAfter(end);
@@ -258,6 +280,8 @@ class LimitService {
       // Ohne `dj_plan_type`: Zusatz-Check entfällt (stündliches Limit über guest_limit_per_hour bleibt).
       if (djPlan == null || djPlan.isEmpty) return true;
       if (djPlan != 'free') return true;
+      // Apple-Review-Test-DJ: kein Free-Zusatzlimit von 1/Stunde
+      if (AppleReviewTestDj.matchesPartyData(partyData)) return true;
 
       final range = TimeUtils.getCurrentFullHourRange(DateTime.now());
       final snapshot = await WishPaths.partyWishes(partyId)

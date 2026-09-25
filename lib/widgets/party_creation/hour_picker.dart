@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../l10n/app_localizations.dart';
 import '../../utils/ui_constants.dart';
 
 /// Widget für die Auswahl von Stunden und Minuten mit Grid-Layout
@@ -237,9 +238,9 @@ class _HourPickerStatefulState extends State<_HourPickerStateful> {
                   padding: const EdgeInsets.all(16.0),
                   child: TextButton(
                     onPressed: widget.onCancel ?? () => Navigator.pop(context),
-                    child: const Text(
-                      'Abbrechen',
-                      style: TextStyle(color: UIConstants.appOrange),
+                    child: Text(
+                      AppLocalizations.of(context)!.cancel,
+                      style: const TextStyle(color: UIConstants.appOrange),
                     ),
                   ),
                 ),
@@ -345,9 +346,9 @@ class _HourPickerStatefulState extends State<_HourPickerStateful> {
                 padding: const EdgeInsets.all(16.0),
                 child: TextButton(
                   onPressed: widget.onCancel ?? () => Navigator.pop(context),
-                  child: const Text(
-                    'Abbrechen',
-                    style: TextStyle(color: UIConstants.appOrange),
+                  child: Text(
+                      AppLocalizations.of(context)!.cancel,
+                      style: const TextStyle(color: UIConstants.appOrange),
                   ),
                 ),
               ),

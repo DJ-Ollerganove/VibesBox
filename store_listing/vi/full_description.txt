@@ -1,0 +1,20 @@
+VibesBox – Quản lý yêu cầu bài hát chuyên nghiệp cho DJ và khách
+
+Quản lý yêu cầu nhạc số hóa, rõ ràng và chuyên nghiệp. Ứng dụng hiện hỗ trợ 20 ngôn ngữ – cho DJ và khách quốc tế. Hết giấy nháp và bị cắt ngang: bạn giữ toàn quyền kiểm soát set.
+
+Cho DJ:
+• Hub DJ trung tâm: mọi yêu cầu trong danh sách thời gian thực – tập trung vào mix.
+• Nhận dạng nhạc thông minh: tự động nhận bài đã phát và đánh dấu xong.
+• Bảo vệ set: chặn ngay người dùng không phù hợp hoặc spam – bạn là người quyết.
+• Không quảng cáo bên thứ ba: VibesBox không hiện quảng cáo ngoài; ở Pro, thương hiệu DJ của bạn hiện với khách.
+• Theo dõi trạng thái: biểu đồ yêu cầu đang mở và đã phát trong buổi tiệc.
+• Thống kê after-party: phân tích chi tiết sau sự kiện cho các gig sau.
+• Hiện diện & networking: link mạng xã hội trong app; khách có thể gửi liên hệ – lý tưởng cho booking tiếp.
+• Free hoặc Pro: bắt đầu miễn phí hoặc đủ tính năng với Pro.
+
+Cho khách:
+• Web qua QR: gửi yêu cầu trên trình duyệt và xem bài đã phát – không cần app hay đăng ký.
+• App khách (tuỳ chọn): trải nghiệm mượt hơn, truy cập trực tiếp không cần trình duyệt.
+• Khách đã đăng ký: xem và sửa yêu cầu của mình và lịch sử.
+
+Club, đám cưới hay sự kiện riêng: VibesBox chấm dứt hỗn loạn – bạn tập trung vào âm nhạc.

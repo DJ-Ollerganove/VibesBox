@@ -2,5 +2,5 @@
 #include "Generated.xcconfig"
 // iOS-App-Version bewusst getrennt von Android (pubspec.yaml = Play Store, z. B. 1.0.35+35).
 // Nicht entfernen — überschreibt FLUTTER_* aus Generated.xcconfig für dieses Target.
-FLUTTER_BUILD_NAME=1.0.15
-FLUTTER_BUILD_NUMBER=15
+FLUTTER_BUILD_NAME=1.1.40
+FLUTTER_BUILD_NUMBER=40

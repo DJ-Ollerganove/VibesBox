@@ -15,6 +15,12 @@ enum AppRoleKind { admin, dj, guest, location, unknown }
 class AppConfig {
   // PWA URL - Hauptdomain der Web-App
   static const String pwaUrl = 'https://vibesbox.app';
+
+  /// Eigene Datenschutzerklärung (Hosting / Store-Metadaten / Paywall).
+  static const String privacyPolicyUrl = '$pwaUrl/datenschutz.html';
+
+  /// Eigene Nutzungsbedingungen / EULA (Hosting / Store-Metadaten / Paywall).
+  static const String termsOfUseUrl = '$pwaUrl/agb.html';
   
   // Website URL - Hauptwebsite
   static const String websiteUrl = 'https://www.dj-ollerganove.de';
@@ -192,8 +198,7 @@ class AppConfig {
     debugLog('✅ AppConfig: adminDjId manuell gesetzt: $djId');
   }
   
-  // PWA URL Builder - QR & Links öffnen direkt die Wunschbox (/vb/)
-  // Format: https://vibesbox.app/vb/?code=PARTYCODE
+  // PWA URL Builder - QR & Links: https://vibesbox.app/vb/?code=PARTYCODE
   static String buildPwaUrlWithCode(String partyCode) {
     return '$pwaUrl/vb/?code=$partyCode';
   }

@@ -1,71 +1,105 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Persistiert die QR-Code-Dialog-Optionen (Ort, Telefon, E-Mail, Alt.-E-Mail) in SharedPreferences.
-/// Device-weit (ohne Login), klare Keys, Standard: alle true.
+/// Persistiert die QR-Code-Dialog-Optionen in SharedPreferences (geräte-weit).
 class QrDialogOptionsService {
-  static final QrDialogOptionsService _instance = QrDialogOptionsService._internal();
+  static final QrDialogOptionsService _instance =
+      QrDialogOptionsService._internal();
   factory QrDialogOptionsService() => _instance;
   QrDialogOptionsService._internal();
 
-  static const String _keyShowLocation = 'qr_show_location';
+  static const String _keyShowLocationName = 'qr_show_location_name';
+  static const String _keyShowLocationAddress = 'qr_show_location_address';
+  static const String _legacyKeyShowLocation = 'qr_show_location';
   static const String _keyShowPhone = 'qr_show_phone';
   static const String _keyShowEmail = 'qr_show_email';
   static const String _keyShowAlternativeEmail = 'qr_show_alternative_email';
+  static const String _keyShowStartDate = 'qr_show_start_date';
+  static const String _keyShowStartTime = 'qr_show_start_time';
 
-  /// Standardwerte: alle true (sinnvolle Defaults für erstes Öffnen)
-  static const bool _defaultShowLocation = true;
+  static const bool _defaultShowLocationName = true;
+  static const bool _defaultShowLocationAddress = true;
   static const bool _defaultShowPhone = true;
   static const bool _defaultShowEmail = true;
   static const bool _defaultShowAlternativeEmail = true;
+  /// Nie gespeichert → an (bestehende DJs behalten Datum/Uhrzeit sichtbar).
+  static const bool _defaultShowStartDate = true;
+  static const bool _defaultShowStartTime = true;
 
-  /// Lädt die gespeicherten Optionen. Fehlt ein Wert, wird der Standard verwendet.
   Future<QrDialogOptions> load() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      final legacyLocation = prefs.getBool(_legacyKeyShowLocation);
+      final hasNewKeys = prefs.containsKey(_keyShowLocationName) ||
+          prefs.containsKey(_keyShowLocationAddress);
+      final migratedDefault = legacyLocation ?? true;
       return QrDialogOptions(
-        showLocation: prefs.getBool(_keyShowLocation) ?? _defaultShowLocation,
+        showLocationName: prefs.getBool(_keyShowLocationName) ??
+            (hasNewKeys ? _defaultShowLocationName : migratedDefault),
+        showLocationAddress: prefs.getBool(_keyShowLocationAddress) ??
+            (hasNewKeys ? _defaultShowLocationAddress : migratedDefault),
         showPhone: prefs.getBool(_keyShowPhone) ?? _defaultShowPhone,
         showEmail: prefs.getBool(_keyShowEmail) ?? _defaultShowEmail,
-        showAlternativeEmail: prefs.getBool(_keyShowAlternativeEmail) ?? _defaultShowAlternativeEmail,
+        showAlternativeEmail:
+            prefs.getBool(_keyShowAlternativeEmail) ??
+            _defaultShowAlternativeEmail,
+        showStartDate:
+            prefs.getBool(_keyShowStartDate) ?? _defaultShowStartDate,
+        showStartTime:
+            prefs.getBool(_keyShowStartTime) ?? _defaultShowStartTime,
       );
     } catch (_) {
-      return const QrDialogOptions(
-        showLocation: _defaultShowLocation,
-        showPhone: _defaultShowPhone,
-        showEmail: _defaultShowEmail,
-        showAlternativeEmail: _defaultShowAlternativeEmail,
-      );
+      return const QrDialogOptions();
     }
   }
 
-  /// Speichert eine Option sofort in SharedPreferences.
   Future<void> save({
-    bool? showLocation,
+    bool? showLocationName,
+    bool? showLocationAddress,
     bool? showPhone,
     bool? showEmail,
     bool? showAlternativeEmail,
+    bool? showStartDate,
+    bool? showStartTime,
   }) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      if (showLocation != null) await prefs.setBool(_keyShowLocation, showLocation);
+      if (showLocationName != null) {
+        await prefs.setBool(_keyShowLocationName, showLocationName);
+      }
+      if (showLocationAddress != null) {
+        await prefs.setBool(_keyShowLocationAddress, showLocationAddress);
+      }
       if (showPhone != null) await prefs.setBool(_keyShowPhone, showPhone);
       if (showEmail != null) await prefs.setBool(_keyShowEmail, showEmail);
-      if (showAlternativeEmail != null) await prefs.setBool(_keyShowAlternativeEmail, showAlternativeEmail);
+      if (showAlternativeEmail != null) {
+        await prefs.setBool(_keyShowAlternativeEmail, showAlternativeEmail);
+      }
+      if (showStartDate != null) {
+        await prefs.setBool(_keyShowStartDate, showStartDate);
+      }
+      if (showStartTime != null) {
+        await prefs.setBool(_keyShowStartTime, showStartTime);
+      }
     } catch (_) {}
   }
 }
 
-/// Unveränderliches Objekt mit den vier QR-Dialog-Anzeige-Optionen.
 class QrDialogOptions {
-  final bool showLocation;
+  final bool showLocationName;
+  final bool showLocationAddress;
   final bool showPhone;
   final bool showEmail;
   final bool showAlternativeEmail;
+  final bool showStartDate;
+  final bool showStartTime;
 
   const QrDialogOptions({
-    this.showLocation = true,
+    this.showLocationName = true,
+    this.showLocationAddress = true,
     this.showPhone = true,
     this.showEmail = true,
     this.showAlternativeEmail = true,
+    this.showStartDate = true,
+    this.showStartTime = true,
   });
 }

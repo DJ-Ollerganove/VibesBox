@@ -19,6 +19,13 @@ class UIConstants {
   static const Color colorRed = Colors.red;
   static const Color colorGrey = Color(0xFF9E9E9E);
   static const Color colorYellow = Colors.yellow;
+  /// DJ-Setliste (Reiter, Badge, Generator) – zentral änderbar.
+  static const Color colorDjSetlist = Color(0xFFFFEB3B);
+  /// Song-Blacklist (Navi, Banner, Icons) – helles Stahlgrau für Icons.
+  static const Color colorSongBlacklist = Color(0xFFCFD8DC);
+  /// Badge/Banner-Hintergrund – klar lesbar auf dunklen Wunschkarten.
+  static const Color colorSongBlacklistChip = Color(0xFF546E7A);
+  static const Color colorSongBlacklistOnChip = Color(0xFFFFFFFF);
   /// Vorab-Wünsche (Rahmen, Badges, Icons, Banner) – zentral änderbar.
   /// PWA: `--pre-wish-primary` in `public/vb/styles/main.css`, `window.VB_PRE_WISH` in `party_shared.js`.
   static const Color colorPreWish = Color(0xFF7986CB);
@@ -52,6 +59,7 @@ class UIConstants {
   static const Color tabGespieltColor = frameGespielt;
   static const Color tabAbgelehntColor = frameAbgelehnt;
   static const Color tabVorabColor = colorPreWish;
+  static const Color tabDjSetlistColor = colorDjSetlist;
 
   // ─── Wunsch-Karte (Listen-Widget) ─────────────────────────────────────────
   /// Datum/Uhrzeit in der oberen Statuszeile.
@@ -60,6 +68,57 @@ class UIConstants {
   static const Color wishCardLabelColor = colorWhite;
   /// Übersetzter Gruß (dezent, sekundär).
   static const Color wishCardTranslationColor = Color(0xFFB0B0B0);
+
+  /// Aktions-Icons (Gespielt/Ablehnen/Löschen/…): Handy kompakter, Tablet/iPad größer.
+  static double wishActionIconSize(BuildContext context) {
+    final shortest = MediaQuery.sizeOf(context).shortestSide;
+    if (shortest < 400) return 20;
+    if (shortest < 600) return 22;
+    return 24;
+  }
+
+  static double wishActionIconGap(BuildContext context) {
+    final shortest = MediaQuery.sizeOf(context).shortestSide;
+    if (shortest < 400) return 4;
+    if (shortest < 600) return 6;
+    return 8;
+  }
+
+  static BoxConstraints wishActionIconButtonConstraints(BuildContext context) {
+    final shortest = MediaQuery.sizeOf(context).shortestSide;
+    final touch = shortest < 400 ? 30.0 : (shortest < 600 ? 34.0 : 40.0);
+    return BoxConstraints(minWidth: touch, minHeight: touch);
+  }
+
+  /// Gruß-/Favoriten-Icons in der Statuszeile der Karte.
+  static double wishCardMetaIconSize(BuildContext context) {
+    final shortest = MediaQuery.sizeOf(context).shortestSide;
+    if (shortest < 400) return 15;
+    if (shortest < 600) return 17;
+    return 18;
+  }
+
+  static double wishCardFavoriteIconSize(BuildContext context) {
+    final shortest = MediaQuery.sizeOf(context).shortestSide;
+    if (shortest < 400) return 17;
+    if (shortest < 600) return 19;
+    return 20;
+  }
+
+  static double wishCardFavoriteTapSize(BuildContext context) {
+    final shortest = MediaQuery.sizeOf(context).shortestSide;
+    if (shortest < 400) return 28;
+    if (shortest < 600) return 32;
+    return 34;
+  }
+
+  /// Kleine Marker (Vorab, DJ, Auto-Erkennung) neben Titel/Interpret.
+  static double wishCardInlineMarkerIconSize(BuildContext context) {
+    final shortest = MediaQuery.sizeOf(context).shortestSide;
+    if (shortest < 400) return 12;
+    if (shortest < 600) return 13;
+    return 14;
+  }
 
   /// Seiten-Akzent für Wunsch-Karten-Inhalt.
   static Color wishCardAccentFor(WishCardListKind kind) {
@@ -124,6 +183,13 @@ class UIConstants {
   static BoxDecoration get djHomeEditSheetDecoration => BoxDecoration(
         gradient: colorGreyGradient,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+        border: Border.all(color: colorWhite, width: 2),
+      );
+
+  /// DJ-Browser-Code-Dialog: Grau-Verlauf, weißer Rahmen.
+  static BoxDecoration get djBrowserCodeDialogDecoration => BoxDecoration(
+        gradient: colorGreyGradient,
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: colorWhite, width: 2),
       );
 
@@ -322,6 +388,9 @@ class UIConstants {
   /// sonst doppelte Schicht (dunkler als z. B. [OffenPage]).
   /// Alpha ~0xAA ≈ 67 % Deckkraft — Hintergrundbild stärker sichtbar als früher (0xDD / black87).
   static const Color djShellPageBackground = Color(0xAA000000);
+
+  /// Vollbild-Overlay VibesBox: etwas dunkler als [djShellPageBackground], Hintergrund (Nav, Shazam) bleibt sichtbar.
+  static const Color vibesboxFullscreenOverlay = Color(0xB8000000);
 
   /// Panel/Hüllen im DJ-Bereich: halbtransparentes Schwarz + oranger Rahmen (Referenz: Party-Verwaltung).
   static BoxDecoration get djChromePanelDecoration => BoxDecoration(

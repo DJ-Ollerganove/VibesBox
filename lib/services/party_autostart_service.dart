@@ -100,6 +100,7 @@ class PartyAutostartService {
 
     await reconcileAfterResume();
     _scheduleDelayedAutostartCatchUp();
+    unawaited(_releaseStaleRecognitionLockIfIdle());
   }
 
   /// Nach App-Resume: Session + Autostart aus Cache prüfen (ohne Cold-Start-Sperre).
@@ -128,6 +129,7 @@ class PartyAutostartService {
       // Bei Resume nie die letzte manuelle Session-Entscheidung überschreiben.
       await _startRecognitionIfAllowed();
     }
+    unawaited(_releaseStaleRecognitionLockIfIdle());
   }
 
   void _attachUserCacheListener() {
@@ -222,6 +224,9 @@ class PartyAutostartService {
     if (user == null || !_isLocalSelfContext(user)) {
       return RecognitionStartOutcome.denied;
     }
+    if (_shazamService.isExternalRecognitionSourceActive) {
+      return RecognitionStartOutcome.denied;
+    }
     if (_shazamService.isEnabled) {
       return RecognitionStartOutcome.alreadyRunning;
     }
@@ -285,13 +290,24 @@ class PartyAutostartService {
     }
   }
 
-  Future<void> _stopRecognition() async {
-    if (!_shazamService.isEnabled) {
-      return;
-    }
-
+  Future<void> _releaseStaleRecognitionLockIfIdle() async {
+    if (_shazamService.isEnabled) return;
     try {
-      await _shazamService.stopAutoScanning();
+      await _shazamService.releaseRecognitionDeviceLockIfHeld();
+    } catch (e) {
+      debugLog(
+        'PartyAutostartService: Zombie-Recognition-Lock konnte nicht freigegeben werden: $e',
+      );
+    }
+  }
+
+  Future<void> _stopRecognition() async {
+    try {
+      if (_shazamService.isEnabled) {
+        await _shazamService.stopAutoScanning();
+      } else {
+        await _shazamService.releaseRecognitionDeviceLockIfHeld();
+      }
     } catch (e) {
       debugLog(
         '❌ PartyAutostartService: Fehler beim Stoppen der Musikerkennung: $e',

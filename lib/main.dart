@@ -16,6 +16,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter_localizations/flutter_localizations.dart';
 
+import 'package:intl/date_symbol_data_local.dart';
 import 'package:intl/intl.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
@@ -29,6 +30,9 @@ import 'services/app_local_notifications.dart';
 import 'services/dj_wish_fcm_service.dart';
 import 'services/dj_wish_notification_service.dart';
 import 'services/floor_swap_incoming_listener.dart';
+import 'services/dj_song_blacklist_guard.dart';
+import 'services/dj_song_blacklist_service.dart';
+import 'models/dj_song_blacklist_prefs.dart';
 
 import 'dart:async';
 
@@ -64,6 +68,7 @@ import 'pages/social_media_page.dart';
 
 import 'pages/about_page.dart';
 import 'pages/dj/quickstart_page.dart';
+import 'pages/dj_b2b_page.dart';
 
 import 'pages/contact_page.dart';
 
@@ -80,8 +85,13 @@ import 'offen_page.dart';
 import 'dj_vibesbox_page.dart';
 
 import 'pages/gesperrt_page.dart';
+import 'pages/saved_tracks_page.dart';
+import 'pages/dj_setlists_library_page.dart';
+import 'pages/dj_song_blacklist_page.dart';
+import 'services/saved_tracks_service.dart';
 
 import 'pages/todo_page.dart';
+import 'pages/admin_tool_page.dart';
 
 import 'pages/history/history_page.dart';
 
@@ -110,21 +120,29 @@ import 'utils/network_image_url.dart';
 import 'utils/role_helper.dart';
 
 import 'services/party_autostart_service.dart';
+import 'services/vibesbox_sync_service.dart';
 import 'services/history_provider.dart';
 import 'services/active_party_service.dart';
+import 'services/open_wishes_visibility_service.dart';
 import 'services/party_session_service.dart';
+import 'widgets/party_check_in_feedback_widget.dart';
 import 'services/remote_config_service.dart';
 import 'services/app_check_service.dart';
 import 'services/email_verification_gate_sync.dart';
 import 'services/party_cleanup_service.dart';
 import 'services/app_update_service.dart';
 import 'services/global_announcement_popup_service.dart';
+import 'services/admin_new_user_popup_service.dart';
+import 'services/internet_connectivity_guard_service.dart';
 import 'services/subscription_sync_service.dart';
 import 'services/admin_service.dart';
+import 'services/vibesbox_fullscreen_service.dart';
 import 'services/user_service.dart';
 import 'services/registration_flow_guard.dart';
 import 'services/auth_service.dart';
 import 'services/app_links_service.dart';
+import 'services/pending_referral_service.dart';
+import 'services/dj_b2b_service.dart';
 import 'services/navigation_service.dart';
 import 'services/shazam_service.dart';
 import 'services/countries_service.dart';
@@ -253,7 +271,7 @@ Widget buildFirebaseErrorWidget(Object error) {
                   onPressed: () async {
                     await Clipboard.setData(ClipboardData(text: cleanUrl));
                     if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
+                      showVibesSnackBar(context, 
                         SnackBar(
                           content: Text(l.url_copied_to_clipboard_snackbar),
                           backgroundColor: Colors.green,
@@ -283,7 +301,7 @@ Widget buildFirebaseErrorWidget(Object error) {
                         mode: LaunchMode.externalApplication,
                       );
                       if (!launched && context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
+                        showVibesSnackBar(context, 
                           SnackBar(
                             content: Text(l.url_launch_failed_snackbar),
                             duration: const Duration(seconds: 5),
@@ -292,7 +310,7 @@ Widget buildFirebaseErrorWidget(Object error) {
                       }
                     } catch (e) {
                       if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
+                        showVibesSnackBar(context, 
                           SnackBar(
                             content: Text(
                               l.url_open_error_with_detail_snackbar('$e'),
@@ -496,6 +514,16 @@ Future<void> _runSilentEmailVerificationMigration() async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Begrenzt Decoded-Image-RAM (Cover/Listen können sonst stark anwachsen).
+  if (!kIsWeb) {
+    PaintingBinding.instance.imageCache.maximumSize = 80;
+    PaintingBinding.instance.imageCache.maximumSizeBytes = 48 << 20; // 48 MB
+  }
+  try {
+    await initializeDateFormatting();
+  } catch (e) {
+    debugLog('⚠️ Date formatting init: $e');
+  }
 
   // Tab-Index + Admin-Ansicht vor dem ersten Frame aus Prefs – verhindert Race mit MainPage.initState.
   await NavigationService().hydrateNavigationFromPrefs();
@@ -568,6 +596,16 @@ Future<void> main() async {
   // ✅ Lade PartySessionService + Hydrierung (shortCode ohne djId/djPlan → validateAndJoin)
   await PartySessionService.instance.loadFromPrefs();
   await PartySessionService.instance.hydrateIfNeeded();
+  // DJ B2B: nach Store-Install Code aus Play Referrer / Zwischenablage übernehmen (einmalig).
+  unawaited(() async {
+    await PendingReferralService.instance.captureDeferredAttribution();
+    if (FirebaseAuth.instance.currentUser != null) {
+      await DjB2bService.instance.tryRedeemPendingReferral(source: 'deferred_attr');
+    }
+  }());
+  if (FirebaseAuth.instance.currentUser == null) {
+    await ActivePartyService.clearLocalSession();
+  }
 
   // RevenueCat (nur Mobile): kurz verzögert starten — entlastet den Main-Thread vor runApp
   if (!kIsWeb) {
@@ -625,6 +663,11 @@ Future<void> main() async {
   // Plugin muss fertig initialisiert sein, bevor Firestore [show] auslösen kann (Race vermeiden).
   if (!kIsWeb) {
     await initializeAppLocalNotifications();
+    extraNotificationPayloadHandler = (payload) {
+      if (payload == 'shazam_history') {
+        ShazamService().navigateToHistoryFromNotificationTap();
+      }
+    };
   }
   DjWishNotificationService.instance.registerPushSubsystemSync(
     DjWishFcmService.instance.syncTokenForCurrentUserIfEligible,

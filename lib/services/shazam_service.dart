@@ -15,11 +15,17 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:string_similarity/string_similarity.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'active_party_service.dart';
+import 'app_local_notifications.dart';
+import 'open_wishes_visibility_service.dart';
+import 'party_secure_service.dart';
 import 'duplicate_check_service.dart';
+import 'dj_setlist_track_actions_service.dart';
+import 'history_provider.dart';
 import 'pro_feature_guard.dart';
 import '../utils/text_utils.dart';
 import '../utils/debug_log.dart';
 import 'app_diagnostic_log_service.dart';
+import 'user_self_settings_service.dart';
 import '../utils/pre_wish_helper.dart';
 import '../utils/wish_paths.dart';
 import '../utils/notification_display_text.dart';
@@ -154,7 +160,7 @@ class ShazamService {
   /// Muss **länger** sein als der maximale Abstand zwischen zwei Lease-Pings eines
   /// laufenden Dienstes (Scan-Ende pingt; Free bis 3 Min, Intervall bis 5 Min),
   /// sonst riskiert man Fremdübernahme bei Netz-Aussetzern.
-  static const Duration _recognitionLeaseStaleAfter = Duration(minutes: 6);
+  static const int _recognitionDeviceIdMaxLen = 128;
 
   // Kurzlebiger Apple-JWT nur über Callable getAppleMusicToken (~30 Min); Cache 25 Min / expiresAt.
   // Cache: bevorzugt Ablaufzeit [expiresAt] vom Server; sonst Fallback 25 Min ab Fetch.
@@ -184,10 +190,51 @@ class ShazamService {
   /// Nächster erlaubter Scan (interne Sperre, kein Footer-Countdown).
   DateTime? _nextScanAllowedAt;
 
+  /// VibesBox Sync: Mikrofon-Erkennung bleibt aus, Ergebnisse kommen vom Tool.
+  bool _externalRecognitionSourceActive = false;
+  String? _lastHistoryPersistedKey;
+
   // Getter
   ShazamScanStatus get status => _status;
   Map<String, dynamic>? get lastResult => _lastResult;
   bool get isEnabled => _isEnabled;
+  bool get isExternalRecognitionSourceActive =>
+      _externalRecognitionSourceActive;
+
+  void setExternalRecognitionSourceActive(bool active) {
+    unawaited(setExternalRecognitionSourceActiveAsync(active));
+  }
+
+  /// Hält den Android-Foreground-Service, damit History-Writes auch im
+  /// Hintergrund durchgehen (wie bei aktiver Mikrofon-Erkennung).
+  Future<void> setExternalRecognitionSourceActiveAsync(bool active) async {
+    final wasActive = _externalRecognitionSourceActive;
+    _externalRecognitionSourceActive = active;
+    if (active) {
+      await _setNativeSyncKeepalivePref(true);
+      await _ensureExternalRecognitionKeepalive();
+      return;
+    }
+    await _setNativeSyncKeepalivePref(false);
+    if (wasActive && !_isEnabled) {
+      await _updateNotificationVisibility(
+        false,
+        contentText: _getNotificationRunning(),
+      );
+      await _stopForegroundServiceIfRunning();
+    }
+  }
+
+  /// Native onResume darf den Sync-FGS nicht stoppen, nur weil die Mic-Leiste aus ist.
+  Future<void> _setNativeSyncKeepalivePref(bool active) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('vb_sync_keepalive', active);
+    } catch (e) {
+      debugLog('⚠️ vb_sync_keepalive Pref: $e');
+    }
+  }
+
   int get scanIntervalSeconds => _scanIntervalSeconds;
   String? get activeRecognitionDeviceOwnerId => _activeRecognitionDeviceOwnerId;
 
@@ -277,13 +324,15 @@ class ShazamService {
   }
 
   String getLocalizedCurrentStatus() {
-    if (_status == ShazamScanStatus.scanning) {
+    if (_isEnabled && _status == ShazamScanStatus.scanning) {
       return _getNotificationRunning();
     }
     final songLabel = _currentRecognizedSongLabel();
     if (songLabel != null) {
       return _getNotificationSuccessFormat().replaceFirst('%s', songLabel);
     }
+    // Sync ersetzt das Mikrofon: keine „Höre gerade zu“-Meldung ohne Song.
+    if (_externalRecognitionSourceActive && !_isEnabled) return '';
     return _lastNotificationText ?? _getNotificationRunning();
   }
 
@@ -291,9 +340,26 @@ class ShazamService {
     String contentText, {
     String? navigationTarget,
   }) async {
-    if (!_showStatusNotification) return;
+    if (!_showStatusNotification && !_externalRecognitionSourceActive) return;
     final displayText = decodeNotificationDisplayText(contentText);
+    if (displayText.isEmpty && _externalRecognitionSourceActive && !_isEnabled) {
+      _lastNotificationText = '';
+      if (Platform.isIOS) {
+        await cancelShazamStatusNotification();
+        return;
+      }
+    }
     _lastNotificationText = displayText;
+    if (Platform.isIOS) {
+      await showOrUpdateShazamStatusNotification(
+        title: _getNotificationTitle(),
+        body: displayText,
+        payload: navigationTarget == _navigationTargetHistory
+            ? 'shazam_history'
+            : null,
+      );
+      return;
+    }
     try {
       await _channel.invokeMethod<void>(_methodUpdateRecognitionNotification, {
         'notificationTitle': _getNotificationTitle(),
@@ -312,6 +378,13 @@ class ShazamService {
       getLocalizedCurrentStatus(),
     );
     _lastNotificationText = contentText;
+    if (Platform.isIOS) {
+      await showOrUpdateShazamStatusNotification(
+        title: _getNotificationTitle(),
+        body: contentText,
+      );
+      return;
+    }
     try {
       await _channel.invokeMethod<void>(_methodUpdateNotificationContent, {
         'notificationTitle': _getNotificationTitle(),
@@ -327,6 +400,11 @@ class ShazamService {
         !_notificationNavigationController.isClosed) {
       _notificationNavigationController.add(target!);
     }
+  }
+
+  /// Tap auf iOS-Shazam-Status-Notification → History-Tab.
+  void navigateToHistoryFromNotificationTap() {
+    _emitNotificationNavigationTarget(_navigationTargetHistory);
   }
 
   Future<String?> consumePendingNavigationTarget() async {
@@ -567,7 +645,11 @@ class ShazamService {
     _showStatusNotification = enabled;
     if (!applyRuntime) return;
 
-    if (_isEnabled) {
+    if (Platform.isIOS && enabled) {
+      await ensureIosNotificationPermission();
+    }
+
+    if (_isEnabled || _externalRecognitionSourceActive) {
       // Sofortige Live-Reaktion an Android (ohne Scan-Neustart).
       await _updateNotificationVisibility(enabled);
       if (enabled) {
@@ -600,9 +682,15 @@ class ShazamService {
     }
     try {
       final started = await _channel.invokeMethod<bool>(_methodStartScanning, {
-        'showStatusNotification': _showStatusNotification,
+        'showStatusNotification': _isEnabled
+            ? _showStatusNotification
+            : _externalRecognitionSourceActive &&
+                getLocalizedCurrentStatus().isNotEmpty,
+        'useMicrophone': _isEnabled,
         'notificationTitle': _getNotificationTitle(),
-        'notificationListening': _getNotificationRunning(),
+        'notificationListening': _isEnabled
+            ? _getNotificationRunning()
+            : getLocalizedCurrentStatus(),
       });
       if (started == true) {
         _foregroundServiceRunning = true;
@@ -645,6 +733,17 @@ class ShazamService {
     final effectiveText = decodeNotificationDisplayText(
       contentText ?? getLocalizedCurrentStatus(),
     );
+    if (Platform.isIOS) {
+      if (!_showStatusNotification || !visible) {
+        await cancelShazamStatusNotification();
+        return;
+      }
+      await showOrUpdateShazamStatusNotification(
+        title: _getNotificationTitle(),
+        body: effectiveText,
+      );
+      return;
+    }
     await _invokeMethodWithTimeoutRetry<void>(
       _methodUpdateNotificationVisibility,
       arguments: {
@@ -689,16 +788,45 @@ class ShazamService {
 
   /// Nach [AppLifecycleState.resumed]: FGS nachziehen, wenn Erkennung aktiv war, Start im Hintergrund aber ausgelassen wurde.
   Future<void> syncForegroundAfterAppResumed() async {
-    if (!_isEnabled) return;
-    if (!_showStatusNotification) return;
+    if (!_isEnabled && !_externalRecognitionSourceActive) return;
+    if (!_showStatusNotification && !_externalRecognitionSourceActive) return;
     if (!_lifecycleAllowsMicrophoneWork()) return;
     try {
-      await _startForegroundServiceIfNeeded();
-      if (_showStatusNotification) {
-        await _updateNotificationContent(getLocalizedCurrentStatus());
+      if (_externalRecognitionSourceActive && !_isEnabled) {
+        await _ensureExternalRecognitionKeepalive();
+      } else {
+        await _startForegroundServiceIfNeeded();
+        if (_showStatusNotification) {
+          await _updateNotificationContent(getLocalizedCurrentStatus());
+        }
       }
     } catch (e) {
       debugLog('⚠️ syncForegroundAfterAppResumed: $e');
+    }
+  }
+
+  /// Sync ohne Mikrofon: die Leiste gibt es nur, solange ein Song da ist.
+  Future<void> _ensureExternalRecognitionKeepalive() async {
+    if (!_externalRecognitionSourceActive || _isEnabled) return;
+    final text = getLocalizedCurrentStatus();
+    if (text.isEmpty) {
+      try {
+        await _updateNotificationVisibility(false);
+        await _stopForegroundServiceIfRunning();
+      } catch (e) {
+        debugLog('⚠️ VibesBox Sync Leiste aus: $e');
+      }
+      return;
+    }
+    if (Platform.isIOS) {
+      await ensureIosNotificationPermission();
+    }
+    try {
+      await _startForegroundServiceIfNeeded();
+      await _updateNotificationVisibility(true, contentText: text);
+      await _updateNotificationContent(text);
+    } catch (e) {
+      debugLog('⚠️ VibesBox Sync Keepalive: $e');
     }
   }
 
@@ -709,9 +837,9 @@ class ShazamService {
 
     try {
       _scanIntervalSeconds = seconds;
-      await FirebaseFirestore.instance.collection('users').doc(user.uid).update(
-        {'shazam_scan_interval_seconds': seconds},
-      );
+      await UserSelfSettingsService.instance.write({
+        'shazam_scan_interval_seconds': seconds,
+      });
     } catch (e) {
       debugLog('Fehler beim Speichern des Scan-Intervalls: $e');
       rethrow;
@@ -777,13 +905,10 @@ class ShazamService {
     _micSensitivity = sensitivity;
 
     // Speichere in Firestore (async, blockiert nicht)
-    FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .update({'mic_sensitivity': sensitivity})
+    UserSelfSettingsService.instance
+        .write({'mic_sensitivity': sensitivity})
         .catchError((e) {
           debugLog('⚠️ Fehler beim Speichern der Sensitivity in Firestore: $e');
-          // Weiter machen, auch wenn Firestore-Speicherung fehlschlägt
         });
 
     // Sende SOFORT an MainActivity (ohne Stream-Unterbrechung)
@@ -979,9 +1104,9 @@ class ShazamService {
     // Speichere neuen Wert
     try {
       _micSensitivity = sensitivity;
-      await FirebaseFirestore.instance.collection('users').doc(user.uid).update(
-        {'mic_sensitivity': sensitivity},
-      );
+      await UserSelfSettingsService.instance.write({
+        'mic_sensitivity': sensitivity,
+      });
 
       // Sende sofort an MainActivity
       await _channel.invokeMethod<void>('setMicSensitivity', {
@@ -1021,6 +1146,12 @@ class ShazamService {
   /// Startet das automatische Scanning mit dem konfigurierten Intervall.
   /// Vor Start wird pro Party ein exklusiver Geräte-Lock geprüft.
   Future<RecognitionStartOutcome> startAutoScanning() async {
+    if (_externalRecognitionSourceActive) {
+      debugLog(
+        'VibesBox Sync aktiv — Mikrofon-Erkennung wird nicht gestartet.',
+      );
+      return RecognitionStartOutcome.denied;
+    }
     if (_isEnabled) {
       debugLog('⚠️ startAutoScanning: Service ist bereits aktiv');
       return RecognitionStartOutcome.alreadyRunning;
@@ -1091,6 +1222,11 @@ class ShazamService {
       return RecognitionStartOutcome.lockAcquireFailed;
     }
 
+    final historyPartyId = _resolveRecognitionLockPartyId();
+    if (historyPartyId != null && historyPartyId.isNotEmpty) {
+      unawaited(HistoryProvider().ensureSessionForParty(historyPartyId));
+    }
+
     // WICHTIG: Initialisiere autoAdjustStream FRÜH, damit die Verbindung steht bevor Android sendet
     _initAutoAdjustStream();
 
@@ -1101,14 +1237,8 @@ class ShazamService {
     _isEnabled = true;
     recognitionActiveNotifier.value = true;
 
-    // Aktiviere Wakelock (verhindert, dass Bildschirm ausgeht und App schläft)
-    try {
-      await WakelockPlus.enable();
-      debugLog('🔋 Wakelock aktiviert - App bleibt aktiv');
-    } catch (e) {
-      debugLog('⚠️ Fehler beim Aktivieren des Wakelocks: $e');
-    }
-
+    // Wakelock nur während des eigentlichen Scans (~8s), nicht die ganze Session.
+    // Foreground Service hält den Prozess zwischen den Intervallen am Leben.
     if (_showStatusNotification) {
       await _updateNotificationContent(getLocalizedCurrentStatus());
     }
@@ -1202,14 +1332,17 @@ class ShazamService {
     _scanTimer = null;
     debugLog('⏹️ Timer gestoppt');
 
-    // Harte Stop-Sequenz: erst Notification sicher ausblenden (mit Retry), dann Service stoppen.
-    await _updateNotificationVisibility(
-      false,
-      contentText: _getNotificationRunning(),
-    );
-
-    // Stoppe Android Foreground Service
-    await _stopForegroundServiceIfRunning();
+    // VibesBox Sync braucht denselben Android-FGS weiter, sonst blockiert
+    // das OS History-Writes sobald die App im Hintergrund ist.
+    if (_externalRecognitionSourceActive) {
+      await _ensureExternalRecognitionKeepalive();
+    } else {
+      await _updateNotificationVisibility(
+        false,
+        contentText: _getNotificationRunning(),
+      );
+      await _stopForegroundServiceIfRunning();
+    }
 
     if (_status != ShazamScanStatus.idle) {
       _status = ShazamScanStatus.idle;
@@ -1240,33 +1373,20 @@ class ShazamService {
   Future<void> _pingRecognitionLeaseFromPartyHeartbeatAsync() async {
     if (!_isEnabled || !_ownsRecognitionLock) return;
     final partyId =
-        _lockedRecognitionPartyId ?? ActivePartyService.currentPartyId;
+        _lockedRecognitionPartyId ?? _resolveRecognitionLockPartyId();
     if (partyId == null || partyId.isEmpty || partyId == 'manual') return;
-    try {
-      final deviceId = await _getRecognitionDeviceId();
-      final partyRef = FirebaseFirestore.instance.collection('parties').doc(partyId);
-      await FirebaseFirestore.instance.runTransaction<void>((tx) async {
-        final snap = await tx.get(partyRef);
-        if (!snap.exists) return;
-        final activeRaw =
-            (snap.data()?['active_recognition_device'] ?? '').toString().trim();
-        if (activeRaw != deviceId) return;
-        tx.update(partyRef, {
-          'active_recognition_last_seen': FieldValue.serverTimestamp(),
-        });
-      });
-    } catch (e) {
-      debugLog('⚠️ Recognition-Lease-Ping fehlgeschlagen: $e');
-    }
+    final deviceId = await _getRecognitionDeviceId();
+    await PartySecureService.instance.pingRecognitionLock(
+      partyId: partyId,
+      deviceId: deviceId,
+    );
   }
 
-  static bool _isRecognitionLeaseStale(Timestamp? lastSeen) {
-    // Kein last_seen: Legacy/Zombie-Eintrag oder alter Stand — darf übernommen
-    // werden, sonst blockiert ein totes Gerät ewig (Gerät 2 kann nicht starten).
-    // Ein **aktiver** Dienst setzt beim Start immer serverTimestamp + pingt nach jedem Scan.
-    if (lastSeen == null) return true;
-    return DateTime.now().difference(lastSeen.toDate()) >
-        _recognitionLeaseStaleAfter;
+  static String _normalizeRecognitionDeviceId(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return 'device_unknown';
+    if (trimmed.length <= _recognitionDeviceIdMaxLen) return trimmed;
+    return trimmed.substring(0, _recognitionDeviceIdMaxLen);
   }
 
   Future<String> _getRecognitionDeviceId() async {
@@ -1278,8 +1398,12 @@ class ShazamService {
       final prefs = await SharedPreferences.getInstance();
       final cached = (prefs.getString('recognition_device_id') ?? '').trim();
       if (cached.isNotEmpty && cached != fallback) {
-        _localRecognitionDeviceId = cached;
-        return cached;
+        final normalized = _normalizeRecognitionDeviceId(cached);
+        _localRecognitionDeviceId = normalized;
+        if (normalized != cached) {
+          await prefs.setString('recognition_device_id', normalized);
+        }
+        return normalized;
       }
 
       final plugin = DeviceInfoPlugin();
@@ -1298,7 +1422,9 @@ class ShazamService {
           fallback: fallback,
         );
       }
-      if (resolved.isEmpty) resolved = fallback;
+      resolved = _normalizeRecognitionDeviceId(
+        resolved.isEmpty ? fallback : resolved,
+      );
       await prefs.setString('recognition_device_id', resolved);
       _localRecognitionDeviceId = resolved;
       return resolved;
@@ -1309,104 +1435,130 @@ class ShazamService {
     }
   }
 
-  Future<_RecognitionLockAcquireResult> _acquireRecognitionDeviceLock() async {
-    final partyId = ActivePartyService.currentPartyId;
-    if (partyId == null || partyId.isEmpty || partyId == 'manual') {
-      _activeRecognitionDeviceOwnerId = null;
-      _ownsRecognitionLock = false;
-      _lockedRecognitionPartyId = null;
-      return _RecognitionLockAcquireResult.acquired;
+  /// Party-ID-Kandidaten: Visibility (Offen-Tab) zuerst, dann Heartbeat.
+  static List<String> _recognitionLockPartyIdCandidates() {
+    final ids = <String>[];
+    void add(String? id) {
+      if (id == null || id.isEmpty || id == 'manual') return;
+      if (!ids.contains(id)) ids.add(id);
     }
-    try {
-      final deviceId = await _getRecognitionDeviceId();
-      final partyRef = FirebaseFirestore.instance.collection('parties').doc(partyId);
-      String? conflictingDevice;
-      final result = await FirebaseFirestore.instance
-          .runTransaction<_RecognitionLockAcquireResult>((tx) async {
-        final snap = await tx.get(partyRef);
-        if (!snap.exists) {
-          return _RecognitionLockAcquireResult.acquired;
-        }
-        final data = snap.data() ?? const <String, dynamic>{};
-        final activeRaw =
-            (data['active_recognition_device'] ?? '').toString().trim();
-        final lastSeenTs = data['active_recognition_last_seen'] as Timestamp?;
 
-        if (activeRaw.isEmpty || activeRaw == deviceId) {
-          tx.update(partyRef, {
-            'active_recognition_device': deviceId,
-            'active_recognition_last_seen': FieldValue.serverTimestamp(),
-          });
-          return _RecognitionLockAcquireResult.acquired;
-        }
+    add(OpenWishesVisibilityService.visibilityNotifier.value?.partyId);
+    add(ActivePartyService.currentPartyId);
+    return ids;
+  }
 
-        if (_isRecognitionLeaseStale(lastSeenTs)) {
-          tx.update(partyRef, {
-            'active_recognition_device': deviceId,
-            'active_recognition_last_seen': FieldValue.serverTimestamp(),
-          });
-          return _RecognitionLockAcquireResult.acquired;
-        }
+  static String? _resolveRecognitionLockPartyId() {
+    final candidates = _recognitionLockPartyIdCandidates();
+    return candidates.isEmpty ? null : candidates.first;
+  }
 
-        conflictingDevice = activeRaw;
-        return _RecognitionLockAcquireResult.blockedFreshOther;
-      });
+  void _clearLocalRecognitionLockState() {
+    _activeRecognitionDeviceOwnerId = null;
+    _ownsRecognitionLock = false;
+    _lockedRecognitionPartyId = null;
+  }
 
-      if (result == _RecognitionLockAcquireResult.acquired) {
-        _ownsRecognitionLock = true;
-        _lockedRecognitionPartyId = partyId;
-        _activeRecognitionDeviceOwnerId = deviceId;
-      } else {
-        _ownsRecognitionLock = false;
-        _lockedRecognitionPartyId = null;
-        final other = conflictingDevice?.trim();
-        _activeRecognitionDeviceOwnerId =
-            (other != null && other.isNotEmpty) ? other : null;
-      }
-      return result;
-    } catch (e) {
-      debugLog('⚠️ Recognition-Lock konnte nicht gesetzt werden: $e');
-      _activeRecognitionDeviceOwnerId = null;
+  void _applyRecognitionLockAcquireState({
+    required _RecognitionLockAcquireResult result,
+    required String partyId,
+    required String deviceId,
+    String? conflictingDevice,
+  }) {
+    if (result == _RecognitionLockAcquireResult.acquired) {
+      _ownsRecognitionLock = true;
+      _lockedRecognitionPartyId = partyId;
+      _activeRecognitionDeviceOwnerId = deviceId;
+    } else {
       _ownsRecognitionLock = false;
       _lockedRecognitionPartyId = null;
-      return _RecognitionLockAcquireResult.firestoreError;
+      final other = conflictingDevice?.trim();
+      _activeRecognitionDeviceOwnerId =
+          (other != null && other.isNotEmpty) ? other : null;
     }
   }
 
+  Future<_RecognitionLockAcquireResult> _acquireRecognitionDeviceLock() async {
+    final partyIds = _recognitionLockPartyIdCandidates();
+    if (partyIds.isEmpty) {
+      _clearLocalRecognitionLockState();
+      return _RecognitionLockAcquireResult.acquired;
+    }
+
+    final deviceId = await _getRecognitionDeviceId();
+    _RecognitionLockAcquireResult? blockedResult;
+    String? blockedOther;
+
+    for (final partyId in partyIds) {
+      final result = await PartySecureService.instance.acquireRecognitionLock(
+        partyId: partyId,
+        deviceId: deviceId,
+      );
+      switch (result.status) {
+        case RecognitionLockAcquireStatus.acquired:
+          _applyRecognitionLockAcquireState(
+            result: _RecognitionLockAcquireResult.acquired,
+            partyId: partyId,
+            deviceId: deviceId,
+          );
+          return _RecognitionLockAcquireResult.acquired;
+        case RecognitionLockAcquireStatus.blocked:
+          blockedResult = _RecognitionLockAcquireResult.blockedFreshOther;
+          blockedOther = result.otherDevice;
+          _applyRecognitionLockAcquireState(
+            result: blockedResult,
+            partyId: partyId,
+            deviceId: deviceId,
+            conflictingDevice: blockedOther,
+          );
+          return blockedResult;
+        case RecognitionLockAcquireStatus.error:
+          diagLog(
+            'SHAZAM',
+            'Recognition-Lock Fehler für partyId=$partyId — nächster Kandidat',
+          );
+          continue;
+      }
+    }
+
+    _clearLocalRecognitionLockState();
+    diagLog(
+      'SHAZAM',
+      'Recognition-Lock endgültig fehlgeschlagen (partyIds=$partyIds)',
+    );
+    return _RecognitionLockAcquireResult.firestoreError;
+  }
+
+  /// Gibt unsere Geräte-Sperre frei — auch wenn [stopAutoScanning] nicht lief.
+  Future<void> releaseRecognitionDeviceLockIfHeld() async {
+    await _releaseRecognitionDeviceLock();
+  }
+
+  /// Entfernt die Party-Sperre vollständig (DJ übernimmt auf diesem Gerät).
+  Future<void> forceClearRecognitionLockForCurrentParty() async {
+    final partyId = _resolveRecognitionLockPartyId();
+    if (partyId == null || partyId.isEmpty || partyId == 'manual') return;
+    final deviceId = await _getRecognitionDeviceId();
+    await PartySecureService.instance.releaseRecognitionLock(
+      partyId: partyId,
+      deviceId: deviceId,
+      force: true,
+    );
+    _clearLocalRecognitionLockState();
+  }
+
   Future<void> _releaseRecognitionDeviceLock() async {
-    if (!_ownsRecognitionLock) {
-      _activeRecognitionDeviceOwnerId = null;
-      return;
-    }
-    final partyId = _lockedRecognitionPartyId;
+    final partyId = _lockedRecognitionPartyId ?? _resolveRecognitionLockPartyId();
     if (partyId == null || partyId.isEmpty || partyId == 'manual') {
-      _activeRecognitionDeviceOwnerId = null;
-      _ownsRecognitionLock = false;
-      _lockedRecognitionPartyId = null;
+      _clearLocalRecognitionLockState();
       return;
     }
-    try {
-      final deviceId = await _getRecognitionDeviceId();
-      final partyRef = FirebaseFirestore.instance.collection('parties').doc(partyId);
-      await FirebaseFirestore.instance.runTransaction<void>((tx) async {
-        final snap = await tx.get(partyRef);
-        if (!snap.exists) return;
-        final activeRaw =
-            (snap.data()?['active_recognition_device'] ?? '').toString().trim();
-        if (activeRaw == deviceId) {
-          tx.update(partyRef, {
-            'active_recognition_device': null,
-            'active_recognition_last_seen': null,
-          });
-        }
-      });
-    } catch (e) {
-      debugLog('⚠️ Recognition-Lock konnte nicht freigegeben werden: $e');
-    } finally {
-      _activeRecognitionDeviceOwnerId = null;
-      _ownsRecognitionLock = false;
-      _lockedRecognitionPartyId = null;
-    }
+    final deviceId = await _getRecognitionDeviceId();
+    await PartySecureService.instance.releaseRecognitionLock(
+      partyId: partyId,
+      deviceId: deviceId,
+    );
+    _clearLocalRecognitionLockState();
   }
 
   /// Führt einen einzelnen Scan durch
@@ -1467,6 +1619,7 @@ class ShazamService {
       return;
     }
     _performScanInFlight = true;
+    var heldWakeLock = false;
     try {
       _updateStatus(ShazamScanStatus.scanning);
       if (_showStatusNotification) {
@@ -1517,13 +1670,21 @@ class ShazamService {
       // WICHTIG: Stelle sicher, dass die Daten-Brücke steht, bevor der Scan startet
       await _initAutoAdjustStream();
 
+      // Display/CPU wach nur während Native-Recognize (~8s).
+      try {
+        await WakelockPlus.enable();
+        heldWakeLock = true;
+      } catch (e) {
+        debugLog('⚠️ Wakelock während Scan: $e');
+      }
+
       // Führe Shazam-Scan durch (Free-DJ: intelligente Steuerung immer false)
       Map<dynamic, dynamic>? result;
       // Party-Kontext **unmittelbar vor** Native-Recognize: verhindert Wunsch-Schreibungen,
       // wenn erst während des Scans eine Party „dazukommt“ (langer ShazamKit-Lauf).
       String? partyIdWhenNativeRecognizeStarted;
       try {
-        partyIdWhenNativeRecognizeStarted = ActivePartyService.currentPartyId;
+        partyIdWhenNativeRecognizeStarted = _resolveShazamWishPartyId();
         result = await _channel
             .invokeMethod<Map<dynamic, dynamic>>('recognize', {
               'token': token,
@@ -1614,16 +1775,25 @@ class ShazamService {
             }
             _resultController.add(songData);
 
+            unawaited(
+              HistoryProvider().recordRecognizedTrack(
+                title: title,
+                artist: artist,
+                partyId: partyIdWhenNativeRecognizeStarted,
+              ),
+            );
+
             // Wunsch-Abgleich nur mit vollständigen Metadaten (Titel + Interpret).
             // Zusätzlich: Party muss schon **vor** Native-Recognize bestanden haben und unverändert
             // geblieben sein; plus Firestore-Lauf-Check (keine Zuordnung zu später gestarteter Party).
             final boundParty = partyIdWhenNativeRecognizeStarted;
-            final currentParty = ActivePartyService.currentPartyId;
+            final resolvedNow = _resolveShazamWishPartyId();
             final hasStablePartyContext =
                 boundParty != null &&
                 boundParty.isNotEmpty &&
                 boundParty != 'manual' &&
-                boundParty == currentParty &&
+                resolvedNow != null &&
+                boundParty == resolvedNow &&
                 title.trim().isNotEmpty &&
                 artist.trim().isNotEmpty;
 
@@ -1649,7 +1819,7 @@ class ShazamService {
             } else if (title.trim().isNotEmpty && artist.trim().isNotEmpty) {
               debugLog(
                 'Musikerkennung: kein Wunsch-Abgleich – Party-Kontext hat sich während des Scans '
-                'geändert (Start: $boundParty, jetzt: $currentParty, Label: $label)',
+                'geändert (Start: $boundParty, jetzt: $resolvedNow, Label: $label)',
               );
             }
 
@@ -1679,12 +1849,140 @@ class ShazamService {
       _updateStatus(ShazamScanStatus.error);
       _handleNoMatchOrError();
     } finally {
+      if (heldWakeLock) {
+        try {
+          await WakelockPlus.disable();
+        } catch (e) {
+          debugLog('⚠️ Wakelock nach Scan: $e');
+        }
+      }
       _performScanInFlight = false;
     }
   }
 
-  /// Prüft erkannte Songs gegen Wunschliste und aktualisiert Status automatisch
-  /// Nutzt duplicate_threshold für Ähnlichkeitsprüfung
+  /// Track aus VibesBox Sync (Rekordbox-Tool) — gleicher Pfad wie Mikrofon-Erkennung:
+  /// Footer, History, 5 Vorschläge, Offen / Vorab / Setlisten.
+  /// Gibt true zurück, wenn der Track in der History steht (oder schon stand).
+  Future<bool> ingestExternalRecognition({
+    required String title,
+    required String artist,
+    double? bpm,
+    String? camelot,
+    String? musicalKey,
+    int? durationSec,
+  }) async {
+    final t = title.trim();
+    final a = artist.trim();
+    final label = formatRecognizedTrackLabel(t, a);
+    if (label == null) return false;
+
+    final songData = <String, dynamic>{
+      'title': t,
+      'artist': a,
+      if (bpm != null) 'bpm': bpm,
+      if (camelot != null && camelot.isNotEmpty) 'camelot': camelot,
+      if (musicalKey != null && musicalKey.isNotEmpty) 'key': musicalKey,
+      if (durationSec != null && durationSec > 0) 'durationSec': durationSec,
+      'source': 'vibesbox_sync',
+    };
+
+    final prevTitle = (_lastResult?['title'] as String?)?.trim();
+    final prevArtist = (_lastResult?['artist'] as String?)?.trim();
+    final sameTrack = prevTitle == t && prevArtist == a;
+    _lastResult = songData;
+    _updateStatus(ShazamScanStatus.success);
+    _resultController.add(songData);
+
+    unawaited(_ensureExternalRecognitionKeepalive());
+
+    final historyKey = '${t.toLowerCase()}|${a.toLowerCase()}';
+    var saved = _lastHistoryPersistedKey == historyKey;
+    if (!saved) {
+      final partyId = _resolveShazamWishPartyId();
+      saved = await HistoryProvider().recordRecognizedTrack(
+        title: t,
+        artist: a,
+        partyId: partyId,
+        bpm: bpm,
+        camelot: camelot,
+        key: musicalKey,
+        durationSec: durationSec,
+        source: 'vibesbox_sync',
+      );
+      if (saved) {
+        _lastHistoryPersistedKey = historyKey;
+      } else {
+        diagLog(
+          'HISTORY',
+          'VibesBox Sync: History-Write fehlgeschlagen '
+          'title=$t artist=$a party=${partyId ?? "null"}',
+        );
+      }
+    }
+
+    if (sameTrack) return saved;
+
+    final partyId = _resolveShazamWishPartyId();
+    if (partyId == null ||
+        partyId.isEmpty ||
+        partyId == 'manual' ||
+        t.isEmpty ||
+        a.isEmpty) {
+      return saved;
+    }
+    final runningOk =
+        await ActivePartyService.isPartyIdRunningNowForCurrentDj(partyId);
+    if (runningOk) {
+      await _checkAndUpdateWishes(t, a, partyId: partyId);
+    }
+    return saved;
+  }
+
+  /// VibesBox Sync: kein laufender Track (10 Min. ohne neuen Eintrag oder Tool idle).
+  void clearExternalRecognition() {
+    const idle = <String, dynamic>{
+      'title': '',
+      'artist': '',
+      'source': 'vibesbox_sync',
+      'idle': true,
+    };
+    _lastResult = idle;
+    _lastHistoryPersistedKey = null;
+    _updateStatus(ShazamScanStatus.idle);
+    _resultController.add(idle);
+    if (_externalRecognitionSourceActive && !_isEnabled) {
+      unawaited(_ensureExternalRecognitionKeepalive());
+    }
+  }
+
+  /// Party-ID für Wunsch-Abgleich (Offen + Vorab): Heartbeat, Visibility, Session.
+  static String? _resolveShazamWishPartyId() {
+    final heartbeat = ActivePartyService.currentPartyId;
+    if (heartbeat != null && heartbeat.isNotEmpty && heartbeat != 'manual') {
+      return heartbeat;
+    }
+    final fromVisibility = OpenWishesVisibilityService.resolveDjWishPartyId();
+    if (fromVisibility != null && fromVisibility.isNotEmpty) {
+      return fromVisibility;
+    }
+    final stored = ActivePartyService.getStoredSession()?.partyId;
+    if (stored != null && stored.isNotEmpty) return stored;
+    return null;
+  }
+
+  static String _wishTitleFromData(Map<String, dynamic> data) {
+    final title = (data['title'] as String? ?? '').trim();
+    if (title.isNotEmpty) return title;
+    return (data['song'] as String? ?? '').trim();
+  }
+
+  static String _wishArtistFromData(Map<String, dynamic> data) {
+    return (data['artist'] as String? ?? '').trim();
+  }
+
+  /// Prüft erkannte Songs gegen Wunschliste und aktualisiert Status automatisch.
+  /// Alle Treffer aus allen Quellen im selben Scan:
+  /// Offen (inkl. Duplikate) + Vorab + noch offene DJ-Setlist-Tracks.
   Future<void> _checkAndUpdateWishes(
     String title,
     String artist, {
@@ -1703,65 +2001,70 @@ class ShazamService {
       final normalizedTitle = normalizeTextForDuplicateCheck(title, ignored);
       final normalizedArtist = normalizeTextForDuplicateCheck(artist, ignored);
 
-      final wishesSnapshot = await WishPaths.partyWishes(partyId)
+      final openSnapshot = await WishPaths.partyWishes(partyId)
           .where('status', isEqualTo: 'pending')
-          .limit(80)
+          .limit(200)
           .get();
 
-      if (wishesSnapshot.docs.isEmpty) {
-        return;
-      }
-
-      // 1) Offene Wunschbox (wie Tab „Offen“ — ohne reine Vorab-Queue)
-      final matchedOpen = await _tryMatchRecognizedSongInDocs(
-        wishesSnapshot.docs,
+      final openHits = await _tryMatchRecognizedSongInDocs(
+        openSnapshot.docs,
         normalizedTitle: normalizedTitle,
         normalizedArtist: normalizedArtist,
         ignored: ignored,
         threshold: threshold,
         includeQueuedPreWish: false,
       );
-      if (matchedOpen) return;
 
-      // 2) Vorab-Queue — nur wenn mindestens ein noch nicht freigegebener Vorab-Wunsch existiert
-      if (!_snapshotHasQueuedPreWish(wishesSnapshot)) {
-        final extraPreSnap = await WishPaths.partyWishes(partyId)
-            .where('status', isEqualTo: 'pending')
-            .where('is_pre_wish', isEqualTo: true)
-            .limit(40)
-            .get();
-        if (!_snapshotHasQueuedPreWish(extraPreSnap)) {
-          return;
-        }
-        await _tryMatchRecognizedSongInDocs(
-          extraPreSnap.docs,
+      // Gleiche Query wie Tab „Vorab“ (is_pre_wish + pending).
+      var preHits = 0;
+      final preSnapshot = await WishPaths.partyWishes(partyId)
+          .where('status', isEqualTo: 'pending')
+          .where('is_pre_wish', isEqualTo: true)
+          .limit(200)
+          .get();
+
+      if (preSnapshot.docs.isNotEmpty) {
+        preHits = await _tryMatchRecognizedSongInDocs(
+          preSnapshot.docs,
           normalizedTitle: normalizedTitle,
           normalizedArtist: normalizedArtist,
           ignored: ignored,
           threshold: threshold,
           includeQueuedPreWish: true,
         );
-        return;
       }
 
-      await _tryMatchRecognizedSongInDocs(
-        wishesSnapshot.docs,
-        normalizedTitle: normalizedTitle,
-        normalizedArtist: normalizedArtist,
-        ignored: ignored,
-        threshold: threshold,
-        includeQueuedPreWish: true,
-      );
+      // Unabhängig von Wunsch-Treffern: Setliste ebenfalls vollständig abarbeiten.
+      var setlistHits = 0;
+      if (ProFeatureGuard.canUseProExclusiveNow()) {
+        setlistHits = await DjSetlistTrackActionsService.instance
+            .markRecognizedMatchesPlayed(
+          partyId: partyId,
+          normalizedTitle: normalizedTitle,
+          normalizedArtist: normalizedArtist,
+          ignored: ignored,
+          threshold: threshold,
+          similarity: StringSimilarity.compareTwoStrings,
+          normalize: normalizeTextForDuplicateCheck,
+        );
+      }
+
+      final total = openHits + preHits + setlistHits;
+      if (total > 0) {
+        debugLog(
+          'Musikerkennung: $total Treffer → played '
+          '(offen=$openHits, vorab=$preHits, setlist=$setlistHits, party=$partyId)',
+        );
+        diagLog(
+          'SHAZAM',
+          'Match-Batch: total=$total offen=$openHits vorab=$preHits '
+          'setlist=$setlistHits party=$partyId',
+        );
+      }
     } catch (e) {
       debugLog('❌ Fehler beim Abgleich mit Wunschliste: $e');
+      diagLog('SHAZAM', 'Wunsch-Abgleich fehlgeschlagen (party=$partyId): $e');
     }
-  }
-
-  bool _snapshotHasQueuedPreWish(QuerySnapshot<Map<String, dynamic>> snap) {
-    for (final doc in snap.docs) {
-      if (PreWishHelper.isQueuedPreWish(doc.data())) return true;
-    }
-    return false;
   }
 
   Future<double> _loadWishMatchThreshold() async {
@@ -1792,7 +2095,9 @@ class ShazamService {
   }
 
   /// [includeQueuedPreWish] false = nur Offen-Tab; true = nur reine Vorab-Queue.
-  Future<bool> _tryMatchRecognizedSongInDocs(
+  /// Verschiebt **alle** Treffer inkl. `is_duplicate` in einem Batch.
+  /// Rückgabe: Anzahl aktualisierter Docs (0 = kein Treffer).
+  Future<int> _tryMatchRecognizedSongInDocs(
     Iterable<QueryDocumentSnapshot<Map<String, dynamic>>> docs, {
     required String normalizedTitle,
     required String normalizedArtist,
@@ -1800,8 +2105,12 @@ class ShazamService {
     required double threshold,
     required bool includeQueuedPreWish,
   }) async {
+    final matches =
+        <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+
     for (final wishDoc in docs) {
       final wishData = wishDoc.data();
+
       final isQueued = PreWishHelper.isQueuedPreWish(wishData);
       if (includeQueuedPreWish) {
         if (!isQueued) continue;
@@ -1809,8 +2118,8 @@ class ShazamService {
         continue;
       }
 
-      final wishTitle = (wishData['title'] as String? ?? '').trim();
-      final wishArtist = (wishData['artist'] as String? ?? '').trim();
+      final wishTitle = _wishTitleFromData(wishData);
+      final wishArtist = _wishArtistFromData(wishData);
       if (wishTitle.isEmpty || wishArtist.isEmpty) continue;
 
       final canonWishTitle = normalizeTextForDuplicateCheck(wishTitle, ignored);
@@ -1828,31 +2137,36 @@ class ShazamService {
       final avgSimilarity = (titleSimilarity + artistSimilarity) / 2.0;
 
       if (avgSimilarity < threshold) continue;
+      matches.add(wishDoc);
+    }
 
-      debugLog(
-        '✅ Wunsch-Match gefunden (${includeQueuedPreWish ? 'Vorab' : 'Offen'}): '
-        '"$wishTitle - $wishArtist" '
-        '(${(avgSimilarity * 100).toStringAsFixed(1)}%, '
-        'Threshold: ${(threshold * 100).toStringAsFixed(1)}%)',
-      );
+    if (matches.isEmpty) return 0;
 
-      await wishDoc.reference.update({
+    debugLog(
+      '✅ Wunsch-Match (${includeQueuedPreWish ? 'Vorab' : 'Offen'}): '
+      '${matches.length} Eintrag/Einträge → played',
+    );
+
+    final batch = FirebaseFirestore.instance.batch();
+    for (final wishDoc in matches) {
+      batch.update(wishDoc.reference, {
         'status': 'played',
         'auto_recognized': true,
         'recognized_at': FieldValue.serverTimestamp(),
         'played_at': FieldValue.serverTimestamp(),
         'playedAt': FieldValue.serverTimestamp(),
       });
-
-      if (!_wishMatchController.isClosed) {
-        _wishMatchController.add({
-          'title': wishTitle,
-          'artist': wishArtist,
-        });
-      }
-      return true;
     }
-    return false;
+    await batch.commit();
+
+    if (!_wishMatchController.isClosed) {
+      final first = matches.first.data();
+      _wishMatchController.add({
+        'title': _wishTitleFromData(first),
+        'artist': _wishArtistFromData(first),
+      });
+    }
+    return matches.length;
   }
 
   /// Gibt gecachtes JWT zurück, solange es laut Serverablauf (oder Fallback 25 min) noch gültig ist.
@@ -1888,18 +2202,14 @@ class ShazamService {
 
   void _showGlobalSnack(String message, {Color backgroundColor = Colors.deepOrange}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final messenger = appRootScaffoldMessengerKey.currentState;
-      if (messenger == null) {
-        debugLog('⚠️ ShazamService: SnackBar – ScaffoldMessenger noch nicht verfügbar.');
-        return;
-      }
-      messenger.showSnackBar(
+      showRootVibesSnackBar(
         SnackBar(
           content: Text(message),
           behavior: SnackBarBehavior.floating,
           backgroundColor: backgroundColor,
           duration: const Duration(seconds: 10),
         ),
+        tag: 'ShazamService',
       );
     });
   }
@@ -1907,25 +2217,19 @@ class ShazamService {
   /// Orangefarbene SnackBar über den root-[ScaffoldMessenger] (sichtbar auf jedem Tab).
   void _showGlobalAppCheckSnack() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final messenger = appRootScaffoldMessengerKey.currentState;
-      if (messenger == null) {
-        debugLog(
-          '⚠️ ShazamService: App-Check-SnackBar – ScaffoldMessenger noch nicht verfügbar.',
-        );
-        return;
-      }
       final lang = LocaleHelper.mapToSupportedOrEnglish(
         LocaleHelper.localeNotifier.value.languageCode,
       );
       final t = LocaleHelper.getTranslations(Locale(lang));
       final message = LocaleHelper.tr(t, 'shazam_app_check_invalid_snackbar');
-      messenger.showSnackBar(
+      showRootVibesSnackBar(
         SnackBar(
           content: Text(message),
           behavior: SnackBarBehavior.floating,
           backgroundColor: Colors.orange.shade900,
           duration: const Duration(seconds: 8),
         ),
+        tag: 'ShazamAppCheck',
       );
     });
   }

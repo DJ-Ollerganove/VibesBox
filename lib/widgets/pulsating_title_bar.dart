@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 /// Titelleiste mit pulsierendem lila Glow-Effekt
 class PulsatingTitleBar extends StatefulWidget {
@@ -46,7 +47,7 @@ class _PulsatingTitleBarState extends State<PulsatingTitleBar>
 
   @override
   Widget build(BuildContext context) {
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
 
     return AnimatedBuilder(
       animation: _pulseAnimation,

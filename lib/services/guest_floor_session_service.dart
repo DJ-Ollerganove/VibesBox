@@ -18,7 +18,18 @@ class GuestFloorSessionService {
   final FirebaseFirestore _firestore;
 
   Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
-      _queryPartiesByJoinCode(String joinCode) async {
+      queryPartiesByJoinCode(
+    String joinCode, {
+    int limit = 25,
+  }) async {
+    return _queryPartiesByJoinCode(joinCode, limit: limit);
+  }
+
+  Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
+      _queryPartiesByJoinCode(
+    String joinCode, {
+    int limit = 25,
+  }) async {
     final normalized = PartyCodeUtils.normalizeDigits(joinCode);
     if (normalized.length != PartyCodeUtils.codeLength) return [];
 
@@ -34,8 +45,15 @@ class GuestFloorSessionService {
 
     for (final value in [normalized, int.tryParse(normalized)]) {
       if (value == null) continue;
-      addDocs(await col.where('party_code', isEqualTo: value).get());
-      addDocs(await col.where('fixed_party_code', isEqualTo: value).get());
+      addDocs(
+        await col.where('party_code', isEqualTo: value).limit(limit).get(),
+      );
+      addDocs(
+        await col
+            .where('fixed_party_code', isEqualTo: value)
+            .limit(limit)
+            .get(),
+      );
     }
 
     return results;
@@ -58,7 +76,7 @@ class GuestFloorSessionService {
     return endDate != null && now.isAfter(endDate);
   }
 
-  bool _isPartyGuestJoinable(Map<String, dynamic> data, DateTime now) {
+  bool isPartyGuestJoinable(Map<String, dynamic> data, DateTime now) {
     if (_isPartyEnded(data, now)) return false;
 
     final lifecycle = data['lifecycle_status'] as String?;
@@ -128,7 +146,8 @@ class GuestFloorSessionService {
     for (final doc in docs) {
       if (excludePartyId != null && doc.id == excludePartyId) continue;
       final data = doc.data();
-      if (!_isPartyGuestJoinable(data, now)) continue;
+      if (!isPartyGuestJoinable(data, now)) continue;
+      if (!VenuePartyFields.isPublicVenueParty(data)) continue;
 
       final djName = await _djDisplayName(data);
       final floorKey = VenuePartyFields.effectiveFloorKeyFromParty(data);
@@ -151,13 +170,39 @@ class GuestFloorSessionService {
     String joinCode, {
     String? currentPartyId,
   }) async {
+    if (currentPartyId != null) {
+      final docs = await _queryPartiesByJoinCode(joinCode);
+      QueryDocumentSnapshot<Map<String, dynamic>>? current;
+      for (final doc in docs) {
+        if (doc.id == currentPartyId) {
+          current = doc;
+          break;
+        }
+      }
+      if (current == null ||
+          !VenuePartyFields.isPublicVenueParty(current.data())) {
+        return false;
+      }
+    }
+
     final options = await listJoinableFloorOptions(
       joinCode,
       excludePartyId: null,
     );
-    if (options.length <= 1) return false;
-    if (currentPartyId == null) return options.length > 1;
-    return options.any((o) => o.partyId != currentPartyId);
+    final distinctKeys = options.map((o) => o.floorKey).toSet();
+    if (distinctKeys.length <= 1) return false;
+
+    if (currentPartyId == null) return distinctKeys.length > 1;
+
+    final currentKey = options
+        .where((o) => o.partyId == currentPartyId)
+        .map((o) => o.floorKey)
+        .firstOrNull;
+    if (currentKey == null) return distinctKeys.length > 1;
+
+    return options.any(
+      (o) => o.partyId != currentPartyId && o.floorKey != currentKey,
+    );
   }
 
   /// Wenn die aktuelle Party endet, aber andere Floors noch aktiv sind.
@@ -166,6 +211,8 @@ class GuestFloorSessionService {
     required String joinCode,
     required Map<String, dynamic> endedPartyData,
   }) async {
+    if (!VenuePartyFields.isPublicVenueParty(endedPartyData)) return null;
+
     final endedFloorLabel = _floorLabelFromParty(endedPartyData);
     final options = await listJoinableFloorOptions(
       joinCode,
@@ -173,14 +220,119 @@ class GuestFloorSessionService {
     );
     if (options.isEmpty) return null;
 
+    final endedKey = VenuePartyFields.effectiveFloorKeyFromParty(endedPartyData);
+    final otherFloors =
+        options.where((o) => o.floorKey != endedKey).toList();
+    if (otherFloors.isEmpty) return null;
+
     return GuestFloorRedirectState(
       joinCode: PartyCodeUtils.normalizeDigits(joinCode),
       endedFloorLabel: endedFloorLabel,
-      options: options,
+      options: otherFloors,
     );
+  }
+
+  /// Floor-Picker nur bei mehreren verschiedenen Floors (öffentliche Venue).
+  Future<bool> shouldOfferFloorSelection(String joinCode) async {
+    final docs = await _queryPartiesByJoinCode(joinCode);
+    final now = DateTime.now();
+    final joinableData = docs
+        .where((d) => isPartyGuestJoinable(d.data(), now))
+        .map((d) => d.data())
+        .toList();
+    return VenuePartyFields.hasMultipleDistinctPublicFloors(joinableData);
   }
 
   /// Anzeige-Label für Floor (l10n-Schlüssel-Auflösung in UI).
   static bool isDefaultFloorLabelToken(String label) =>
       label == VenueConstants.defaultFloorKey;
+
+  /// Bei mehreren Treffern ohne Multi-Floor (privat/Legacy): bestes Dokument wählen.
+  static QueryDocumentSnapshot<Map<String, dynamic>>? pickBestPartyDoc(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs, {
+    DateTime? now,
+  }) {
+    if (docs.isEmpty) return null;
+    if (docs.length == 1) return docs.first;
+
+    final nowDate = now ?? DateTime.now();
+
+    String tierFor(Map<String, dynamic> data) {
+      final service = GuestFloorSessionService._();
+      if (service._isPartyEnded(data, nowDate)) return 'past';
+
+      DateTime? startDate;
+      final startTs = data['start_date'] as Timestamp?;
+      final startPosix = data['start_time_posix'];
+      if (startTs != null) {
+        startDate = startTs.toDate();
+      } else if (startPosix is int) {
+        startDate = DateTime.fromMillisecondsSinceEpoch(startPosix * 1000);
+      }
+
+      DateTime? endDate;
+      final endTs = data['end_date'] as Timestamp?;
+      final endPosix = data['end_time_posix'];
+      if (endTs != null) {
+        endDate = endTs.toDate();
+      } else if (endPosix is int) {
+        endDate = DateTime.fromMillisecondsSinceEpoch(endPosix * 1000);
+      }
+
+      if (startDate != null && endDate != null) {
+        if (!nowDate.isBefore(startDate) && nowDate.isBefore(endDate)) {
+          return 'running';
+        }
+        if (nowDate.isBefore(startDate)) return 'future';
+        return 'past';
+      }
+      if (startDate != null && endDate == null) {
+        if (nowDate.isBefore(startDate)) return 'future';
+        if (!service._isPartyEnded(data, nowDate)) return 'running';
+        return 'past';
+      }
+      if (endDate != null) {
+        if (!service._isPartyEnded(data, nowDate) && nowDate.isBefore(endDate)) {
+          return 'running';
+        }
+        return 'past';
+      }
+      return 'unknown';
+    }
+
+    int startMs(Map<String, dynamic> data) {
+      final startTs = data['start_date'] as Timestamp?;
+      final startPosix = data['start_time_posix'];
+      if (startTs != null) return startTs.millisecondsSinceEpoch;
+      if (startPosix is int) return startPosix * 1000;
+      return 0;
+    }
+
+    int endMs(Map<String, dynamic> data) {
+      final endTs = data['end_date'] as Timestamp?;
+      final endPosix = data['end_time_posix'];
+      if (endTs != null) return endTs.millisecondsSinceEpoch;
+      if (endPosix is int) return endPosix * 1000;
+      return 0;
+    }
+
+    QueryDocumentSnapshot<Map<String, dynamic>>? pickTier(String tier) {
+      final matches = docs.where((d) => tierFor(d.data()) == tier).toList();
+      if (matches.isEmpty) return null;
+      matches.sort((a, b) {
+        final aData = a.data();
+        final bData = b.data();
+        if (tier == 'past') {
+          return endMs(bData).compareTo(endMs(aData));
+        }
+        return startMs(aData).compareTo(startMs(bData));
+      });
+      return matches.first;
+    }
+
+    return pickTier('running') ??
+        pickTier('future') ??
+        pickTier('unknown') ??
+        pickTier('past');
+  }
 }

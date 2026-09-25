@@ -5,6 +5,7 @@ import '../widgets/audio_settings_card.dart';
 import '../services/pro_feature_guard.dart';
 import '../services/translation_settings_service.dart';
 import '../utils/ui_constants.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -50,7 +51,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     final locale = Localizations.localeOf(context).languageCode;
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(locale);
+    final isRtl = VbTextDirection.isRtlLanguageCode(locale);
     final user = FirebaseAuth.instance.currentUser;
 
     if (_isLoading) {

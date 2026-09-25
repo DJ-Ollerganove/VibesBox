@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <meta name="robots" content="noindex">
+  <title>VibesBox DJ Browser</title>
+  <script>
+    (function () {
+      try {
+        var code = '';
+        try { code = (new URLSearchParams(location.search).get('lang') || '').trim().toLowerCase().split('-')[0]; } catch (e0) {}
+        if (!code) {
+          var keys = ['pwa_language', 'language', 'dj_admin_locale'];
+          for (var i = 0; i < keys.length; i++) {
+            code = (localStorage.getItem(keys[i]) || sessionStorage.getItem(keys[i]) || '').trim().toLowerCase().split('-')[0];
+            if (code) break;
+          }
+        }
+        if (code === 'ar' || code === 'he' || code === 'fa' || code === 'ur') {
+          document.documentElement.setAttribute('dir', 'rtl');
+          document.documentElement.lang = code;
+          document.documentElement.className = 'dj-admin-ar';
+        }
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="icon" type="image/png" href="/vb/favicon.png">
+  <link rel="stylesheet" href="/dj-admin/styles.css?v=19">
+</head>
+<body>
+  <div class="dj-top-bar">
+    <button
+      type="button"
+      id="dj-manual-add"
+      class="dj-top-icon dj-manual-add"
+      hidden
+      aria-label="Add wish"
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/></svg>
+    </button>
+    <button
+      type="button"
+      id="dj-favorites-filter"
+      class="dj-top-icon dj-favorites-filter"
+      hidden
+      aria-label="Favorites"
+    ></button>
+    <div class="lang-switcher" id="djLangSwitcher" aria-label="Select language"></div>
+  </div>
+  <div id="app-root" class="app-root">
+    <div id="view-boot" class="view view-boot">
+      <div class="boot-card">
+        <img src="/vb/icon/vibesbox-logo.png" alt="VibesBox" class="logo" width="220" height="64">
+        <div class="boot-loading">
+          <span class="login-spinner" aria-hidden="true"></span>
+          <span id="boot-loading-text"></span>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-login" class="view view-login" hidden>
+      <div class="login-card">
+        <img src="/vb/icon/vibesbox-logo.png" alt="VibesBox" class="logo" width="220" height="64">
+        <p class="login-subtitle" id="login-subtitle"></p>
+        <h1 class="login-title" id="login-title"></h1>
+        <p class="login-hint" id="login-hint"></p>
+        <form id="login-form" class="login-form" autocomplete="off">
+          <label class="code-label" id="login-code-label" for="code-input"></label>
+          <input
+            id="code-input"
+            class="code-input"
+            type="text"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            maxlength="6"
+            autocapitalize="off"
+            autocorrect="off"
+            spellcheck="false"
+            aria-label="Code"
+          >
+          <div id="login-loading" class="login-loading" hidden>
+            <span class="login-spinner" aria-hidden="true"></span>
+            <span id="login-loading-text"></span>
+          </div>
+          <p id="login-error" class="login-error" hidden></p>
+        </form>
+      </div>
+    </div>
+
+    <div id="view-message" class="view view-message" hidden>
+      <div class="login-card message-card">
+        <img src="/vb/icon/vibesbox-logo.png" alt="VibesBox" class="logo logo-small" width="180" height="52">
+        <p id="message-text" class="message-text"></p>
+      </div>
+    </div>
+
+    <div id="view-box" class="view view-box" hidden>
+      <header class="box-header">
+        <img src="/vb/icon/vibesbox-logo.png" alt="" class="header-logo">
+        <div class="party-header-text">
+          <h1 id="party-title" class="party-title">VibesBox</h1>
+          <p id="party-end-line" class="party-end-line"></p>
+          <p id="party-grace-line" class="party-grace-line" hidden></p>
+        </div>
+      </header>
+      <div id="pre-wish-paused-banner" class="paused-banner" hidden></div>
+      <nav id="tab-bar" class="tab-bar"></nav>
+      <div id="offen-blacklist-row" class="offen-blacklist-row" hidden>
+        <span id="offen-blacklist-chip" class="offen-blacklist-chip">BLACKLIST 0</span>
+      </div>
+      <div id="favorites-view-header" class="favorites-view-header" hidden>
+        <h2 id="favorites-view-title" class="favorites-view-title"></h2>
+        <button type="button" id="favorites-view-back" class="favorites-view-back"></button>
+      </div>
+      <main id="wish-list" class="wish-list"></main>
+      <nav id="wish-pagination" class="wish-pagination" hidden aria-label="Pagination"></nav>
+    </div>
+  </div>
+
+  <div id="dj-toast" class="dj-toast" hidden></div>
+
+  <div id="dj-confirm-overlay" class="dj-confirm-overlay" hidden>
+    <div id="dj-confirm-dialog" class="dj-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="dj-confirm-text">
+      <p id="dj-confirm-text" class="dj-confirm-text"></p>
+      <div id="dj-confirm-track" class="dj-confirm-track" hidden>
+        <p id="dj-confirm-track-title" class="dj-confirm-track-title"></p>
+        <p id="dj-confirm-track-artist" class="dj-confirm-track-artist"></p>
+      </div>
+      <div class="dj-confirm-actions">
+        <button type="button" id="dj-confirm-cancel" class="dj-confirm-btn dj-confirm-btn-cancel"></button>
+        <button type="button" id="dj-confirm-ok" class="dj-confirm-btn dj-confirm-btn-ok"></button>
+      </div>
+    </div>
+  </div>
+
+  <div id="dj-manual-overlay" class="dj-manual-overlay" hidden>
+    <div id="dj-manual-dialog" class="dj-manual-dialog" role="dialog" aria-modal="true" aria-labelledby="dj-manual-heading">
+      <div class="dj-manual-header">
+        <h2 id="dj-manual-heading" class="dj-manual-heading"></h2>
+        <button type="button" id="dj-manual-close" class="dj-manual-close" aria-label="Close">×</button>
+      </div>
+      <div class="dj-manual-body">
+        <label id="dj-manual-artist-label" class="dj-manual-label" for="dj-manual-artist"></label>
+        <div class="dj-manual-field-wrap">
+          <input id="dj-manual-artist" class="dj-manual-input" type="text" autocomplete="off" maxlength="120">
+          <span id="dj-manual-artist-loading" class="dj-manual-loading" hidden></span>
+        </div>
+        <div id="dj-manual-artist-suggestions" class="dj-manual-suggestions" hidden></div>
+
+        <p id="dj-manual-suggestions-hint" class="dj-manual-suggestions-hint" hidden></p>
+
+        <label id="dj-manual-title-label" class="dj-manual-label" for="dj-manual-title"></label>
+        <div class="dj-manual-field-wrap">
+          <input id="dj-manual-title" class="dj-manual-input" type="text" autocomplete="off" maxlength="120">
+          <span id="dj-manual-title-loading" class="dj-manual-loading" hidden></span>
+        </div>
+        <div id="dj-manual-title-suggestions" class="dj-manual-suggestions" hidden></div>
+
+        <label id="dj-manual-greeting-label" class="dj-manual-label" for="dj-manual-greeting"></label>
+        <p id="dj-manual-greeting-hint" class="dj-manual-hint"></p>
+        <textarea id="dj-manual-greeting" class="dj-manual-textarea" rows="3" maxlength="160"></textarea>
+      </div>
+      <div class="dj-manual-actions">
+        <button type="button" id="dj-manual-cancel" class="dj-manual-btn dj-manual-btn-cancel"></button>
+        <button type="button" id="dj-manual-save" class="dj-manual-btn dj-manual-btn-save"></button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/vb/scripts/default-pwa-languages.js?v=7"></script>
+  <script src="/vb/scripts/generated/party-locale-map.js?v=2"></script>
+  <script src="/vb/scripts/generated/party-locale-opts.js?v=3"></script>
+  <script src="/party_shared.js?v=20260918boot1"></script>
+  <script src="/dj/dj-text-direction.js?v=4"></script>
+  <script src="/lang-menu-columns.js?v=5"></script>
+  <script src="/lang_menu_shared.js?v=9"></script>
+  <script src="/dj-admin/dj-admin-lang-bootstrap.js?v=7"></script>
+  <script src="/dj-admin/wish-grouping.js?v=4"></script>
+  <script src="/dj-admin/wish-reorder.js?v=1"></script>
+  <script src="/dj-admin/manual-wish.js?v=3"></script>
+  <script src="/dj-admin/dj-l10n.js?v=12"></script>
+  <script src="/dj-admin/dj-lang-init.js?v=6"></script>
+  <script type="module" src="/dj-admin/firebase-init.js?v=1"></script>
+  <script type="module" src="/dj-admin/app.js?v=20"></script>
+</body>
+</html>

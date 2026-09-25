@@ -106,7 +106,8 @@ class MainActivity: FlutterFragmentActivity() {
         super.onResume()
         // Lifecycle-Wächter: Nach langer Background-Zeit harte Konsistenzprüfung.
         val showStatusNotification = appPrefs.getBoolean("flutter.show_status_notification", false)
-        if (!showStatusNotification && isShazamForegroundServiceRunning()) {
+        val syncKeepalive = appPrefs.getBoolean("flutter.vb_sync_keepalive", false)
+        if (!showStatusNotification && !syncKeepalive && isShazamForegroundServiceRunning()) {
             Log.w("Shazam", "Lifecycle-Guard: Service läuft trotz AUS-Schalter -> harter Stop")
             stopForegroundService()
         }
@@ -246,7 +247,13 @@ class MainActivity: FlutterFragmentActivity() {
                     }
                     val notificationTitle = args?.get("notificationTitle") as? String
                     val notificationListening = args?.get("notificationListening") as? String
-                    val started = startForegroundService(showStatusNotification, notificationTitle, notificationListening)
+                    val useMicrophone = args?.get("useMicrophone") as? Boolean ?: true
+                    val started = startForegroundService(
+                        showStatusNotification,
+                        notificationTitle,
+                        notificationListening,
+                        useMicrophone,
+                    )
                     result.success(started)
                 }
                 "stopScanning" -> {
@@ -611,6 +618,11 @@ class MainActivity: FlutterFragmentActivity() {
                         withContext(Dispatchers.IO) {
                             // Fester Wert: 1792 Shorts = 3584 Bytes (exakt was Shazam erwartet)
                             val shortBuffer = ShortArray(bufferSize)
+                            val reusablePcm = ByteArray(bufferSize * 2)
+                            val pcmShortView = ByteBuffer
+                                .wrap(reusablePcm)
+                                .order(ByteOrder.LITTLE_ENDIAN)
+                                .asShortBuffer()
                             var lastRmsUpdateTime = 0L
                             
                             // Sammle RMS-Werte für Schwellenwert-Prüfung
@@ -634,7 +646,6 @@ class MainActivity: FlutterFragmentActivity() {
                                         
                                         val currentTime = System.currentTimeMillis()
                                         val elapsedTime = currentTime - scanStartTime
-                                        Log.d("VIBESBOX_DEBUG", "Zeit vergangen: $elapsedTime ms")
                                         
                                         // AUTOMATIC GAIN & THRESHOLD MAPPING: Dynamische Gain-Anpassung aus echten Pegel-Messungen
                                         if (smartThresholdEnabled && !autoGainCalculated && elapsedTime <= smartThresholdDurationMs) {
@@ -725,9 +736,9 @@ class MainActivity: FlutterFragmentActivity() {
                                             }
                                         }
                                         
-                                        // Sende normalisierten RMS-Wert alle 50ms (20 Updates pro Sekunde)
+                                        // RMS an Flutter ~8×/s (statt 20×) — weniger UI-Rebuilds.
                                         val sink = rmsEventSink
-                                        if (sink != null && (currentTime - lastRmsUpdateTime) >= 50) {
+                                        if (sink != null && (currentTime - lastRmsUpdateTime) >= 120) {
                                             lastRmsUpdateTime = currentTime
                                             Handler(Looper.getMainLooper()).post {
                                                 try {
@@ -740,15 +751,11 @@ class MainActivity: FlutterFragmentActivity() {
                                         
                                         // Nur an Shazam senden, wenn Signal laut genug ist
                                         if (shouldSendToShazam) {
-                                            // Konvertiere ShortArray zu ByteArray (2 Bytes pro Short)
-                                            val byteBuffer = ByteBuffer.allocate(readSize * 2).order(ByteOrder.LITTLE_ENDIAN)
-                                            byteBuffer.asShortBuffer().put(shortBuffer, 0, readSize)
-                                            val bytes = byteBuffer.array()
-
-                                            // Jetzt sind 'bytes.size' exakt 3584 (oder weniger)
+                                            pcmShortView.clear()
+                                            pcmShortView.put(shortBuffer, 0, readSize)
+                                            val byteCount = readSize * 2
                                             try {
-                                                createdSession.matchStream(bytes, bytes.size, System.currentTimeMillis())
-                                                Log.d("Shazam", "Höre zu... Pegel: $rms")
+                                                createdSession.matchStream(reusablePcm, byteCount, System.currentTimeMillis())
                                             } catch (e: Exception) {
                                                 Log.e("Shazam", "Fehler bei matchStream: ${e.message}", e)
                                                 // Bei Fehler stoppe Recording sauber
@@ -809,6 +816,11 @@ class MainActivity: FlutterFragmentActivity() {
                 val signatureDurationMs = 8000L
                 val signatureStartMs = System.currentTimeMillis()
                 val shortBuffer = ShortArray(bufferSize)
+                val reusablePcm = ByteArray(bufferSize * 2)
+                val pcmShortView = ByteBuffer
+                    .wrap(reusablePcm)
+                    .order(ByteOrder.LITTLE_ENDIAN)
+                    .asShortBuffer()
                 val endAt = System.currentTimeMillis() + signatureDurationMs
                 var lastRmsUpdateTime = 0L
                 var collectedAudioBytes = 0
@@ -840,7 +852,7 @@ class MainActivity: FlutterFragmentActivity() {
                         val rms = calculateRMS(shortBuffer, readSize)
                         val normalizedRms = (rms * micSensitivity / rmsNormalizationDivisor).coerceIn(0.0, 1.0)
                         val now = System.currentTimeMillis()
-                        if ((now - lastRmsUpdateTime) >= 50) {
+                        if ((now - lastRmsUpdateTime) >= 120) {
                             lastRmsUpdateTime = now
                             val sink = rmsEventSink
                             if (sink != null) {
@@ -854,11 +866,11 @@ class MainActivity: FlutterFragmentActivity() {
                             }
                         }
 
-                        val byteBuffer = ByteBuffer.allocate(readSize * 2).order(ByteOrder.LITTLE_ENDIAN)
-                        byteBuffer.asShortBuffer().put(shortBuffer, 0, readSize)
-                        val bytes = byteBuffer.array()
-                        signatureGenerator.append(bytes, bytes.size, System.currentTimeMillis())
-                        collectedAudioBytes += bytes.size
+                        pcmShortView.clear()
+                        pcmShortView.put(shortBuffer, 0, readSize)
+                        val byteCount = readSize * 2
+                        signatureGenerator.append(reusablePcm, byteCount, System.currentTimeMillis())
+                        collectedAudioBytes += byteCount
                     }
                 }
 
@@ -1040,13 +1052,18 @@ class MainActivity: FlutterFragmentActivity() {
         }
     }
     
-    private fun startForegroundService(showStatusNotification: Boolean, notificationTitle: String?, notificationListening: String?): Boolean {
+    private fun startForegroundService(
+        showStatusNotification: Boolean,
+        notificationTitle: String?,
+        notificationListening: String?,
+        useMicrophone: Boolean,
+    ): Boolean {
         if (!showStatusNotification) {
             // Falls während laufender Erkennung deaktiviert: Leiste sofort entfernen.
             stopForegroundService()
             return true
         }
-        if (!checkAudioPermission()) {
+        if (useMicrophone && !checkAudioPermission()) {
             Log.w("Shazam", "startForegroundService: RECORD_AUDIO nicht gewährt – Service wird nicht gestartet (Crash-Vermeidung)")
             return false
         }
@@ -1055,18 +1072,26 @@ class MainActivity: FlutterFragmentActivity() {
             ShazamForegroundService.createNotificationChannel(this)
             
             val serviceIntent = Intent(this, ShazamForegroundService::class.java).apply {
+                putExtra(ShazamForegroundService.EXTRA_USE_MICROPHONE, useMicrophone)
                 if (!notificationTitle.isNullOrBlank()) {
                     putExtra("notification_title", notificationTitle)
                 }
-                if (!notificationListening.isNullOrBlank()) {
-                    putExtra("notification_listening", notificationListening)
+                if (useMicrophone) {
+                    if (!notificationListening.isNullOrBlank()) {
+                        putExtra("notification_listening", notificationListening)
+                    }
+                } else {
+                    putExtra("notification_listening", notificationListening ?: "")
                 }
             }
             
             // Android 14+ (API 34+) benötigt foregroundServiceType
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                // foregroundServiceType wird im Manifest definiert, hier nur Intent vorbereiten
-                Log.d("Shazam", "Foreground Service mit Mikrofon-Typ (Android 14+)")
+                Log.d(
+                    "Shazam",
+                    if (useMicrophone) "Foreground Service mit Mikrofon-Typ (Android 14+)"
+                    else "Foreground Service mit dataSync-Typ (VibesBox Sync)",
+                )
             }
             
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -1074,7 +1099,7 @@ class MainActivity: FlutterFragmentActivity() {
             } else {
                 startService(serviceIntent)
             }
-            Log.d("Shazam", "Foreground Service gestartet (mit Mikrofon-Typ)")
+            Log.d("Shazam", "Foreground Service gestartet (mic=$useMicrophone)")
             // KEIN kontinuierlicher RMS-Stream mehr - Mikrofon wird nur während Scans aktiviert
             return true
         } catch (se: SecurityException) {

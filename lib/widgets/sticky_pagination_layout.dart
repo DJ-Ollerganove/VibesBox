@@ -54,8 +54,8 @@ class StickyPaginationLayout extends StatelessWidget {
       bottom: false, // TEST: SafeArea bottom deaktivieren, da wir padding.bottom manuell berücksichtigen
       child: Stack(
         children: [
-          // Ebene 1: Scroll-Inhalt
-          child,
+          // Ebene 1: Scroll-Inhalt (fill = bounded constraints für ScrollViews)
+          Positioned.fill(child: child),
           // Ebene 2: Sticky Buttons
           if (stickyPagination != null)
             stickyPagination!

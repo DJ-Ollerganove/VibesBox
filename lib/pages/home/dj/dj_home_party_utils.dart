@@ -2,10 +2,27 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../../l10n/app_localizations.dart';
+import '../../../utils/party_grace_period_helper.dart';
 import '../../../utils/ui_constants.dart';
 
 /// Gemeinsame Party-Status-Logik für DJ-Startseiten-Widgets (wie Party-Verwaltung).
 abstract final class DjHomePartyUtils {
+  static DateTime? partyStartDate(Map<String, dynamic> data) {
+    final startTs = data['start_date'] as Timestamp?;
+    if (startTs != null) return startTs.toDate();
+    final startPosix = data['start_time_posix'];
+    if (startPosix is int) {
+      return DateTime.fromMillisecondsSinceEpoch(startPosix * 1000);
+    }
+    if (startPosix is num) {
+      return DateTime.fromMillisecondsSinceEpoch(startPosix.toInt() * 1000);
+    }
+    return null;
+  }
+
+  static DateTime? partyEndDate(Map<String, dynamic> data) =>
+      PartyGracePeriodHelper.partyEndDate(data);
+
   static String statusFromDates(
     DateTime startDate,
     DateTime endDate,
@@ -13,8 +30,9 @@ abstract final class DjHomePartyUtils {
   ) {
     final l = AppLocalizations.of(context)!;
     final now = DateTime.now();
+    // Endzeit exklusiv: läuft solange now < endDate (wie Party-Verwaltung).
     if (now.isBefore(startDate)) return l.party_status_upcoming;
-    if (now.isAfter(endDate)) return l.party_status_ended;
+    if (!now.isBefore(endDate)) return l.party_status_ended;
     return l.party_status_running;
   }
 
@@ -35,33 +53,65 @@ abstract final class DjHomePartyUtils {
   ) {
     final running = <QueryDocumentSnapshot>[];
     final upcoming = <QueryDocumentSnapshot>[];
+    final l = AppLocalizations.of(context)!;
 
     for (final party in parties) {
       final data = party.data() as Map<String, dynamic>;
       if (isFinishedDoc(data)) continue;
-      final startTs = data['start_date'] as Timestamp?;
-      final endTs = data['end_date'] as Timestamp?;
-      if (startTs == null || endTs == null) continue;
+      final start = partyStartDate(data);
+      final end = partyEndDate(data);
+      if (start == null || end == null) continue;
 
-      final start = startTs.toDate();
-      final end = endTs.toDate();
       final status = statusFromDates(start, end, context);
-      if (status == AppLocalizations.of(context)!.party_status_running) {
+      if (status == l.party_status_running) {
         running.add(party);
-      } else if (status == AppLocalizations.of(context)!.party_status_upcoming) {
+      } else if (status == l.party_status_upcoming) {
         upcoming.add(party);
       }
     }
 
     int compareStart(QueryDocumentSnapshot a, QueryDocumentSnapshot b) {
-      final sa = (a.data() as Map<String, dynamic>)['start_date'] as Timestamp;
-      final sb = (b.data() as Map<String, dynamic>)['start_date'] as Timestamp;
-      return sa.toDate().compareTo(sb.toDate());
+      final sa = partyStartDate(a.data() as Map<String, dynamic>);
+      final sb = partyStartDate(b.data() as Map<String, dynamic>);
+      return (sa ?? DateTime(0)).compareTo(sb ?? DateTime(0));
     }
 
     running.sort(compareStart);
     upcoming.sort(compareStart);
     return [...running, ...upcoming];
+  }
+
+  /// Partys in der Nachlaufzeit (reguläres Ende überschritten, Grace noch aktiv).
+  static List<QueryDocumentSnapshot> graceParties(
+    List<QueryDocumentSnapshot> parties, {
+    required int gracePeriodMinutes,
+    DateTime? now,
+  }) {
+    final nowDate = now ?? DateTime.now();
+    final result = <QueryDocumentSnapshot>[];
+
+    for (final party in parties) {
+      final data = party.data() as Map<String, dynamic>;
+      if (isFinishedDoc(data)) continue;
+      final end = partyEndDate(data);
+      if (end == null || nowDate.isBefore(end)) continue;
+      if (PartyGracePeriodHelper.wishesManuallyHidden(data)) continue;
+      if (!PartyGracePeriodHelper.isWithinGracePeriod(
+        nowDate,
+        end,
+        gracePeriodMinutes,
+      )) {
+        continue;
+      }
+      result.add(party);
+    }
+
+    result.sort((a, b) {
+      final endA = partyEndDate(a.data() as Map<String, dynamic>);
+      final endB = partyEndDate(b.data() as Map<String, dynamic>);
+      return (endB ?? DateTime(0)).compareTo(endA ?? DateTime(0));
+    });
+    return result;
   }
 
   static List<QueryDocumentSnapshot> historyParties(

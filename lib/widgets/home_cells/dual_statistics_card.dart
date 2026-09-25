@@ -90,7 +90,7 @@ class _CachedPartyData {
 /// Widget für die Statistik der aktuellen/letzten Party
 /// Implementiert drei Zustände: Live-Party, Letzte Party, Absolut Leer
 /// Nutzt Echtzeit-Streams für Live-Partys und statische Abfragen für Archiv-Partys
-class _CurrentPartyStatisticsCard extends StatelessWidget {
+class _CurrentPartyStatisticsCard extends StatefulWidget {
   static final Map<String, _CachedPartyData> _cache = {};
 
   final Widget Function(BuildContext context, Widget child) cardBuilder;
@@ -108,10 +108,81 @@ class _CurrentPartyStatisticsCard extends StatelessWidget {
     this.preferredPartyId,
   });
 
+  @override
+  State<_CurrentPartyStatisticsCard> createState() =>
+      _CurrentPartyStatisticsCardState();
+}
+
+class _CurrentPartyStatisticsCardState
+    extends State<_CurrentPartyStatisticsCard> {
+  Future<_PartyInfo>? _partyInfoFuture;
+  Future<QuerySnapshot>? _archivedWishesFuture;
+  String? _archivedWishesPartyId;
+  bool _partyInfoStarted = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Nicht in initState: AppLocalizations/InheritedWidgets brauchen Dependencies.
+    if (!_partyInfoStarted) {
+      _partyInfoStarted = true;
+      _partyInfoFuture = _getPartyInfoFuture();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _CurrentPartyStatisticsCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.preferredPartyId != widget.preferredPartyId ||
+        oldWidget.effectiveDjId != widget.effectiveDjId) {
+      _archivedWishesFuture = null;
+      _archivedWishesPartyId = null;
+      _partyInfoFuture = _getPartyInfoFuture();
+    }
+  }
+
+  String get effectiveDjId => widget.effectiveDjId;
+  String? get preferredPartyId => widget.preferredPartyId;
+  Widget Function(BuildContext context, Widget child) get cardBuilder =>
+      widget.cardBuilder;
+  bool get hideBorder => widget.hideBorder;
+  String? get sectionTitle => widget.sectionTitle;
+
+  /// Live nur wenn Party wirklich im laufenden Zeitfenster / aktivem Lifecycle —
+  /// nicht allein wegen hängendem `isActive`-Flag.
+  static bool _computeIsLive({
+    required Map<String, dynamic>? data,
+    required DateTime? startDate,
+    required DateTime? endDate,
+  }) {
+    if (data == null) return false;
+    final lifecycle = data['lifecycle_status'] as String?;
+    if (lifecycle == 'finished' ||
+        lifecycle == 'standby' ||
+        data['finished_at'] != null) {
+      return false;
+    }
+    final nowUnix = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
+    final startPosix = data['start_time_posix'] as int?;
+    final endPosix = data['end_time_posix'] as int?;
+    if (startPosix != null && endPosix != null) {
+      return nowUnix >= startPosix && nowUnix < endPosix;
+    }
+    final now = DateTime.now();
+    if (startDate != null && endDate != null) {
+      return (now.isAfter(startDate) || now.isAtSameMomentAs(startDate)) &&
+          now.isBefore(endDate);
+    }
+    return data['isActive'] == true ||
+        data['status'] == 'active' ||
+        lifecycle == 'active';
+  }
+
   /// Lädt Party-Info nur per Doc-Get (eine Abfrage), wenn preferredPartyId von außen kommt.
   Future<_PartyInfo> _loadPartyInfoById(String partyId, BuildContext context) async {
-    final unnamedParty = AppLocalizations.of(context)!.unnamed_party;
     try {
+      final unnamedParty =
+          AppLocalizations.of(context)?.unnamed_party ?? 'Party';
       final partyDoc = await FirebaseFirestore.instance.collection('parties').doc(partyId).get();
       if (!partyDoc.exists) {
         return const _PartyInfo(partyId: null, partyName: null, isLive: false, startDate: null, endDate: null, isEmpty: true, hasFinishedParty: false);
@@ -120,13 +191,18 @@ class _CurrentPartyStatisticsCard extends StatelessWidget {
       final partyName = data?['party_name'] as String? ?? unnamedParty;
       final startTimestamp = data?['start_date'] as Timestamp?;
       final endTimestamp = data?['end_date'] as Timestamp?;
-      final isActive = data?['isActive'] as bool? ?? false;
-      final status = data?['status'] as String?;
       DateTime? startDate = startTimestamp?.toDate();
       DateTime? endDate = endTimestamp?.toDate();
       final now = DateTime.now();
-      final isLive = isActive || status == 'active' || (startDate != null && endDate != null && (now.isAfter(startDate) || now.isAtSameMomentAs(startDate)) && now.isBefore(endDate));
-      final hasFinished = status == 'finished' || (endDate != null && now.isAfter(endDate));
+      final isLive = _computeIsLive(
+        data: data,
+        startDate: startDate,
+        endDate: endDate,
+      );
+      final hasFinished = data?['lifecycle_status'] == 'finished' ||
+          data?['finished_at'] != null ||
+          data?['status'] == 'finished' ||
+          (endDate != null && now.isAfter(endDate));
       return _PartyInfo(
         partyId: partyId,
         partyName: partyName,
@@ -144,7 +220,18 @@ class _CurrentPartyStatisticsCard extends StatelessWidget {
 
   /// Identifiziert die aktuelle/letzte Party (ohne Wünsche zu laden). Wird übersprungen, wenn preferredPartyId gesetzt ist.
   Future<_PartyInfo> _identifyParty(BuildContext context) async {
-    final l = AppLocalizations.of(context)!;
+    final l = AppLocalizations.of(context);
+    if (l == null) {
+      return const _PartyInfo(
+        partyId: null,
+        partyName: null,
+        isLive: false,
+        startDate: null,
+        endDate: null,
+        isEmpty: true,
+        hasFinishedParty: false,
+      );
+    }
     
     debugLog('🔍 _identifyParty START: Suche Party für DJ $effectiveDjId');
     
@@ -166,6 +253,9 @@ class _CurrentPartyStatisticsCard extends StatelessWidget {
           'finished_at': partyData['finished_at'] as Timestamp?,
           'isActive': partyData['isActive'] as bool?,
           'status': partyData['status'] as String?,
+          'lifecycle_status': partyData['lifecycle_status'] as String?,
+          'start_time_posix': partyData['start_time_posix'] as int?,
+          'end_time_posix': partyData['end_time_posix'] as int?,
         });
       }
       
@@ -193,21 +283,15 @@ class _CurrentPartyStatisticsCard extends StatelessWidget {
     bool isLive = false;
 
     // SCHRITT 2: Sortierung nach Abschluss - Finde aktive Party oder letzte beendete
-    // ZUERST: Prüfe ob eine Party aktiv ist (Status active oder start_date <= now < end_date)
     for (final party in myParties) {
-      final isActiveStatus = party['isActive'] == true || party['status'] == 'active';
-      final startDate = party['start_date'] as Timestamp?;
-      final endDate = party['end_date'] as Timestamp?;
-      
-      bool isCurrentlyActive = false;
-      if (isActiveStatus) {
-        isCurrentlyActive = true;
-      } else if (startDate != null && endDate != null) {
-        final start = startDate.toDate();
-        final end = endDate.toDate();
-        isCurrentlyActive = now.compareTo(start) >= 0 && now.compareTo(end) < 0;
-      }
-      
+      final startTs = party['start_date'] as Timestamp?;
+      final endTs = party['end_date'] as Timestamp?;
+      final isCurrentlyActive = _computeIsLive(
+        data: party,
+        startDate: startTs?.toDate(),
+        endDate: endTs?.toDate(),
+      );
+
       if (isCurrentlyActive) {
         selectedPartyId = party['id'] as String;
         selectedPartyName = party['party_name'] as String? ?? (l.unnamed_party);
@@ -285,6 +369,12 @@ class _CurrentPartyStatisticsCard extends StatelessWidget {
         if (endTimestamp != null) {
           endDate = endTimestamp.toDate();
         }
+        // isLive anhand des vollständigen Docs neu bewerten (Lifecycle/Posix)
+        isLive = _computeIsLive(
+          data: partyData,
+          startDate: startDate,
+          endDate: endDate,
+        );
       }
     } catch (e) {
       debugLog('❌ Fehler beim Laden der Party-Daten: $e');
@@ -379,10 +469,12 @@ class _CurrentPartyStatisticsCard extends StatelessWidget {
     );
   }
 
-  Future<_PartyInfo> _getPartyInfoFuture(BuildContext context) async {
+  Future<_PartyInfo> _getPartyInfoFuture() async {
     // Cache: Wenn preferredPartyId gesetzt und bereits geladen (nicht live), keine erneute Abfrage
-    if (preferredPartyId != null && _cache[preferredPartyId!] != null && !_cache[preferredPartyId!]!.info.isLive) {
-      return _cache[preferredPartyId!]!.info;
+    if (preferredPartyId != null &&
+        _CurrentPartyStatisticsCard._cache[preferredPartyId!] != null &&
+        !_CurrentPartyStatisticsCard._cache[preferredPartyId!]!.info.isLive) {
+      return _CurrentPartyStatisticsCard._cache[preferredPartyId!]!.info;
     }
     if (preferredPartyId != null) {
       return _loadPartyInfoById(preferredPartyId!, context);
@@ -390,14 +482,46 @@ class _CurrentPartyStatisticsCard extends StatelessWidget {
     return _identifyParty(context);
   }
 
+  Future<QuerySnapshot> _archivedWishesFutureFor(String partyId) {
+    if (_archivedWishesPartyId == partyId && _archivedWishesFuture != null) {
+      return _archivedWishesFuture!;
+    }
+    _archivedWishesPartyId = partyId;
+    _archivedWishesFuture = WishPaths.partyWishes(partyId).get();
+    return _archivedWishesFuture!;
+  }
+
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
-    
-    // SCHRITT 1: Party-Info (bei preferredPartyId ohne Cache: ein Doc-Get; bei Cache: 0 Reads)
+    final partyFuture = _partyInfoFuture;
+    if (partyFuture == null) {
+      return cardBuilder(
+        context,
+        const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    // SCHRITT 1: Party-Info — Future in State gecacht (kein Reset bei Parent-Rebuilds)
     return FutureBuilder<_PartyInfo>(
-      future: _getPartyInfoFuture(context),
+      future: partyFuture,
       builder: (context, partySnapshot) {
+        if (partySnapshot.hasError) {
+          debugLog(
+            '❌ DualStatisticsCard Party-Info Fehler: ${partySnapshot.error}',
+          );
+          return cardBuilder(
+            context,
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                l.error_loading_info,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
+              ),
+            ),
+          );
+        }
         if (!partySnapshot.hasData) {
           return cardBuilder(
             context,
@@ -422,11 +546,13 @@ class _CurrentPartyStatisticsCard extends StatelessWidget {
         }
 
         // Caching: Bei nicht aktiver Party bereits geladene Daten wiederverwenden (kein erneuter Wishes-Read)
-        if (!partyInfo.isLive && partyInfo.partyId != null && _cache[partyInfo.partyId!] != null) {
+        if (!partyInfo.isLive &&
+            partyInfo.partyId != null &&
+            _CurrentPartyStatisticsCard._cache[partyInfo.partyId!] != null) {
           return _buildStatsCard(
             context,
             partyInfo,
-            _cache[partyInfo.partyId!]!.stats,
+            _CurrentPartyStatisticsCard._cache[partyInfo.partyId!]!.stats,
             false,
           );
         }
@@ -437,6 +563,23 @@ class _CurrentPartyStatisticsCard extends StatelessWidget {
           return StreamBuilder<QuerySnapshot>(
             stream: WishPaths.partyWishes(partyInfo.partyId!).snapshots(),
             builder: (context, wishesSnapshot) {
+              if (wishesSnapshot.hasError) {
+                debugLog(
+                  '❌ DualStatisticsCard Live-Wishes Fehler: ${wishesSnapshot.error}',
+                );
+                return cardBuilder(
+                  context,
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text(
+                      l.error_loading_info,
+                      textAlign: TextAlign.center,
+                      style:
+                          TextStyle(color: Colors.grey.shade500, fontSize: 13),
+                    ),
+                  ),
+                );
+              }
               if (!wishesSnapshot.hasData) {
                 return cardBuilder(
                   context,
@@ -446,7 +589,7 @@ class _CurrentPartyStatisticsCard extends StatelessWidget {
 
               final docs = wishesSnapshot.data?.docs ?? [];
               final stats = _calculateStatsFromDocs(docs, true);
-              
+
               return _buildStatsCard(
                 context,
                 partyInfo,
@@ -456,10 +599,23 @@ class _CurrentPartyStatisticsCard extends StatelessWidget {
             },
           );
         } else {
-          // FALL B: ARCHIV (einmaliger Abruf; danach cachen)
+          // FALL B: ARCHIV (einmaliger Abruf; Future gecacht)
           return FutureBuilder<QuerySnapshot>(
-            future: WishPaths.partyWishes(partyInfo.partyId!).get(),
+            future: _archivedWishesFutureFor(partyInfo.partyId!),
             builder: (context, wishesSnapshot) {
+              if (wishesSnapshot.hasError) {
+                debugLog(
+                  '❌ DualStatisticsCard Archiv-Wishes Fehler: ${wishesSnapshot.error}',
+                );
+                // Kein hartes Fehler-UI: leere Statistik zeigen (Party bleibt erkennbar).
+                final emptyStats = _calculateStatsFromDocs(const [], false);
+                return _buildStatsCard(
+                  context,
+                  partyInfo,
+                  emptyStats,
+                  false,
+                );
+              }
               if (!wishesSnapshot.hasData) {
                 return cardBuilder(
                   context,
@@ -470,9 +626,10 @@ class _CurrentPartyStatisticsCard extends StatelessWidget {
               final docs = wishesSnapshot.data?.docs ?? [];
               final stats = _calculateStatsFromDocs(docs, false);
               if (partyInfo.partyId != null) {
-                _cache[partyInfo.partyId!] = _CachedPartyData(partyInfo, stats);
+                _CurrentPartyStatisticsCard._cache[partyInfo.partyId!] =
+                    _CachedPartyData(partyInfo, stats);
               }
-              
+
               return _buildStatsCard(
                 context,
                 partyInfo,

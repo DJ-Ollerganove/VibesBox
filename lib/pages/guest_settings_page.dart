@@ -3,15 +3,14 @@ import 'package:flutter/material.dart';
 import '../l10n/app_localizations.dart';
 import '../utils/ui_constants.dart';
 import '../widgets/text_scale_settings_section.dart';
-import '../widgets/guest_results_per_page_settings_section.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 /// Gast-Einstellungen (lokal via SharedPreferences).
 class GuestSettingsPage extends StatelessWidget {
   const GuestSettingsPage({super.key});
 
   static bool _isRtl(BuildContext context) {
-    return ['ar', 'he', 'fa', 'ur']
-        .contains(Localizations.localeOf(context).languageCode);
+    return VbTextDirection.isRtl(context);
   }
 
   @override
@@ -32,7 +31,6 @@ class GuestSettingsPage extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         children: [
           TextScaleSettingsSection(textDirectionRtl: isRtl),
-          GuestResultsPerPageSettingsSection(textDirectionRtl: isRtl),
         ],
       ),
     );

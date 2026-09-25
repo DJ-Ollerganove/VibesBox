@@ -16,6 +16,8 @@ class UserModel {
   final Timestamp? createdAt;
   final Timestamp? lastLogin;
   final int? loginCount;
+  /// Eingeloggter Gast: abgeschickte Musikwünsche (Firestore: guestWishesSubmittedCount).
+  final int guestWishesSubmittedCount;
   // Pro-/Subscription-Felder
   final Timestamp? proUntil;
   final bool isPro;
@@ -47,6 +49,10 @@ class UserModel {
   final List<String> usedPartySlots;
   /// Musikerkennung automatisch starten (Firestore: auto_start_recognition) – nur aus UserService-Cache lesen.
   final bool autoStartRecognition;
+  /// VibesBox Sync statt Mikrofon (Firestore: vibesbox_sync_enabled).
+  final bool vibesboxSyncEnabled;
+  /// Ob `vibesbox_sync_enabled` im User-Dokument vorkommt (fehlt ≠ false).
+  final bool hasVibesboxSyncEnabledField;
   /// Aus Firestore `language` oder `locale` (Rohwert); UI normalisiert via [LocaleHelper].
   final String? preferredLanguage;
   /// DJ: lokale Push bei neuen Wünschen (Firestore: notifyNewWishes).
@@ -59,6 +65,27 @@ class UserModel {
   final bool hasSeenQuickstart;
   /// DJ: automatische Wortvorschläge in der Wunschbox (Firestore: wishbox_suggestions_enabled).
   final bool wishboxSuggestionsEnabled;
+  /// DJ: Vorschlags-KI in users/{uid} gespeichert (mindestens ein song_rec_* Feld).
+  final bool songRecStored;
+  /// DJ: Vorschlags-KI ein/aus (Firestore: song_rec_enabled).
+  final bool songRecEnabled;
+  /// DJ: Musikraum (Firestore: song_rec_scope).
+  final String songRecScope;
+  /// DJ: Tempo-Fenster (Firestore: song_rec_tempo).
+  final String songRecTempo;
+  /// DJ: Bekanntheit (Firestore: song_rec_familiarity).
+  final String songRecFamiliarity;
+  /// DJ: gleicher Interpret in Vorschlägen erlaubt (Firestore: song_rec_same_artist).
+  final bool songRecSameArtist;
+  /// DJ: Anzahl Folgevorschläge 1–20 (Firestore: song_rec_count).
+  final int songRecCount;
+  /// DJ B2B Werber-Code (Firestore: djB2bCode).
+  final String? djB2bCode;
+  final int djB2bDaysAvailable;
+  final int djB2bDaysPendingHold;
+  final int djB2bDaysLifetimeEarned;
+  final bool djB2bDaysConsumptionActive;
+  final String? referredByCode;
 
   UserModel({
     required this.id,
@@ -71,6 +98,7 @@ class UserModel {
     this.createdAt,
     this.lastLogin,
     this.loginCount,
+    this.guestWishesSubmittedCount = 0,
     this.proUntil,
     this.isPro = false,
     String? referralCode,
@@ -92,12 +120,27 @@ class UserModel {
     this.showAltEmailOnPdf = false,
     List<String>? usedPartySlots,
     this.autoStartRecognition = false,
+    this.vibesboxSyncEnabled = false,
+    this.hasVibesboxSyncEnabledField = false,
     this.preferredLanguage,
     this.notifyNewWishes = false,
     this.enableNotificationSound = true,
     this.showStatusNotification = false,
     this.hasSeenQuickstart = false,
     this.wishboxSuggestionsEnabled = true,
+    this.songRecStored = false,
+    this.songRecEnabled = true,
+    this.songRecScope = 'similar',
+    this.songRecTempo = 'exact',
+    this.songRecFamiliarity = 'hits',
+    this.songRecSameArtist = true,
+    this.songRecCount = 5,
+    this.djB2bCode,
+    this.djB2bDaysAvailable = 0,
+    this.djB2bDaysPendingHold = 0,
+    this.djB2bDaysLifetimeEarned = 0,
+    this.djB2bDaysConsumptionActive = false,
+    this.referredByCode,
   }) : referralCode = (referralCode != null && referralCode.trim().isNotEmpty)
             ? referralCode.trim()
             : '',
@@ -113,6 +156,13 @@ class UserModel {
   /// True, wenn proUntil im Jahr 2099 oder später liegt (Lebenslang / Pro Life).
   bool get isLifetime =>
       proUntil != null && proUntil!.toDate().year >= 2099;
+
+  /// Aktiver DJ-B2B-Verbrauch (Pro über gesammelte Tage).
+  bool get isDjB2bActive =>
+      planType == 'dj_b2b' &&
+      djB2bDaysConsumptionActive &&
+      djB2bDaysAvailable > 0 &&
+      isPro;
 
   /// True, wenn der User Free-DJ ist. False, wenn isLifetime oder isPremiumActive (Pro/Trial).
   bool get isFree {
@@ -148,6 +198,24 @@ class UserModel {
     return s.isEmpty ? null : s;
   }
 
+  static String _songRecStringField(dynamic value, String fallback) {
+    if (value is! String) return fallback;
+    final t = value.trim();
+    return t.isEmpty ? fallback : t;
+  }
+
+  static int _songRecCountField(dynamic value) {
+    final n = value is int
+        ? value
+        : value is num
+            ? value.round()
+            : int.tryParse('$value');
+    if (n == null) return 5;
+    if (n < 1) return 1;
+    if (n > 20) return 20;
+    return n;
+  }
+
   static String _generateReferralCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Ohne 0, O, 1, I
     final r = Random();
@@ -170,6 +238,8 @@ class UserModel {
       createdAt: data['created_at'] as Timestamp?,
       lastLogin: data['lastLogin'] as Timestamp?,
       loginCount: (data['loginCount'] as num?)?.toInt(),
+      guestWishesSubmittedCount:
+          (data['guestWishesSubmittedCount'] as num?)?.toInt() ?? 0,
       proUntil: data['proUntil'] as Timestamp?,
       isPro: data['isPro'] == true,
       referralCode: referralCode,
@@ -203,6 +273,8 @@ class UserModel {
       showAltEmailOnPdf: data['showAltEmailOnPdf'] == true,
       usedPartySlots: parseUsedPartySlots(data['usedPartySlots']),
       autoStartRecognition: data['auto_start_recognition'] == true,
+      vibesboxSyncEnabled: data['vibesbox_sync_enabled'] == true,
+      hasVibesboxSyncEnabledField: data.containsKey('vibesbox_sync_enabled'),
       preferredLanguage: parsePreferredLanguageFields(data),
       notifyNewWishes: data['notifyNewWishes'] == true,
       enableNotificationSound: data['enableNotificationSound'] != false,
@@ -210,6 +282,36 @@ class UserModel {
       hasSeenQuickstart: data['hasSeenQuickstart'] == true,
       wishboxSuggestionsEnabled:
           data['wishbox_suggestions_enabled'] != false,
+      songRecStored: data.containsKey('song_rec_enabled') ||
+          data.containsKey('song_rec_scope') ||
+          data.containsKey('song_rec_tempo') ||
+          data.containsKey('song_rec_familiarity') ||
+          data.containsKey('song_rec_same_artist') ||
+          data.containsKey('song_rec_count'),
+      songRecEnabled: data['song_rec_enabled'] != false,
+      songRecScope: _songRecStringField(data['song_rec_scope'], 'similar'),
+      songRecTempo: _songRecStringField(data['song_rec_tempo'], 'exact'),
+      songRecFamiliarity:
+          _songRecStringField(data['song_rec_familiarity'], 'hits'),
+      songRecSameArtist: data['song_rec_same_artist'] != false,
+      songRecCount: _songRecCountField(data['song_rec_count']),
+      djB2bCode: () {
+        final s = data['djB2bCode'] as String?;
+        if (s == null) return null;
+        final t = s.trim();
+        return t.isEmpty ? null : t;
+      }(),
+      djB2bDaysAvailable: (data['djB2bDaysAvailable'] as num?)?.toInt() ?? 0,
+      djB2bDaysPendingHold: (data['djB2bDaysPendingHold'] as num?)?.toInt() ?? 0,
+      djB2bDaysLifetimeEarned:
+          (data['djB2bDaysLifetimeEarned'] as num?)?.toInt() ?? 0,
+      djB2bDaysConsumptionActive: data['djB2bDaysConsumptionActive'] == true,
+      referredByCode: () {
+        final s = data['referredByCode'] as String?;
+        if (s == null) return null;
+        final t = s.trim();
+        return t.isEmpty ? null : t;
+      }(),
     );
   }
 
@@ -246,6 +348,8 @@ class UserModel {
       'showAltEmailOnPdf': showAltEmailOnPdf,
       if (usedPartySlots.isNotEmpty) 'usedPartySlots': usedPartySlots,
       'auto_start_recognition': autoStartRecognition,
+      if (hasVibesboxSyncEnabledField)
+        'vibesbox_sync_enabled': vibesboxSyncEnabled,
       'notifyNewWishes': notifyNewWishes,
       'enableNotificationSound': enableNotificationSound,
       'show_status_notification': showStatusNotification,
@@ -268,6 +372,7 @@ class UserModel {
         createdAt == other.createdAt &&
         lastLogin == other.lastLogin &&
         loginCount == other.loginCount &&
+        guestWishesSubmittedCount == other.guestWishesSubmittedCount &&
         proUntil == other.proUntil &&
         isPro == other.isPro &&
         referralCode == other.referralCode &&
@@ -289,12 +394,21 @@ class UserModel {
         showAltEmailOnPdf == other.showAltEmailOnPdf &&
         listEquals(usedPartySlots, other.usedPartySlots) &&
         autoStartRecognition == other.autoStartRecognition &&
+        vibesboxSyncEnabled == other.vibesboxSyncEnabled &&
+        hasVibesboxSyncEnabledField == other.hasVibesboxSyncEnabledField &&
         preferredLanguage == other.preferredLanguage &&
         notifyNewWishes == other.notifyNewWishes &&
         enableNotificationSound == other.enableNotificationSound &&
         showStatusNotification == other.showStatusNotification &&
         hasSeenQuickstart == other.hasSeenQuickstart &&
-        wishboxSuggestionsEnabled == other.wishboxSuggestionsEnabled;
+        wishboxSuggestionsEnabled == other.wishboxSuggestionsEnabled &&
+        songRecStored == other.songRecStored &&
+        songRecEnabled == other.songRecEnabled &&
+        songRecScope == other.songRecScope &&
+        songRecTempo == other.songRecTempo &&
+        songRecFamiliarity == other.songRecFamiliarity &&
+        songRecSameArtist == other.songRecSameArtist &&
+        songRecCount == other.songRecCount;
   }
 
   @override
@@ -309,6 +423,7 @@ class UserModel {
         createdAt,
         lastLogin,
         loginCount,
+        guestWishesSubmittedCount,
         proUntil,
         isPro,
         referralCode,
@@ -330,12 +445,21 @@ class UserModel {
         showAltEmailOnPdf,
         Object.hashAll(usedPartySlots),
         autoStartRecognition,
+        vibesboxSyncEnabled,
+        hasVibesboxSyncEnabledField,
         preferredLanguage,
         notifyNewWishes,
         enableNotificationSound,
         showStatusNotification,
         hasSeenQuickstart,
         wishboxSuggestionsEnabled,
+        songRecStored,
+        songRecEnabled,
+        songRecScope,
+        songRecTempo,
+        songRecFamiliarity,
+        songRecSameArtist,
+        songRecCount,
       ]);
 
   /// Erstellt eine Kopie mit geänderten Feldern
@@ -350,6 +474,7 @@ class UserModel {
     Timestamp? createdAt,
     Timestamp? lastLogin,
     int? loginCount,
+    int? guestWishesSubmittedCount,
     Timestamp? proUntil,
     bool? isPro,
     String? referralCode,
@@ -371,12 +496,21 @@ class UserModel {
     bool? showAltEmailOnPdf,
     List<String>? usedPartySlots,
     bool? autoStartRecognition,
+    bool? vibesboxSyncEnabled,
+    bool? hasVibesboxSyncEnabledField,
     String? preferredLanguage,
     bool? notifyNewWishes,
     bool? enableNotificationSound,
     bool? showStatusNotification,
     bool? hasSeenQuickstart,
     bool? wishboxSuggestionsEnabled,
+    bool? songRecStored,
+    bool? songRecEnabled,
+    String? songRecScope,
+    String? songRecTempo,
+    String? songRecFamiliarity,
+    bool? songRecSameArtist,
+    int? songRecCount,
   }) {
     return UserModel(
       id: id ?? this.id,
@@ -389,6 +523,8 @@ class UserModel {
       createdAt: createdAt ?? this.createdAt,
       lastLogin: lastLogin ?? this.lastLogin,
       loginCount: loginCount ?? this.loginCount,
+      guestWishesSubmittedCount:
+          guestWishesSubmittedCount ?? this.guestWishesSubmittedCount,
       proUntil: proUntil ?? this.proUntil,
       isPro: isPro ?? this.isPro,
       referralCode: referralCode ?? this.referralCode,
@@ -410,6 +546,9 @@ class UserModel {
       showAltEmailOnPdf: showAltEmailOnPdf ?? this.showAltEmailOnPdf,
       usedPartySlots: usedPartySlots ?? this.usedPartySlots,
       autoStartRecognition: autoStartRecognition ?? this.autoStartRecognition,
+      vibesboxSyncEnabled: vibesboxSyncEnabled ?? this.vibesboxSyncEnabled,
+      hasVibesboxSyncEnabledField:
+          hasVibesboxSyncEnabledField ?? this.hasVibesboxSyncEnabledField,
       preferredLanguage: preferredLanguage ?? this.preferredLanguage,
       notifyNewWishes: notifyNewWishes ?? this.notifyNewWishes,
       enableNotificationSound:
@@ -419,6 +558,13 @@ class UserModel {
       hasSeenQuickstart: hasSeenQuickstart ?? this.hasSeenQuickstart,
       wishboxSuggestionsEnabled:
           wishboxSuggestionsEnabled ?? this.wishboxSuggestionsEnabled,
+      songRecStored: songRecStored ?? this.songRecStored,
+      songRecEnabled: songRecEnabled ?? this.songRecEnabled,
+      songRecScope: songRecScope ?? this.songRecScope,
+      songRecTempo: songRecTempo ?? this.songRecTempo,
+      songRecFamiliarity: songRecFamiliarity ?? this.songRecFamiliarity,
+      songRecSameArtist: songRecSameArtist ?? this.songRecSameArtist,
+      songRecCount: songRecCount ?? this.songRecCount,
     );
   }
 }

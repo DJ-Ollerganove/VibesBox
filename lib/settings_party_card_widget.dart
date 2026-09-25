@@ -13,7 +13,12 @@ import 'utils/calendar_export_helper.dart';
 import 'widgets/party_status_badge.dart';
 import 'widgets/party_grace_countdown.dart';
 import 'widgets/party_pre_wishes_row.dart';
+import 'widgets/party/party_dj_setlist_badge.dart';
+import 'widgets/party/party_song_blacklist_button.dart';
 import 'utils/debug_log.dart';
+import 'utils/guest_floor_display.dart';
+import 'utils/floor_key_utils.dart';
+import 'app_scaffold_messenger.dart';
 
 /// Widget für eine einzelne Party-Karte
 class SettingsPartyCard extends StatefulWidget {
@@ -54,6 +59,12 @@ class SettingsPartyCard extends StatefulWidget {
   final bool allowPreWishes;
   /// Nachlaufzeit: Countdown bis Wünsche ausgeblendet werden (Dashboard).
   final DateTime? gracePeriodEndsAt;
+  final String? partyType;
+  final String? floorKey;
+  final String? floorLabel;
+  /// Party-Verwaltung: Karte nicht ausblenden, wenn reguläres Ende überschritten
+  /// (Nachlaufzeit / Filter oben entscheidet über Sichtbarkeit).
+  final bool allowPastScheduledEnd;
 
   const SettingsPartyCard({
     super.key,
@@ -90,6 +101,10 @@ class SettingsPartyCard extends StatefulWidget {
     this.isDeactivated = false,
     this.allowPreWishes = false,
     this.gracePeriodEndsAt,
+    this.partyType,
+    this.floorKey,
+    this.floorLabel,
+    this.allowPastScheduledEnd = false,
   });
 
   @override
@@ -98,6 +113,13 @@ class SettingsPartyCard extends StatefulWidget {
 
 class _SettingsPartyCardState extends State<SettingsPartyCard> {
   bool _timezoneInitialized = false;
+
+  /// Bevorstehend oder laufend — nicht Standby, nicht Nachlaufzeit, nicht vorbei.
+  bool get _showPartyBlacklistIcon {
+    if (widget.isDeactivated || widget.gracePeriodEndsAt != null) return false;
+    if (widget.hasNotStarted) return true;
+    return DateTime.now().isBefore(widget.endDate);
+  }
 
   /// Zeige Location-Zeile bei echtem Ort (Name, Straße oder PLZ/Ort vorhanden).
   bool get _hasValidLocation {
@@ -169,6 +191,12 @@ class _SettingsPartyCardState extends State<SettingsPartyCard> {
     );
   }
 
+  String? _publicFloorSubtitle(AppLocalizations l10n) {
+    if (widget.partyType != 'public') return null;
+    if (FloorKeyUtils.isDefaultFloorKey(widget.floorKey)) return null;
+    return GuestFloorDisplay.floorLabel(l10n, widget.floorLabel, widget.floorKey);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -191,13 +219,19 @@ class _SettingsPartyCardState extends State<SettingsPartyCard> {
         final l10n = AppLocalizations.of(context)!;
         final now = timeSnapshot.data ?? DateTime.now();
         
-        // Wenn die Party beendet ist, zeige nichts
-        if (now.isAfter(widget.endDate)) {
-          return const SizedBox.shrink();
+        if (!widget.allowPastScheduledEnd) {
+          if (widget.gracePeriodEndsAt != null) {
+            if (now.isAfter(widget.gracePeriodEndsAt!)) {
+              return const SizedBox.shrink();
+            }
+          } else if (now.isAfter(widget.endDate)) {
+            return const SizedBox.shrink();
+          }
         }
         
         // Bei deaktivierter Karte: alle Texte/Icons gedimmt (white60) für Lesbarkeit
         final dimColor = widget.isDeactivated ? Colors.white60 : null;
+        final floorSubtitle = _publicFloorSubtitle(l10n);
         // Definiere den Inhalt der Karte (ohne Rahmen)
         final cardContent = Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -205,18 +239,37 @@ class _SettingsPartyCardState extends State<SettingsPartyCard> {
           children: [
                 // Header-Sektion: Party-Name links + Aktions-Buttons rechts (Bearbeiten/Löschen + QR-Code)
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Links: Party-Name (nimmt restlichen Platz) - GRÜN / gedimmt bei Standby
+                    // Links: Party-Name (+ optional Floor) — GRÜN / gedimmt bei Standby
                     Expanded(
-                      child: Text(
-                        widget.partyName,
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 18,
-                          color: dimColor ?? Colors.greenAccent,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                        maxLines: 1,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.partyName,
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 18,
+                              color: dimColor ?? Colors.greenAccent,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                          ),
+                          if (floorSubtitle != null) ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              floorSubtitle,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: dimColor ?? UIConstants.appOrange,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                            ),
+                          ],
+                        ],
                       ),
                     ),
                     // Rechts: Aktions-Buttons (aktive Karte: voll; Standby/Kontingent: nur Löschen)
@@ -425,11 +478,32 @@ class _SettingsPartyCardState extends State<SettingsPartyCard> {
                     startTimePosix: widget.startTimePosix,
                     status: widget.status,
                   ),
-                if (widget.allowPreWishes)
-                  PartyPreWishesRow(
-                    partyId: widget.partyId,
-                    partyName: widget.partyName,
-                    dimColor: dimColor,
+                if (widget.allowPreWishes ||
+                    widget.hasNotStarted ||
+                    _showPartyBlacklistIcon)
+                  Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      if (widget.allowPreWishes)
+                        PartyPreWishesRow(
+                          key: ValueKey('pre-wishes-${widget.partyId}'),
+                          partyId: widget.partyId,
+                          partyName: widget.partyName,
+                          partyStartDate: widget.startDate,
+                          dimColor: dimColor,
+                        ),
+                      if (widget.hasNotStarted)
+                        PartyDjSetlistBadge(
+                          partyId: widget.partyId,
+                          partyName: widget.partyName,
+                          dimColor: dimColor,
+                        ),
+                      if (_showPartyBlacklistIcon)
+                        PartySongBlacklistButton(
+                          partyId: widget.partyId,
+                          dimColor: dimColor,
+                        ),
+                    ],
                   ),
               ],
             );
@@ -1166,7 +1240,7 @@ class _SettingsPartyCardState extends State<SettingsPartyCard> {
         );
         
         if (!fallbackLaunched && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(l.maps_app_unavailable),
               backgroundColor: Colors.red,
@@ -1208,7 +1282,7 @@ class _SettingsPartyCardState extends State<SettingsPartyCard> {
         );
         
         if (!fallbackLaunched && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(l.maps_app_unavailable),
               backgroundColor: Colors.red,
@@ -1219,7 +1293,7 @@ class _SettingsPartyCardState extends State<SettingsPartyCard> {
       } else {
         // Keine Daten vorhanden
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(l.maps_no_location_data),
               backgroundColor: Colors.orange,
@@ -1231,7 +1305,7 @@ class _SettingsPartyCardState extends State<SettingsPartyCard> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${l.maps_open_error} $e'),
             backgroundColor: Colors.red,

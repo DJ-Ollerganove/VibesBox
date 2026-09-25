@@ -8,6 +8,7 @@ import '../services/party_session_service.dart';
 import '../utils/party_code_utils.dart';
 import '../utils/ui_constants.dart';
 import 'party_check_in_feedback_widget.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 /// Widget für die 8-stellige Party-Code-Eingabe (nur Ziffern).
 /// Kann von App & PWA verwendet werden.
@@ -133,7 +134,7 @@ class _PartyCheckInWidgetState extends State<PartyCheckInWidget> {
   @override
   Widget build(BuildContext context) {
     final localizations = AppLocalizations.of(context)!;
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
 
     const labelStyle = TextStyle(
       color: UIConstants.colorWhite,

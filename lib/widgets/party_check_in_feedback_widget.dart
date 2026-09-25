@@ -5,6 +5,7 @@ import '../l10n/app_localizations.dart';
 import '../models/guest_floor_option.dart';
 import '../utils/formatting_utils.dart';
 import '../utils/ui_constants.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 /// Ergebnis der Party-Code-Validierung für Feedback-Anzeige.
 enum PartyCheckInFeedbackType {
@@ -20,6 +21,8 @@ enum PartyCheckInFeedbackType {
   partyNotStarted,
   /// Standby oder sonstiger Fehler
   invalidOrInactive,
+  /// Mehrere Partys mit gleichem Code (Datenfehler — kein stiller Fallback)
+  ambiguousCode,
 }
 
 /// Daten für das Party-Check-In-Feedback.
@@ -43,7 +46,8 @@ class PartyCheckInFeedback {
   bool get isError =>
       type == PartyCheckInFeedbackType.wrongCode ||
       type == PartyCheckInFeedbackType.partyEnded ||
-      type == PartyCheckInFeedbackType.invalidOrInactive;
+      type == PartyCheckInFeedbackType.invalidOrInactive ||
+      type == PartyCheckInFeedbackType.ambiguousCode;
   bool get isNotStarted => type == PartyCheckInFeedbackType.partyNotStarted;
   bool get isFloorRedirect =>
       type == PartyCheckInFeedbackType.floorEndedChooseOther;
@@ -64,7 +68,7 @@ class PartyCheckInFeedbackWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     final loc = AppLocalizations.of(context)!;
     final locale = Localizations.localeOf(context);
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(locale.languageCode);
+    final isRtl = VbTextDirection.isRtlLocale(locale);
     final textDirection = isRtl ? ui.TextDirection.rtl : ui.TextDirection.ltr;
 
     final borderColor = feedback.isError ? Colors.red : Colors.green;
@@ -110,6 +114,8 @@ class PartyCheckInFeedbackWidget extends StatelessWidget {
         return loc.guest_floor_picker_choose;
       case PartyCheckInFeedbackType.invalidOrInactive:
         return loc.party_code_invalid_or_inactive;
+      case PartyCheckInFeedbackType.ambiguousCode:
+        return loc.party_code_ambiguous;
       case PartyCheckInFeedbackType.partyNotStarted:
         if (feedback.startDateTime != null) {
           return _formatPartyStartAt(context, loc, feedback.startDateTime!);

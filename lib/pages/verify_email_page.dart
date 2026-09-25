@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../l10n/app_localizations.dart';
 import '../services/auth_email_service.dart';
+import '../app_scaffold_messenger.dart';
 
 /// Wird angezeigt, solange [User.emailVerified] für E-Mail-Accounts noch false ist.
 class VerifyEmailPage extends StatefulWidget {
@@ -31,7 +32,7 @@ class _VerifyEmailPageState extends State<VerifyEmailPage> {
         userName: user.displayName ?? user.email?.split('@').first ?? '',
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(l.contact_success_title),
           backgroundColor: Colors.green,
@@ -45,7 +46,7 @@ class _VerifyEmailPageState extends State<VerifyEmailPage> {
           : loc.contact_error_sending(
               '${e.code}${e.message != null && e.message!.isNotEmpty ? ': ${e.message}' : ''}',
             );
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(msg),
           backgroundColor: Colors.red,
@@ -54,7 +55,7 @@ class _VerifyEmailPageState extends State<VerifyEmailPage> {
     } catch (e) {
       if (!mounted) return;
       final l = AppLocalizations.of(context)!;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(l.error_with_message(e.toString())),
           backgroundColor: Colors.red,
@@ -77,7 +78,7 @@ class _VerifyEmailPageState extends State<VerifyEmailPage> {
     } catch (e) {
       if (!mounted) return;
       final l = AppLocalizations.of(context)!;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(l.error_with_message(e.toString())),
           backgroundColor: Colors.red,

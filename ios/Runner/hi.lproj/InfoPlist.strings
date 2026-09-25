@@ -1,10 +1,11 @@
-/* Info.plist लोकलाइज़ेशन – VibesBox */
-"NSLocalNetworkUsageDescription" = "Flutter और Xcode के ऐप से कनेक्ट होने के लिए (जैसे विकास के दौरान Hot Reload), VibesBox को आपके स्थानीय नेटवर्क पर डिवाइस तक पहुँच की आवश्यकता है।";
+/* Info.plist localization – VibesBox */
+"NSLocalNetworkUsageDescription" = "VibesBox may use the local network so development tools can connect during testing, and for optional device features on the same Wi‑Fi.";
 "NSMicrophoneUsageDescription" = "VibesBox को चल रहे संगीत का विश्लेषण और पहचान करने के लिए माइक्रोफ़ोन एक्सेस चाहिए।";
-"NSAppleMusicUsageDescription" = "VibesBox संगीत पहचान को Apple Music से जोड़ने के लिए आपकी मीडिया लाइब्रेरी तक पहुँच सकता है।";
+"NSAppleMusicUsageDescription" = "VibesBox may access your media library to link music recognition with Apple Music features.";
 "NSCameraUsageDescription" = "VibesBox को QR कोड स्कैन करने और फ़ोटो लेने के लिए कैमरा चाहिए।";
-"NSPhotoLibraryUsageDescription" = "प्रोफ़ाइल फ़ोटो चुनने और पार्टी इमेज उपयोग करने के लिए आपकी फ़ोटो लाइब्रेरी तक पहुँच चाहिए।";
-"NSPhotoLibraryAddUsageDescription" = "जब आप चाहें, हम QR कोड या पार्टी फ़ोटो जैसी इमेज आपकी लाइब्रेरी में सेव करते हैं।";
-"NSLocationWhenInUseUsageDescription" = "आपकी पार्टी लोकेशन पर मैप केंद्रित करने के लिए हम आपका स्थान उपयोग करते हैं।";
-"NSCalendarsUsageDescription" = "पार्टी की तारीखें आपके कैलेंडर में निर्यात करने के लिए आवश्यक है।";
-"NSFaceIDUsageDescription" = "Face ID एडमिन सेटिंग्स की सुरक्षा करता है ताकि संवेदनशील विकल्प केवल आप ही खोल सकें।";
+"NSPhotoLibraryUsageDescription" = "VibesBox needs photo library access so you can choose a profile picture.";
+"NSPhotoLibraryAddUsageDescription" = "VibesBox saves images such as QR codes to your library when you choose to.";
+"NSLocationWhenInUseUsageDescription" = "पार्टी स्थान पर मानचित्र केंद्रित करने के लिए आपकी लोकेशन का उपयोग होता है।";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "पार्टी स्थान पर मानचित्र केंद्रित करने के लिए आपकी लोकेशन का उपयोग होता है।";
+"NSCalendarsUsageDescription" = "Needed to export party dates to your calendar.";
+"NSFaceIDUsageDescription" = "Face ID protects admin settings so only you can access sensitive options.";

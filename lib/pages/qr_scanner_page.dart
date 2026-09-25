@@ -5,6 +5,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import '../l10n/app_localizations.dart';
 import '../utils/qr_code_extractor.dart';
 import '../utils/ui_constants.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 /// QR-Scanner-Seite für VibesBox-Party-Codes.
 /// Dark Design (schwarz/orange), schließt automatisch bei Erfolg.
@@ -58,8 +59,7 @@ class _QrScannerPageState extends State<QrScannerPage> {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
-    final isRtl = ['ar', 'he', 'fa', 'ur']
-        .contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
 
     return Scaffold(
       backgroundColor: Colors.black,

@@ -7,6 +7,7 @@ import '../l10n/locale_helper.dart';
 import '../utils/formatting_utils.dart';
 import '../utils/party_export_filename_helper.dart';
 import '../utils/party_code_utils.dart';
+import 'export_font_service.dart';
 import 'dart:ui' as ui;
 import '../utils/ui_constants.dart';
 import 'user_service.dart';
@@ -39,6 +40,7 @@ class QrCodeService {
     required double y,
     required double maxWidth,
     required double fontSize,
+    String? fontFamily,
   }) {
     const fillColor = UIConstants.appOrange;
     const strokeColor = Colors.black;
@@ -47,6 +49,7 @@ class QrCodeService {
     final strokeStyle = TextStyle(
       fontSize: fontSize,
       fontWeight: FontWeight.bold,
+      fontFamily: fontFamily,
       foreground: Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = strokeWidth
@@ -56,6 +59,7 @@ class QrCodeService {
     final fillStyle = TextStyle(
       fontSize: fontSize,
       fontWeight: FontWeight.bold,
+      fontFamily: fontFamily,
       color: fillColor,
     );
 
@@ -74,14 +78,16 @@ class QrCodeService {
   static double _measureOutlinedPartyTitleHeight(
     String text,
     double maxWidth,
-    double fontSize,
-  ) {
+    double fontSize, {
+    String? fontFamily,
+  }) {
     final painter = TextPainter(
       text: TextSpan(
         text: text,
         style: TextStyle(
           fontSize: fontSize,
           fontWeight: FontWeight.bold,
+          fontFamily: fontFamily,
           color: UIConstants.appOrange,
         ),
       ),
@@ -103,22 +109,40 @@ class QrCodeService {
     Locale? locale,
     String? fromLabel,
     String? djName,
-    String? partyLocation,
-    bool showLocationInExport = true,
+    String? partyLocationName,
+    String? partyLocationAddress,
+    bool showLocationNameInExport = true,
+    bool showLocationAddressInExport = true,
     String? djEmail,
     String? djPhone,
     String? djAlternativeEmail,
     bool showEmailInExport = true,
     bool showPhoneInExport = true,
     bool showAlternativeEmailInExport = true,
+    bool showStartDateInExport = true,
+    bool showStartTimeInExport = true,
     String? exportFileName,
   }) async {
     final exportLocale = locale ?? const Locale('de');
-    final startTimeFormatted = FormattingUtils.formatStartTimeForExport(startDate, exportLocale);
+    final exportFontFamily = await ExportFontService.ensureFlutterExportFontFamily(
+      exportLocale.languageCode,
+    );
+    TextStyle xf(TextStyle style) =>
+        ExportFontService.applyExportFont(style, exportFontFamily);
+
+    final startTimeFormatted = FormattingUtils.formatStartTimeForExport(
+      startDate,
+      exportLocale,
+      includeDate: showStartDateInExport,
+      includeTime: showStartTimeInExport,
+    );
+    final showStartInfo = startTimeFormatted.isNotEmpty;
     final translations = LocaleHelper.getTranslations(exportLocale);
     final partyCodeLabel = LocaleHelper.tr(translations, 'party_code_label');
     final contactLabel = LocaleHelper.tr(translations, 'contact_label');
-    final startTimeLabel = LocaleHelper.tr(translations, 'party_start_label');
+    final startTimeLabel = showStartInfo
+        ? LocaleHelper.tr(translations, 'party_start_label')
+        : '';
     final scanLine1 = LocaleHelper.tr(translations, 'scan_qr_code_line1');
     final scanLine2 = LocaleHelper.tr(translations, 'scan_qr_code_line2');
     final resolvedDjName = (djName != null && djName.trim().isNotEmpty)
@@ -155,23 +179,27 @@ class QrCodeService {
 
     // Header Zeile 1: Party-Name oben zentriert (orange, schwarze Kontur)
     const partyNameFontSize = 32.0;
-    final partyNameHeight =
-        _measureOutlinedPartyTitleHeight(partyName, innerWidth, partyNameFontSize);
+    final partyNameHeight = _measureOutlinedPartyTitleHeight(
+      partyName,
+      innerWidth,
+      partyNameFontSize,
+      fontFamily: exportFontFamily,
+    );
     // Header Zeile 2: Logo links, Startzeit rechts (l10n: "Start:" + Datum)
-    final startLabelStyle = TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: UIConstants.colorWhite.withValues(alpha: 0.95));
+    final startLabelStyle = xf(TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: UIConstants.colorWhite.withValues(alpha: 0.95)));
     final startLabelPainter = TextPainter(
       text: TextSpan(text: startTimeLabel, style: startLabelStyle),
       textDirection: ui.TextDirection.ltr,
       maxLines: 1,
     );
-    startLabelPainter.layout();
-    final dateStyle = TextStyle(fontSize: 13, color: UIConstants.colorWhite.withValues(alpha: 0.9));
+    if (showStartInfo) startLabelPainter.layout();
+    final dateStyle = xf(TextStyle(fontSize: 13, color: UIConstants.colorWhite.withValues(alpha: 0.9)));
     final datePainter = TextPainter(
       text: TextSpan(text: startTimeFormatted, style: dateStyle),
       textDirection: ui.TextDirection.ltr,
       maxLines: 1,
     );
-    datePainter.layout(maxWidth: innerWidth / 2 - 32);
+    if (showStartInfo) datePainter.layout(maxWidth: innerWidth / 2 - 32);
     // Logo-Zeile nur so hoch wie nötig (Titel + Logo optisch zusammen) – kein riesiger Weißraum
     double headerRowHeight;
     if (logoImage != null) {
@@ -183,7 +211,7 @@ class QrCodeService {
       headerRowHeight = (ih * scale).clamp(40.0, logoAreaSize);
     } else {
       final djNameFallback = TextPainter(
-        text: TextSpan(text: resolvedDjName, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: UIConstants.colorWhite)),
+        text: TextSpan(text: resolvedDjName, style: xf(const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: UIConstants.colorWhite))),
         textDirection: ui.TextDirection.ltr,
         maxLines: 2,
       );
@@ -192,21 +220,44 @@ class QrCodeService {
     }
     final totalHeaderHeight = headerTopSpacing + partyNameHeight + headerRowSpacing + headerRowHeight;
 
-    // Location-Block (optional, einzeilig, mit Linien)
-    final hasLocation = showLocationInExport && partyLocation != null && partyLocation.trim().isNotEmpty;
+    final exportLocationName = showLocationNameInExport &&
+            partyLocationName != null &&
+            partyLocationName.trim().isNotEmpty
+        ? partyLocationName.trim()
+        : null;
+    final exportLocationAddress = showLocationAddressInExport &&
+            partyLocationAddress != null &&
+            partyLocationAddress.trim().isNotEmpty
+        ? partyLocationAddress.trim()
+        : null;
+    final hasLocation =
+        exportLocationName != null || exportLocationAddress != null;
     double locationBlockHeight = 0;
     if (hasLocation) {
-      final locPainter = TextPainter(
-        text: TextSpan(text: partyLocation!.trim(), style: TextStyle(fontSize: 11, color: UIConstants.colorWhite.withValues(alpha: 0.8))),
-        textDirection: ui.TextDirection.ltr,
-        maxLines: 1,
-      );
-      locPainter.layout(maxWidth: innerWidth - 16);
-      locationBlockHeight = 2 + 1 + 1 + locPainter.height + 1 + 1 + 2; // halbiert
+      double locTextHeight = 0;
+      void measureLine(String text, {bool bold = false}) {
+        final p = TextPainter(
+          text: TextSpan(
+            text: text,
+            style: xf(TextStyle(
+              fontSize: 11,
+              fontWeight: bold ? FontWeight.w600 : FontWeight.normal,
+              color: UIConstants.colorWhite.withValues(alpha: 0.8),
+            )),
+          ),
+          textDirection: ui.TextDirection.ltr,
+          maxLines: 2,
+        );
+        p.layout(maxWidth: innerWidth - 16);
+        locTextHeight += p.height + (locTextHeight > 0 ? 3 : 0);
+      }
+      if (exportLocationName != null) measureLine(exportLocationName, bold: true);
+      if (exportLocationAddress != null) measureLine(exportLocationAddress);
+      locationBlockHeight = 2 + 1 + 1 + locTextHeight + 1 + 1 + 2;
     }
 
     // Musikwunsch-Text (zentriert, zweizeilig)
-    final musicLineStyle = TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: UIConstants.colorWhite.withValues(alpha: 0.95));
+    final musicLineStyle = xf(TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: UIConstants.colorWhite.withValues(alpha: 0.95)));
     final musicLine1Painter = TextPainter(text: TextSpan(text: scanLine1, style: musicLineStyle), textDirection: ui.TextDirection.ltr, maxLines: 1);
     musicLine1Painter.layout(maxWidth: innerWidth);
     final musicLine2Painter = TextPainter(text: TextSpan(text: scanLine2, style: musicLineStyle), textDirection: ui.TextDirection.ltr, maxLines: 1);
@@ -214,11 +265,10 @@ class QrCodeService {
     final musicTextBlockHeight = musicTextSpacing + musicLine1Painter.height + musicLine2Painter.height + musicTextSpacing;
 
     // Party-Code Kapsel (schwarz, weißer Text) – Breite intrinsic aus Textlänge für l10n (ohne Label-Verdopplung)
-    final codeLineRaw = '$partyCodeLabel $formattedCode';
-    final codeLine = codeLineRaw.replaceAllMapped(RegExp(r'(Party-Code:\s*)+', caseSensitive: false), (_) => 'Party-Code: ').trim();
+    final codeLine = '$partyCodeLabel $formattedCode'.trim();
     final codeCapsuleMaxTextWidth = innerWidth - capsulePaddingH * 2;
     final codeCapsulePainter = TextPainter(
-      text: TextSpan(text: codeLine, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white)),
+      text: TextSpan(text: codeLine, style: xf(const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white))),
       textDirection: ui.TextDirection.ltr,
       maxLines: 2,
     );
@@ -237,7 +287,7 @@ class QrCodeService {
 
     double contactBlockHeight = 0;
     if (hasContactBlock) {
-      final contactLabelStyle = const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: UIConstants.colorWhite);
+      final contactLabelStyle = xf(const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: UIConstants.colorWhite));
       final contactRows = <String>[];
       if (showEmailInExport && djEmail != null && djEmail!.trim().isNotEmpty) contactRows.add('\u2709 ${djEmail!.trim()}');
       if (showPhoneInExport && djPhone != null && djPhone!.trim().isNotEmpty) contactRows.add('\u260E ${djPhone!.trim()}');
@@ -251,7 +301,7 @@ class QrCodeService {
         TextPainter? p;
         for (var attempts = 0; attempts < 2; attempts++) {
           p = TextPainter(
-            text: TextSpan(text: row, style: TextStyle(fontSize: fontSize, color: UIConstants.colorWhite.withValues(alpha: 0.9))),
+            text: TextSpan(text: row, style: xf(TextStyle(fontSize: fontSize, color: UIConstants.colorWhite.withValues(alpha: 0.9)))),
             textDirection: ui.TextDirection.ltr,
             maxLines: 2,
           );
@@ -264,7 +314,7 @@ class QrCodeService {
       rightColHeight = rightColHeight > 0 ? rightColHeight - rowSpacing : 0;
       final leftLabelP = TextPainter(text: TextSpan(text: '$contactLabel:', style: contactLabelStyle), textDirection: ui.TextDirection.ltr, maxLines: 1);
       leftLabelP.layout();
-      final djNameStyle = const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: UIConstants.colorWhite); // +2pt, fett
+      final djNameStyle = xf(const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: UIConstants.colorWhite)); // +2pt, fett
       final leftNameP = TextPainter(text: TextSpan(text: resolvedDjName, style: djNameStyle), textDirection: ui.TextDirection.ltr, maxLines: 2);
       leftNameP.layout(maxWidth: innerWidth * leftColContactRatio - 24);
       final leftColHeight = leftLabelP.height + 8 + leftNameP.height;
@@ -315,6 +365,7 @@ class QrCodeService {
       y: currentY,
       maxWidth: innerWidth,
       fontSize: partyNameFontSize,
+      fontFamily: exportFontFamily,
     );
     currentY += partyNameHeight + headerRowSpacing;
 
@@ -335,7 +386,7 @@ class QrCodeService {
       canvas.drawImageRect(logoImage, srcRect, Rect.fromLTWH(dstLeft, dstTop, scaledW, scaledH), Paint()..filterQuality = FilterQuality.medium);
     } else {
       final djNameText = resolvedDjName;
-      final djNameStyle = const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: UIConstants.colorWhite);
+      final djNameStyle = xf(const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: UIConstants.colorWhite));
       final djNamePainter = TextPainter(
         text: TextSpan(text: djNameText, style: djNameStyle),
         textDirection: ui.TextDirection.ltr,
@@ -346,26 +397,40 @@ class QrCodeService {
     }
 
     final rightColEnd = baseX + innerWidth - logoToTimeSpacing;
-    startLabelPainter.paint(canvas, Offset(rightColEnd - startLabelPainter.width, headerRowY));
-    datePainter.paint(canvas, Offset(rightColEnd - datePainter.width, headerRowY + startLabelPainter.height + 6));
+    if (showStartInfo) {
+      startLabelPainter.paint(canvas, Offset(rightColEnd - startLabelPainter.width, headerRowY));
+      datePainter.paint(canvas, Offset(rightColEnd - datePainter.width, headerRowY + startLabelPainter.height + 6));
+    }
 
     currentY += headerRowHeight + fillingSpacing;
 
     final linePaint = Paint()..color = UIConstants.colorWhite.withValues(alpha: 0.25)..strokeWidth = 1;
 
-    // === LOCATION (optional, einzeilig, gerahmt) ===
+    // === LOCATION (optional, Name + Adresse, gerahmt) ===
     if (hasLocation) {
       final locY = currentY;
       canvas.drawLine(Offset(baseX, locY), Offset(baseX + innerWidth, locY), linePaint);
       currentY += 2;
-      final locPainter = TextPainter(
-        text: TextSpan(text: partyLocation!.trim(), style: TextStyle(fontSize: 11, color: UIConstants.colorWhite.withValues(alpha: 0.8))),
-        textDirection: ui.TextDirection.ltr,
-        maxLines: 1,
-      );
-      locPainter.layout(maxWidth: innerWidth - 16);
-      locPainter.paint(canvas, Offset(baseX + 8, currentY));
-      currentY += locPainter.height + 1;
+      void paintLine(String text, {bool bold = false}) {
+        final p = TextPainter(
+          text: TextSpan(
+            text: text,
+            style: xf(TextStyle(
+              fontSize: 11,
+              fontWeight: bold ? FontWeight.w600 : FontWeight.normal,
+              color: UIConstants.colorWhite.withValues(alpha: 0.8),
+            )),
+          ),
+          textDirection: ui.TextDirection.ltr,
+          maxLines: 2,
+        );
+        p.layout(maxWidth: innerWidth - 16);
+        p.paint(canvas, Offset(baseX + 8, currentY));
+        currentY += p.height + 3;
+      }
+      if (exportLocationName != null) paintLine(exportLocationName, bold: true);
+      if (exportLocationAddress != null) paintLine(exportLocationAddress);
+      currentY -= 3;
       canvas.drawLine(Offset(baseX, currentY), Offset(baseX + innerWidth, currentY), linePaint);
       currentY += 2;
     }
@@ -425,8 +490,8 @@ class QrCodeService {
       currentY += contactFrameSpacing;
 
       const leftColContactRatio = 0.2;
-      final contactLabelStyle = const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: UIConstants.colorWhite);
-      final djNameStyle = const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: UIConstants.colorWhite);
+      final contactLabelStyle = xf(const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: UIConstants.colorWhite));
+      final djNameStyle = xf(const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: UIConstants.colorWhite));
       final contactRows = <String>[];
       if (showEmailInExport && djEmail != null && djEmail!.trim().isNotEmpty) contactRows.add('\u2709 ${djEmail!.trim()}');
       if (showPhoneInExport && djPhone != null && djPhone!.trim().isNotEmpty) contactRows.add('\u260E ${djPhone!.trim()}');
@@ -447,7 +512,7 @@ class QrCodeService {
         TextPainter? rowP;
         for (var attempts = 0; attempts < 2; attempts++) {
           rowP = TextPainter(
-            text: TextSpan(text: row, style: TextStyle(fontSize: fontSize, color: UIConstants.colorWhite.withValues(alpha: 0.9))),
+            text: TextSpan(text: row, style: xf(TextStyle(fontSize: fontSize, color: UIConstants.colorWhite.withValues(alpha: 0.9)))),
             textDirection: ui.TextDirection.ltr,
             maxLines: 2,
           );

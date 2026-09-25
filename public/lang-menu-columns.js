@@ -49,15 +49,53 @@
   };
 
   function swipeHintLabel() {
+    if (typeof window.djBrowserT === 'function') {
+      var dj = window.djBrowserT('lang_menu_swipe_hint');
+      if (dj) return dj;
+    }
+    if (typeof window.partyT === 'function') {
+      var pwa = window.partyT('lang_menu_swipe_hint');
+      if (pwa) return pwa;
+    }
     try {
       var lang = (window.localStorage && window.localStorage.getItem('pwa_language')) ||
-        (window.localStorage && window.localStorage.getItem('language')) || 'de';
+        (window.localStorage && window.localStorage.getItem('language')) ||
+        (window.localStorage && window.localStorage.getItem('dj_admin_locale')) || 'de';
       if (String(lang).toLowerCase().indexOf('de') === 0) {
         return 'Nach links oder rechts wischen';
       }
     } catch (e) {}
     return 'Swipe left or right for more languages';
   }
+
+  function scrollChevronLabel(side) {
+    var key = side === 'left' ? 'lang_menu_scroll_left' : 'lang_menu_scroll_right';
+    if (typeof window.djBrowserT === 'function') {
+      var dj = window.djBrowserT(key);
+      if (dj) return dj;
+    }
+    if (typeof window.partyT === 'function') {
+      var pwa = window.partyT(key);
+      if (pwa) return pwa;
+    }
+    return side === 'left' ? 'Scroll left' : 'Scroll right';
+  }
+
+  window.langMenuSwipeHintLabel = swipeHintLabel;
+
+  function refreshLangMenuChromeLabels() {
+    document.querySelectorAll('.lang-menu-scroll-hint').forEach(function (hint) {
+      hint.textContent = swipeHintLabel();
+    });
+    document.querySelectorAll('.lang-menu-scroll-chevron--left').forEach(function (btn) {
+      btn.setAttribute('aria-label', scrollChevronLabel('left'));
+    });
+    document.querySelectorAll('.lang-menu-scroll-chevron--right').forEach(function (btn) {
+      btn.setAttribute('aria-label', scrollChevronLabel('right'));
+    });
+  }
+
+  window.refreshLangMenuChromeLabels = refreshLangMenuChromeLabels;
 
   function updateLangMenuScrollHints(scrollArea) {
     if (!scrollArea || !scrollArea.parentElement) return;
@@ -91,13 +129,13 @@
     var chevL = document.createElement('button');
     chevL.type = 'button';
     chevL.className = 'lang-menu-scroll-chevron lang-menu-scroll-chevron--left';
-    chevL.setAttribute('aria-label', 'Scroll left');
+    chevL.setAttribute('aria-label', scrollChevronLabel('left'));
     chevL.innerHTML = '&#8249;';
 
     var chevR = document.createElement('button');
     chevR.type = 'button';
     chevR.className = 'lang-menu-scroll-chevron lang-menu-scroll-chevron--right';
-    chevR.setAttribute('aria-label', 'Scroll right');
+    chevR.setAttribute('aria-label', scrollChevronLabel('right'));
     chevR.innerHTML = '&#8250;';
 
     var scrollArea = document.createElement('div');

@@ -1,10 +1,11 @@
-/* Localização Info.plist – VibesBox */
-"NSLocalNetworkUsageDescription" = "Para o Flutter e o Xcode se ligarem à app (p. ex., Hot Reload durante o desenvolvimento), o VibesBox precisa de aceder a dispositivos na sua rede local.";
+/* Info.plist localization – VibesBox */
+"NSLocalNetworkUsageDescription" = "VibesBox may use the local network so development tools can connect during testing, and for optional device features on the same Wi‑Fi.";
 "NSMicrophoneUsageDescription" = "O VibesBox precisa do microfone para analisar a música em reprodução e reconhecê-la.";
-"NSAppleMusicUsageDescription" = "O VibesBox pode acessar sua biblioteca multimídia para vincular o reconhecimento musical ao Apple Music.";
+"NSAppleMusicUsageDescription" = "VibesBox may access your media library to link music recognition with Apple Music features.";
 "NSCameraUsageDescription" = "O VibesBox precisa da câmara para ler códigos QR e tirar fotografias.";
-"NSPhotoLibraryUsageDescription" = "Precisamos de acesso às suas fotos para escolher a imagem de perfil e usar imagens de festas.";
-"NSPhotoLibraryAddUsageDescription" = "Guardamos imagens (códigos QR ou fotos de festas) na sua biblioteca quando você autorizar.";
+"NSPhotoLibraryUsageDescription" = "VibesBox needs photo library access so you can choose a profile picture.";
+"NSPhotoLibraryAddUsageDescription" = "VibesBox saves images such as QR codes to your library when you choose to.";
 "NSLocationWhenInUseUsageDescription" = "Usamos a sua localização para centrar o mapa no local da festa.";
-"NSCalendarsUsageDescription" = "Necessário para exportar datas de festas para o seu calendário.";
-"NSFaceIDUsageDescription" = "O Face ID protege as definições de administrador para que só você aceda a opções sensíveis.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "Usamos a sua localização para centrar o mapa no local da festa.";
+"NSCalendarsUsageDescription" = "Needed to export party dates to your calendar.";
+"NSFaceIDUsageDescription" = "Face ID protects admin settings so only you can access sensitive options.";

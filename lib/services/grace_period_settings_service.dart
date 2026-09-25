@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import '../config/app_config.dart';
 import 'user_service.dart';
+import 'user_self_settings_service.dart';
 
 /// DJ-Einstellung: Nachlaufzeit für offene Wünsche nach Party-Ende — **global pro DJ-Konto**
 /// (alle Geräte), Feld `grace_period_minutes` in `users/{djUid}`.
@@ -98,9 +99,9 @@ class GracePeriodSettingsService {
       if (legacyDoc.exists) {
         final legacy = parseValue(legacyDoc.data()?[fieldGracePeriodMinutes]);
         if (legacy != null) {
-          await _userRef(uid).set(
+          await UserSelfSettingsService.instance.write(
             {fieldGracePeriodMinutes: legacy},
-            SetOptions(merge: true),
+            userId: uid,
           );
           _remember(uid, legacy);
           return legacy;
@@ -126,9 +127,9 @@ class GracePeriodSettingsService {
     final uid = effectiveDjUid();
     if (uid == null || uid.isEmpty) return;
 
-    await _userRef(uid).set(
+    await UserSelfSettingsService.instance.write(
       {fieldGracePeriodMinutes: value},
-      SetOptions(merge: true),
+      userId: uid,
     );
     _remember(uid, value);
   }

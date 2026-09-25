@@ -1,16 +1,109 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:intl/intl.dart';
+import 'package:intl/intl.dart' hide TextDirection;
 import 'package:purchases_flutter/purchases_flutter.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/subscription_sync_service.dart';
 import '../../services/revenue_cat_bootstrap.dart';
 import '../../services/user_service.dart';
+import '../../services/dj_b2b_service.dart';
+import '../../services/pending_referral_service.dart';
 import '../../utils/ui_constants.dart';
 import '../../utils/debug_log.dart';
 import '../../pages/profile/widgets/profile_edit_dialogs.dart';
+import '../../app_scaffold_messenger.dart';
+
+Future<void> _openPaywallLegalUrl(BuildContext context, String url) async {
+  try {
+    final uri = Uri.parse(url);
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!ok && context.mounted) {
+      final l = AppLocalizations.of(context)!;
+      showVibesSnackBar(
+        context,
+        SnackBar(content: Text(l.paywall_legal_url_open_failed)),
+      );
+    }
+  } catch (e, st) {
+    debugLog('Paywall legal URL open failed: $e\n$st');
+    if (context.mounted) {
+      final l = AppLocalizations.of(context)!;
+      showVibesSnackBar(
+        context,
+        SnackBar(content: Text(l.paywall_legal_url_open_failed)),
+      );
+    }
+  }
+}
+
+/// Hinweiszeile mit anklickbaren {terms}/{privacy}-Platzhaltern.
+Widget _paywallLegalAcceptLine(BuildContext context, AppLocalizations l) {
+  final terms = l.paywall_terms_link;
+  final privacy = l.paywall_privacy_link;
+  final template = l.paywall_legal_accept;
+  final linkStyle = const TextStyle(
+    color: Colors.white60,
+    fontSize: 12,
+    height: 1.4,
+    decoration: TextDecoration.underline,
+  );
+  final baseStyle = const TextStyle(
+    color: Colors.white54,
+    fontSize: 12,
+    height: 1.4,
+  );
+
+  InlineSpan linkSpan(String label, String url) {
+    return WidgetSpan(
+      alignment: PlaceholderAlignment.baseline,
+      baseline: TextBaseline.alphabetic,
+      child: GestureDetector(
+        onTap: () => _openPaywallLegalUrl(context, url),
+        child: Text(label, style: linkStyle),
+      ),
+    );
+  }
+
+  final spans = <InlineSpan>[];
+  var rest = template;
+  while (rest.isNotEmpty) {
+    final ti = rest.indexOf('{terms}');
+    final pi = rest.indexOf('{privacy}');
+    int next = -1;
+    String? token;
+    if (ti >= 0 && (pi < 0 || ti < pi)) {
+      next = ti;
+      token = '{terms}';
+    } else if (pi >= 0) {
+      next = pi;
+      token = '{privacy}';
+    }
+    if (next < 0 || token == null) {
+      spans.add(TextSpan(text: rest, style: baseStyle));
+      break;
+    }
+    if (next > 0) {
+      spans.add(TextSpan(text: rest.substring(0, next), style: baseStyle));
+    }
+    if (token == '{terms}') {
+      spans.add(linkSpan(terms, AppConfig.termsOfUseUrl));
+    } else {
+      spans.add(linkSpan(privacy, AppConfig.privacyPolicyUrl));
+    }
+    rest = rest.substring(next + token.length);
+  }
+
+  return Text.rich(
+    TextSpan(children: spans),
+    textAlign: TextAlign.center,
+  );
+}
 
 // --- Google Play Offers (subscriptionOptions/freePhase) statt introductoryPrice ---
 
@@ -70,6 +163,48 @@ int? paywallSavingsPercentVsMonthly({
   return rounded > 0 ? rounded : null;
 }
 
+/// Formatierter Monatsäquivalent-Preis (Planpreis ÷ Monate) in Produktwährung.
+String? paywallMonthlyEquivalentPrice({
+  required Package? planPackage,
+  required int planMonths,
+  required Locale materialLocale,
+  required Locale platformLocale,
+}) {
+  if (planPackage == null || planMonths <= 1) return null;
+  final sp = planPackage.storeProduct;
+  if (sp.price <= 0) return null;
+  final perMonth = sp.price / planMonths;
+  return _paywallFormatAmount(
+    amount: perMonth,
+    currencyCode: sp.currencyCode,
+    materialLocale: materialLocale,
+    platformLocale: platformLocale,
+  );
+}
+
+String _paywallFormatAmount({
+  required double amount,
+  required String currencyCode,
+  required Locale materialLocale,
+  required Locale platformLocale,
+}) {
+  final displayLocale = _paywallDisplayLocale(materialLocale, platformLocale);
+  final code = currencyCode.toUpperCase();
+  final country = displayLocale.countryCode;
+  final localeTag = country != null && country.isNotEmpty
+      ? '${displayLocale.languageCode}_$country'
+      : displayLocale.languageCode;
+  try {
+    return NumberFormat.currency(locale: localeTag, name: code).format(amount);
+  } catch (_) {
+    try {
+      return NumberFormat.currency(name: code).format(amount);
+    } catch (_) {
+      return amount.toStringAsFixed(2);
+    }
+  }
+}
+
 bool _paywallPriceStringShowsEuro(String priceString) {
   return priceString.contains('€') || priceString.contains('\u20AC');
 }
@@ -103,20 +238,12 @@ Locale _paywallDisplayLocale(Locale materialLocale, Locale platformLocale) {
 }
 
 String _paywallFormatNumericPrice(StoreProduct sp, Locale displayLocale) {
-  final code = sp.currencyCode.toUpperCase();
-  final country = displayLocale.countryCode;
-  final localeTag = country != null && country.isNotEmpty
-      ? '${displayLocale.languageCode}_$country'
-      : displayLocale.languageCode;
-  try {
-    return NumberFormat.currency(locale: localeTag, name: code).format(sp.price);
-  } catch (_) {
-    try {
-      return NumberFormat.currency(name: code).format(sp.price);
-    } catch (_) {
-      return sp.priceString;
-    }
-  }
+  return _paywallFormatAmount(
+    amount: sp.price,
+    currencyCode: sp.currencyCode,
+    materialLocale: displayLocale,
+    platformLocale: displayLocale,
+  );
 }
 
 /// Store-Preis für die Paywall: immer in der **Produktwährung** ([StoreProduct.currencyCode]),
@@ -189,24 +316,88 @@ class _PaywallViewState extends State<PaywallView> {
       if (!kIsWeb) {
         await RevenueCatBootstrap.ensureConfigured();
       }
-      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+
+      // Primär wie Android: getOfferings(). iOS hatte früher nur
+      // syncAttributesAndOfferingsIfNeeded — bei RC 10 oft leere Packages.
+      Offerings offerings = await Purchases.getOfferings();
+      var offering = _pickOfferingWithPackages(offerings);
+
+      if ((offering == null || offering.availablePackages.isEmpty) &&
+          !kIsWeb &&
+          defaultTargetPlatform == TargetPlatform.iOS) {
+        debugLog(
+          'Paywall iOS: getOfferings leer '
+          '(current=${offerings.current?.identifier} '
+          'all=${offerings.all.keys.toList()} packages='
+          '${offerings.current?.availablePackages.length ?? 0}) — Retry',
+        );
+        try {
+          await Purchases.invalidateCustomerInfoCache();
+        } catch (e) {
+          debugLog('Paywall: invalidateCustomerInfoCache: $e');
+        }
         try {
           await Purchases.syncPurchases();
         } catch (e, st) {
-          debugLog('⚠️ Paywall: syncPurchases vor getOfferings (iOS): $e\n$st');
+          debugLog('⚠️ Paywall: syncPurchases (iOS Retry): $e\n$st');
+        }
+        try {
+          offerings = await Purchases.syncAttributesAndOfferingsIfNeeded();
+          offering = _pickOfferingWithPackages(offerings);
+        } catch (e, st) {
+          debugLog('⚠️ Paywall: syncAttributesAndOfferingsIfNeeded: $e\n$st');
+        }
+        if (offering == null || offering.availablePackages.isEmpty) {
+          offerings = await Purchases.getOfferings();
+          offering = _pickOfferingWithPackages(offerings);
         }
       }
-      final offerings = !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS
-          ? await Purchases.syncAttributesAndOfferingsIfNeeded()
-          : await Purchases.getOfferings();
 
-      final offering = offerings.all[_offeringId] ?? offerings.current;
       if (offering == null) {
         throw StateError('no_offering');
       }
+      final resolvedOffering = offering;
+
+      // Leere Produktliste: klarer Fehler statt leerer Plan-Karten.
+      if (resolvedOffering.availablePackages.isEmpty) {
+        debugLog(
+          'Paywall: Offering "${resolvedOffering.identifier}" hat keine Packages '
+          '(allKeys=${offerings.all.keys.toList()})',
+        );
+        // Diagnose: RC kennt die IDs, StoreKit liefert sie oft nicht → ASC/Sandbox.
+        if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+          try {
+            const iosProductIds = <String>[
+              'premium_monat',
+              'premium_quartal',
+              'premium_halbjahr',
+              'premium_jahr',
+            ];
+            final products = await Purchases.getProducts(
+              iosProductIds,
+              productCategory: ProductCategory.subscription,
+            );
+            debugLog(
+              'Paywall iOS getProducts: erwartet=${iosProductIds.length} '
+              'gefunden=${products.length} '
+              'ids=${products.map((p) => p.identifier).toList()}',
+            );
+          } catch (e, st) {
+            debugLog('Paywall iOS getProducts Diagnose: $e\n$st');
+          }
+        }
+        if (!mounted) return;
+        final l = AppLocalizations.of(context)!;
+        setState(() {
+          _offering = null;
+          _error = l.paywall_products_unavailable;
+          _loading = false;
+        });
+        return;
+      }
 
       if (kDebugMode) {
-        for (final pkg in offering.availablePackages) {
+        for (final pkg in resolvedOffering.availablePackages) {
           final sp = pkg.storeProduct;
           debugLog(
             '💳 Paywall package=${pkg.identifier} '
@@ -215,24 +406,67 @@ class _PaywallViewState extends State<PaywallView> {
         }
       }
 
-      final customerInfo = await Purchases.getCustomerInfo();
+      CustomerInfo? customerInfo;
+      try {
+        customerInfo = await Purchases.getCustomerInfo();
+      } catch (e, st) {
+        debugLog('⚠️ Paywall: getCustomerInfo fehlgeschlagen: $e\n$st');
+      }
 
       if (!mounted) return;
       setState(() {
-        _offering = offering;
+        _offering = resolvedOffering;
         _customerInfo = customerInfo;
-        _selected = _pickDefaultPackage(offering);
+        _selected = _pickDefaultPackage(resolvedOffering);
+        _loading = false;
+      });
+    } on PlatformException catch (e, st) {
+      debugLog('Paywall load PlatformException: $e\n$st');
+      if (!mounted) return;
+      final l = AppLocalizations.of(context)!;
+      final code = PurchasesErrorHelper.getErrorCode(e);
+      // configurationError oft StoreKit/ASC — gleiche Nutzer-Meldung wie leere Liste
+      final msg = switch (code) {
+        PurchasesErrorCode.productNotAvailableForPurchaseError ||
+        PurchasesErrorCode.storeProblemError ||
+        PurchasesErrorCode.configurationError ||
+        PurchasesErrorCode.unexpectedBackendResponseError =>
+          l.paywall_products_unavailable,
+        _ => l.paywall_offering_load_error,
+      };
+      setState(() {
+        _offering = null;
+        _error = msg;
         _loading = false;
       });
     } catch (e, st) {
       debugLog('Paywall load error: $e\n$st');
       if (!mounted) return;
       final l = AppLocalizations.of(context)!;
+      final emptyProducts = e is StateError && e.message == 'no_offering';
       setState(() {
-        _error = l.paywall_offering_load_error;
+        _offering = null;
+        _error = emptyProducts
+            ? l.paywall_products_unavailable
+            : l.paywall_offering_load_error;
         _loading = false;
       });
     }
+  }
+
+  /// Wählt ein Offering mit Store-Packages. Bevorzugt [_offeringId], sonst current,
+  /// sonst irgendein Offering mit Packages — nie ein leeres „default“ vor einem vollen current.
+  Offering? _pickOfferingWithPackages(Offerings offerings) {
+    final named = offerings.all[_offeringId];
+    if (named != null && named.availablePackages.isNotEmpty) return named;
+
+    final current = offerings.current;
+    if (current != null && current.availablePackages.isNotEmpty) return current;
+
+    for (final o in offerings.all.values) {
+      if (o.availablePackages.isNotEmpty) return o;
+    }
+    return current ?? named;
   }
 
   Package? _pickDefaultPackage(Offering offering) {
@@ -272,23 +506,84 @@ class _PaywallViewState extends State<PaywallView> {
     return byAlt;
   }
 
+  /// Werbercode vor Direktkauf serverseitig speichern (ohne Trial),
+  /// damit Webhook den Werber-Bonus finden kann.
+  Future<bool> _linkPendingB2bReferralForPurchase() async {
+    final pending = await PendingReferralService.instance.peekCode();
+    if (pending == null) return true;
+
+    final already = DjB2bService.normalizeCode(
+      UserScope.userOf(context)?.referredByCode,
+    );
+    if (already != null) {
+      await PendingReferralService.instance.clear();
+      return true;
+    }
+
+    try {
+      await DjB2bService.instance.redeemCode(
+        pending,
+        activateTrial: false,
+        source: 'paywall_purchase',
+      );
+      await PendingReferralService.instance.clear();
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid != null) {
+        await UserService().refreshSessionProStatus(uid);
+      }
+      return true;
+    } on FirebaseFunctionsException catch (e) {
+      final msg = (e.message ?? '').toLowerCase();
+      // Bereits verknüpft → Kauf fortsetzen.
+      if (e.code == 'failed-precondition' && msg.contains('already redeemed')) {
+        await PendingReferralService.instance.clear();
+        return true;
+      }
+      if (!mounted) return false;
+      final l = AppLocalizations.of(context)!;
+      showVibesSnackBar(
+        context,
+        SnackBar(content: Text(l.paywall_b2b_code_invalid)),
+      );
+      DjB2bService.logFunctionsError(e, 'redeem before purchase');
+      return false;
+    } catch (e) {
+      if (!mounted) return false;
+      final l = AppLocalizations.of(context)!;
+      showVibesSnackBar(
+        context,
+        SnackBar(content: Text('${l.paywall_b2b_code_invalid} $e')),
+      );
+      return false;
+    }
+  }
+
   Future<void> _buySelected() async {
     final pkg = _selected;
     if (pkg == null) return;
 
     setState(() => _busy = true);
     try {
+      // Gültiger Pending-Code: vor Store-Kauf am User + Werber-Liste speichern.
+      final linked = await _linkPendingB2bReferralForPurchase();
+      if (!linked) return;
+
       // Android: Google Play Offers nutzen – Option mit freePhase an RevenueCat übergeben.
-      CustomerInfo info;
+      final CustomerInfo info;
       if (defaultTargetPlatform == TargetPlatform.android) {
         final optionWithFree = getOptionWithFreePhase(pkg.storeProduct);
         if (optionWithFree != null) {
-          info = await Purchases.purchaseSubscriptionOption(optionWithFree);
+          info = (await Purchases.purchase(
+            PurchaseParams.subscriptionOption(optionWithFree),
+          ))
+              .customerInfo;
         } else {
-          info = await Purchases.purchasePackage(pkg);
+          info = (await Purchases.purchase(PurchaseParams.package(pkg)))
+              .customerInfo;
         }
       } else {
-        info = await Purchases.purchasePackage(pkg);
+        info = (await Purchases.purchase(PurchaseParams.package(pkg)))
+            .customerInfo;
       }
       // Security-Konzept #2: Nach Kauf nicht "lokal freischalten",
       // sondern CustomerInfo (RevenueCat) auswerten.
@@ -307,7 +602,7 @@ class _PaywallViewState extends State<PaywallView> {
             debugLog('⚠️ Sync failed after purchase: $e');
             if (mounted) {
               final l = AppLocalizations.of(context)!;
-              ScaffoldMessenger.of(context).showSnackBar(
+              showVibesSnackBar(context, 
                 SnackBar(content: Text('${l.paywall_purchase_sync_failed} $e')),
               );
             }
@@ -318,7 +613,7 @@ class _PaywallViewState extends State<PaywallView> {
         // Erfolgs-Snackbar anzeigen – das Fenster schließt der Profil-Controller (ValueListenableBuilder)
         if (context.mounted) {
           final l = AppLocalizations.of(context)!;
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text(l.paywall_pro_active),
               duration: const Duration(milliseconds: 1500),
@@ -327,24 +622,33 @@ class _PaywallViewState extends State<PaywallView> {
         }
       } else {
         final l = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(content: Text(l.paywall_purchase_verifying)),
         );
       }
     } on PlatformException catch (e) {
       if (!mounted) return;
       // User cancelled is a specific error code usually, but we just show message
-      final isCancelled = PurchasesErrorHelper.getErrorCode(e) == PurchasesErrorCode.purchaseCancelledError;
+      final code = PurchasesErrorHelper.getErrorCode(e);
+      final isCancelled = code == PurchasesErrorCode.purchaseCancelledError;
       if (!isCancelled) {
         final l = AppLocalizations.of(context)!;
-         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${l.paywall_purchase_failed} ${e.message}')),
+        final msg = switch (code) {
+          PurchasesErrorCode.productNotAvailableForPurchaseError ||
+          PurchasesErrorCode.storeProblemError ||
+          PurchasesErrorCode.configurationError =>
+            l.paywall_products_unavailable,
+          _ => '${l.paywall_purchase_failed} ${e.message ?? ''}'.trim(),
+        };
+        showVibesSnackBar(
+          context,
+          SnackBar(content: Text(msg)),
         );
       }
     } catch (e) {
       if (!mounted) return;
       final l = AppLocalizations.of(context)!;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(content: Text('${l.paywall_purchase_failed} $e')),
       );
     } finally {
@@ -357,15 +661,45 @@ class _PaywallViewState extends State<PaywallView> {
     if (uid == null || _busy) return;
 
     final l = AppLocalizations.of(context)!;
+    final pendingCode = await PendingReferralService.instance.peekCode();
+    final alreadyReferred = DjB2bService.normalizeCode(
+      UserScope.userOf(context)?.referredByCode,
+    );
+    final hasB2b = pendingCode != null || alreadyReferred != null;
     final confirmed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => ProfileEditDialogs.styledDialog(
         context: dialogContext,
-        title: l.paywall_trial_confirm_title,
-        content: Text(
-          l.paywall_trial_confirm_message,
-          style: const TextStyle(color: Colors.white70, height: 1.45),
+        title: hasB2b ? l.paywall_trial_confirm_title_b2b : l.paywall_trial_confirm_title,
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              hasB2b
+                  ? l.paywall_trial_confirm_message_b2b
+                  : l.paywall_trial_confirm_message_no_b2b,
+              style: const TextStyle(color: Colors.white70, height: 1.45),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              l.paywall_trial_no_subscription_hint,
+              style: const TextStyle(
+                color: UIConstants.appOrange,
+                height: 1.4,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            if (!hasB2b) ...[
+              const SizedBox(height: 12),
+              Text(
+                l.paywall_trial_b2b_hint,
+                style: const TextStyle(color: Colors.white54, height: 1.4, fontSize: 13),
+              ),
+            ],
+          ],
         ),
         actions: [
           TextButton(
@@ -381,7 +715,9 @@ class _PaywallViewState extends State<PaywallView> {
             style: TextButton.styleFrom(
               foregroundColor: UIConstants.appOrange,
             ),
-            child: Text(l.paywall_start_trial_button),
+            child: Text(
+              hasB2b ? l.paywall_start_trial_button_b2b : l.paywall_start_trial_button,
+            ),
           ),
         ],
       ),
@@ -390,12 +726,18 @@ class _PaywallViewState extends State<PaywallView> {
 
     setState(() => _busy = true);
     try {
-      await SubscriptionSyncService.activateTwoDayTrial(uid);
+      await DjB2bService.instance.activateTrial(
+        b2bCode: pendingCode ?? alreadyReferred,
+      );
+      await PendingReferralService.instance.clear();
+      await UserService().refreshSessionProStatus(uid);
       if (!mounted) return;
       final l = AppLocalizations.of(context)!;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
-          content: Text(l.trial_activated_snackbar),
+          content: Text(
+            hasB2b ? l.trial_activated_snackbar_b2b : l.trial_activated_snackbar,
+          ),
           backgroundColor: const Color(0xFFE6A817),
           behavior: SnackBarBehavior.floating,
         ),
@@ -404,12 +746,30 @@ class _PaywallViewState extends State<PaywallView> {
     } catch (e) {
       if (!mounted) return;
       final l = AppLocalizations.of(context)!;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${l.paywall_trial_failed} $e')),
+      final msg = _paywallTrialErrorMessage(l, e);
+      showVibesSnackBar(context, 
+        SnackBar(content: Text(msg)),
       );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  String _paywallTrialErrorMessage(AppLocalizations l, Object e) {
+    if (e is FirebaseFunctionsException) {
+      final m = (e.message ?? '').toLowerCase();
+      final code = e.code.toLowerCase();
+      if (code == 'invalid-argument' ||
+          code == 'not-found' ||
+          m.contains('invalid') ||
+          m.contains('not found') ||
+          m.contains('self-referral') ||
+          m.contains('already redeemed')) {
+        return l.paywall_b2b_code_invalid;
+      }
+      return '${l.paywall_trial_failed} ${e.message ?? e.code}'.trim();
+    }
+    return '${l.paywall_trial_failed} $e';
   }
 
   Future<void> _restore() async {
@@ -429,7 +789,7 @@ class _PaywallViewState extends State<PaywallView> {
 
       final isPro = _isProActive(info);
       final l = AppLocalizations.of(context)!;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(
             isPro ? l.paywall_restore_success_pro : l.paywall_restore_success_no_pro,
@@ -439,13 +799,13 @@ class _PaywallViewState extends State<PaywallView> {
     } on PlatformException catch (e) {
       if (!mounted) return;
       final l = AppLocalizations.of(context)!;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(content: Text('${l.paywall_restore_failed} ${e.message ?? e.code}')),
       );
     } catch (e) {
       if (!mounted) return;
       final l = AppLocalizations.of(context)!;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(content: Text('${l.paywall_restore_failed} $e')),
       );
     } finally {
@@ -570,16 +930,27 @@ class _Content extends StatelessWidget {
     ];
 
     Widget planCard(_Plan plan) {
+      final materialLocale = Localizations.localeOf(context);
+      final platformLocale = WidgetsBinding.instance.platformDispatcher.locale;
       final savingsPercent = paywallSavingsPercentVsMonthly(
         planPackage: plan.package,
         planMonths: plan.planMonths,
         monthlyPackage: monthly,
+      );
+      final monthlyEquiv = paywallMonthlyEquivalentPrice(
+        planPackage: plan.package,
+        planMonths: plan.planMonths,
+        materialLocale: materialLocale,
+        platformLocale: platformLocale,
       );
       return _PlanCard(
         label: plan.label,
         package: plan.package,
         trialText: plan.package != null
             ? getTrialDisplayString(l, plan.package!.storeProduct)
+            : null,
+        monthlyPriceText: monthlyEquiv != null
+            ? l.paywall_per_month_price(monthlyEquiv)
             : null,
         savingsText: savingsPercent != null
             ? l.paywall_save_up_to_percent(savingsPercent)
@@ -593,20 +964,24 @@ class _Content extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
-        // Header
-        Column(
-          children: [
-            Text(
-              l.paywall_choose_plan_title,
-              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 24),
-          ],
+        // Gratis-Test nur, wenn noch nie genutzt (inkl. Trennlinie).
+        if (trialAvailable) ...[
+          _PaywallTrialSection(
+            busy: busy,
+            onStartTrial: onStartTrial,
+          ),
+          const SizedBox(height: 24),
+        ],
+
+        Text(
+          l.subscribeToVibesBoxPro,
+          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+          textAlign: TextAlign.center,
         ),
+        const SizedBox(height: 24),
 
         // Grid Layout (2x2)
         Row(
@@ -636,22 +1011,6 @@ class _Content extends StatelessWidget {
             ),
           ),
 
-        if (trialAvailable) ...[
-          OutlinedButton(
-            onPressed: busy ? null : onStartTrial,
-            style: OutlinedButton.styleFrom(
-              backgroundColor: Colors.black,
-              foregroundColor: UIConstants.appOrange,
-              side: const BorderSide(color: UIConstants.appOrange, width: 2),
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            child: Text(l.paywall_start_trial_button),
-          ),
-          const SizedBox(height: 12),
-        ],
-
         ElevatedButton(
           onPressed: busy || selected == null ? null : onBuy,
           style: ElevatedButton.styleFrom(
@@ -663,9 +1022,16 @@ class _Content extends StatelessWidget {
           ),
           child: Text(busy ? l.paywall_pay_one_moment : l.paywall_pay_button),
         ),
-        
+
+        const SizedBox(height: 10),
+        Text(
+          l.paywall_subscription_auto_renew_hint,
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: Colors.white54, fontSize: 12, height: 1.35),
+        ),
+
         const SizedBox(height: 12),
-        
+
         Center(
           child: TextButton(
             onPressed: busy ? null : onRestore,
@@ -674,6 +1040,295 @@ class _Content extends StatelessWidget {
             ),
             child: Text(l.paywall_restore_purchases),
           ),
+        ),
+
+        const SizedBox(height: 12),
+        _paywallLegalAcceptLine(context, l),
+      ],
+    );
+  }
+}
+
+/// Gratis-Test-Block inkl. optionalem DJ-B2B-Werbercode (Format + Lookup + eigener Code).
+class _PaywallTrialSection extends StatefulWidget {
+  const _PaywallTrialSection({
+    required this.busy,
+    required this.onStartTrial,
+  });
+
+  final bool busy;
+  final VoidCallback onStartTrial;
+
+  @override
+  State<_PaywallTrialSection> createState() => _PaywallTrialSectionState();
+}
+
+class _PaywallTrialSectionState extends State<_PaywallTrialSection> {
+  final _controller = TextEditingController();
+  final _focus = FocusNode();
+  bool _validB2b = false;
+  bool _showInvalid = false;
+  bool _locked = false;
+  bool _checking = false;
+  int _validateGen = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _bootstrap();
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  Future<void> _bootstrap() async {
+    final user = UserScope.userOf(context);
+    final already = DjB2bService.normalizeCode(user?.referredByCode);
+    if (already != null) {
+      if (!mounted) return;
+      setState(() {
+        // Feld zeigt nur die 6 Ziffern; „DJ“ steht als Prefix.
+        _controller.text = DjB2bService.digitsOnly(already);
+        _validB2b = true;
+        _locked = true;
+        _showInvalid = false;
+      });
+      await PendingReferralService.instance.saveCode(already);
+      return;
+    }
+    final pending = await PendingReferralService.instance.peekCode();
+    if (!mounted) return;
+    if (pending != null) {
+      _controller.text = DjB2bService.digitsOnly(pending);
+      await _validate(_controller.text, force: true);
+    }
+  }
+
+  Future<void> _onCodeChanged(String raw) async {
+    final digits = DjB2bService.digitsOnly(raw);
+    if (digits != raw) {
+      _controller.value = TextEditingValue(
+        text: digits,
+        selection: TextSelection.collapsed(offset: digits.length),
+      );
+    }
+    // Sofort Fehler zurücksetzen — erneuter Versuch bleibt möglich.
+    if (_showInvalid) {
+      setState(() => _showInvalid = false);
+    }
+    await _validate(digits);
+  }
+
+  Future<void> _validate(String raw, {bool force = false}) async {
+    if (_locked) return;
+    final gen = ++_validateGen;
+    final digits = DjB2bService.digitsOnly(raw);
+
+    if (digits.isEmpty) {
+      await PendingReferralService.instance.clear();
+      if (!mounted || gen != _validateGen) return;
+      setState(() {
+        _validB2b = false;
+        _showInvalid = false;
+        _checking = false;
+      });
+      return;
+    }
+
+    final normalized = DjB2bService.normalizeCode(digits);
+    if (normalized == null) {
+      // Während Tippens (noch nicht 6 Ziffern) keinen Fehler / Button bleibt nutzbar (2 Tage).
+      final showErr = digits.length >= 6 || force;
+      if (!mounted || gen != _validateGen) return;
+      setState(() {
+        _validB2b = false;
+        _showInvalid = showErr;
+        _checking = false;
+      });
+      if (showErr) await PendingReferralService.instance.clear();
+      return;
+    }
+
+    final own = DjB2bService.normalizeCode(
+      UserScope.userOf(context)?.djB2bCode,
+    );
+    if (own != null && own == normalized) {
+      await PendingReferralService.instance.clear();
+      if (!mounted || gen != _validateGen) return;
+      setState(() {
+        _validB2b = false;
+        _showInvalid = true;
+        _checking = false;
+      });
+      return;
+    }
+
+    setState(() => _checking = true);
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('referral_codes')
+          .doc(normalized)
+          .get();
+      if (!mounted || gen != _validateGen) return;
+      final uid = snap.data()?['uid'];
+      final ok = snap.exists &&
+          uid is String &&
+          uid.trim().isNotEmpty &&
+          uid != FirebaseAuth.instance.currentUser?.uid;
+      if (ok) {
+        await PendingReferralService.instance.saveCode(normalized);
+      } else {
+        await PendingReferralService.instance.clear();
+      }
+      if (!mounted || gen != _validateGen) return;
+      setState(() {
+        _validB2b = ok;
+        _showInvalid = !ok;
+        _checking = false;
+      });
+    } catch (e, st) {
+      debugLog('Paywall B2B code lookup failed: $e\n$st');
+      await PendingReferralService.instance.clear();
+      if (!mounted || gen != _validateGen) return;
+      setState(() {
+        _validB2b = false;
+        _showInvalid = true;
+        _checking = false;
+      });
+    }
+  }
+
+  InputDecoration _decoration(AppLocalizations l) {
+    const orange = UIConstants.appOrange;
+    final border = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(8),
+      borderSide: const BorderSide(color: orange, width: 1.5),
+    );
+    final errBorder = border.copyWith(
+      borderSide: const BorderSide(color: Colors.red, width: 1.5),
+    );
+    return InputDecoration(
+      labelText: l.paywall_b2b_code_label,
+      hintText: '123456',
+      labelStyle: const TextStyle(color: orange),
+      floatingLabelStyle: const TextStyle(color: orange),
+      hintStyle: const TextStyle(color: Colors.white38),
+      prefixIcon: const Icon(Icons.card_giftcard_outlined, color: orange),
+      // Intern immer DJ###### — Nutzer tippt nur die 6 Ziffern (auch AR/ZH-Tastatur).
+      prefixText: 'DJ',
+      prefixStyle: const TextStyle(
+        color: Colors.white,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 1.1,
+      ),
+      suffixIcon: _checking
+          ? const Padding(
+              padding: EdgeInsets.all(12),
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: UIConstants.appOrange,
+                ),
+              ),
+            )
+          : null,
+      enabledBorder: border,
+      focusedBorder: border.copyWith(
+        borderSide: const BorderSide(color: orange, width: 2),
+      ),
+      errorBorder: errBorder,
+      focusedErrorBorder: errBorder.copyWith(
+        borderSide: const BorderSide(color: Colors.red, width: 2),
+      ),
+      errorText: _showInvalid ? l.paywall_b2b_code_invalid : null,
+      errorStyle: const TextStyle(color: Colors.redAccent, fontSize: 12),
+      counterText: '',
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
+    final trialLabel =
+        _validB2b ? l.paywall_start_trial_button_b2b : l.paywall_start_trial_button;
+    // Nur bei nachgewiesen ungültigem Code aus — Feld bleibt editierbar für neuen Versuch.
+    final trialEnabled =
+        !widget.busy && !_checking && !_showInvalid;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: TextField(
+            controller: _controller,
+            focusNode: _focus,
+            enabled: !widget.busy && !_locked,
+            maxLength: 6,
+            keyboardType: TextInputType.number,
+            autocorrect: false,
+            enableSuggestions: false,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 1.1,
+            ),
+            decoration: _decoration(l),
+            onChanged: _onCodeChanged,
+            onEditingComplete: () {
+              _validate(_controller.text, force: true);
+              _focus.unfocus();
+            },
+          ),
+        ),
+        const SizedBox(height: 12),
+        OutlinedButton(
+          onPressed: trialEnabled ? widget.onStartTrial : null,
+          style: OutlinedButton.styleFrom(
+            backgroundColor: Colors.black,
+            foregroundColor: UIConstants.appOrange,
+            disabledForegroundColor: UIConstants.appOrange.withValues(alpha: 0.45),
+            side: const BorderSide(color: UIConstants.appOrange, width: 2),
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          child: Text(trialLabel),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          _validB2b
+              ? l.paywall_promo_access_hint_b2b
+              : l.paywall_promo_access_hint,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: Colors.white70,
+            fontSize: 13,
+            height: 1.35,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        if (!_validB2b) ...[
+          const SizedBox(height: 8),
+          Text(
+            l.paywall_trial_b2b_hint,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white54, fontSize: 12, height: 1.35),
+          ),
+        ],
+        const SizedBox(height: 16),
+        const Divider(
+          color: UIConstants.appOrange,
+          thickness: 1,
+          height: 1,
         ),
       ],
     );
@@ -698,6 +1353,7 @@ class _PlanCard extends StatelessWidget {
     required this.label,
     required this.package,
     this.trialText,
+    this.monthlyPriceText,
     this.savingsText,
     required this.selected,
     required this.recommended,
@@ -708,6 +1364,8 @@ class _PlanCard extends StatelessWidget {
   final Package? package;
   /// Testphase aus subscriptionOptions/freePhase (z. B. "4 Tage kostenlos").
   final String? trialText;
+  /// Umgerechneter Monatspreis bei Quartal/Halbjahr/Jahr.
+  final String? monthlyPriceText;
   final String? savingsText;
   final bool selected;
   final bool recommended;
@@ -723,11 +1381,9 @@ class _PlanCard extends StatelessWidget {
       materialLocale,
       platformLocale,
     );
-    final borderColor = selected ? UIConstants.appOrange : Colors.white12;
-    // Leichte Orange-Füllung bei Auswahl
-    final bg = selected 
-        ? UIConstants.appOrange.withValues(alpha: 0.15) 
-        : Colors.white.withValues(alpha: 0.05);
+    // Schwarzer Hintergrund, orangefarbener Rahmen (stärker bei Auswahl).
+    final borderColor = UIConstants.appOrange;
+    final bg = Colors.black;
 
     return InkWell(
       onTap: onTap,
@@ -739,8 +1395,8 @@ class _PlanCard extends StatelessWidget {
           color: bg,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: borderColor, 
-            width: selected ? 2 : 1
+            color: borderColor,
+            width: selected ? 2.5 : 1.5,
           ),
         ),
         child: Column(
@@ -782,6 +1438,18 @@ class _PlanCard extends StatelessWidget {
               ),
               textAlign: TextAlign.center,
             ),
+            if (monthlyPriceText != null && monthlyPriceText!.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(
+                monthlyPriceText!,
+                style: TextStyle(
+                  color: selected ? Colors.white70 : Colors.white54,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
             if (savingsText != null && savingsText!.isNotEmpty) ...[
               const SizedBox(height: 2),
               Text(

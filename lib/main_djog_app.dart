@@ -13,6 +13,9 @@ class _DJOgAppState extends State<DJOgApp> {
     super.initState();
     LocaleHelper.localeNotifier.addListener(_onLocaleChanged);
     TextScaleService.instance.userFactor.addListener(_onTextScaleChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      InternetConnectivityGuardService.instance.start();
+    });
   }
 
   @override
@@ -52,18 +55,14 @@ class _DJOgAppState extends State<DJOgApp> {
         final cappedSystem = math.min(systemScale, 1.1);
         final user = TextScaleService.instance.userFactor.value;
         final combined = (cappedSystem * user).clamp(0.65, 1.45);
-        Widget wrapped = MediaQuery(
-          data: media.copyWith(textScaler: TextScaler.linear(combined)),
-          child: rawChild,
+        final textDir = LanguageRegistry.textDirectionFor(locale.languageCode);
+        return Directionality(
+          textDirection: textDir,
+          child: MediaQuery(
+            data: media.copyWith(textScaler: TextScaler.linear(combined)),
+            child: rawChild,
+          ),
         );
-        // Hybrid-RTL: Globales Layout bleibt LTR (Hamburger/Icons/Navigation bleiben)
-        if (locale.languageCode == 'ar') {
-          wrapped = Directionality(
-            textDirection: widgets.TextDirection.ltr,
-            child: wrapped,
-          );
-        }
-        return wrapped;
       },
       theme: ThemeData(
         useMaterial3: true,

@@ -34,7 +34,7 @@
   }
 
   function loadLangScript(langCode, onDone, jsPath) {
-    var bust = window.IS_DEBUG ? ('?v=' + Date.now()) : '';
+    var bust = window.IS_DEBUG ? ('?v=' + Date.now()) : ('?v=' + (window.PWA_LANG_ASSET_V || window.VB_LANG_ASSET_V || '20260909l10n'));
     var scriptUrl = (jsPath && (jsPath.indexOf('/') !== -1 || jsPath.indexOf('.js') !== -1))
       ? (jsPath.indexOf('?') !== -1 ? jsPath : jsPath + bust)
       : '/vb/lang/' + langCode + '.js' + bust;
@@ -76,7 +76,7 @@
   }
 
   function syncDeleteAccountDom(lang) {
-    var t = (window.translations && window.translations[lang]) || (window.translations && window.translations['de']) || (window.translations && window.translations['en']) || {};
+    var t = (window.translations && window.translations[lang]) || (window.translations && window.translations['en']) || (window.translations && window.translations['de']) || {};
     if (lang) document.documentElement.lang = lang;
     document.querySelectorAll('[data-i18n]').forEach(function (el) {
       var key = el.getAttribute('data-i18n');
@@ -108,7 +108,7 @@
   }
 
   window.updateMainContent = function () {
-    var lang = (typeof window.getEffectiveLangForMenu === 'function') ? window.getEffectiveLangForMenu() : 'de';
+    var lang = (typeof window.getEffectiveLangForMenu === 'function') ? window.getEffectiveLangForMenu() : 'en';
     syncDeleteAccountDom(lang);
   };
 
@@ -117,8 +117,8 @@
   };
 
   window.getTranslation = function (key) {
-    var lang = (typeof window.getEffectiveLangForMenu === 'function') ? window.getEffectiveLangForMenu() : 'de';
-    var t = (window.translations && window.translations[lang]) || (window.translations && window.translations['de']) || {};
+    var lang = (typeof window.getEffectiveLangForMenu === 'function') ? window.getEffectiveLangForMenu() : 'en';
+    var t = (window.translations && window.translations[lang]) || (window.translations && window.translations['en']) || {};
     return t[key] != null ? t[key] : key;
   };
 

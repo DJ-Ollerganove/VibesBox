@@ -4,18 +4,27 @@ import 'dart:async';
 import '../l10n/app_localizations.dart';
 import '../services/active_party_service.dart';
 import '../services/history_pagination_service.dart';
+import '../services/open_wishes_visibility_service.dart';
 import '../services/results_per_page_service.dart';
+import '../services/wish_management_service.dart';
 import '../utils/formatting_utils.dart';
 import '../utils/ui_constants.dart';
-import '../widgets/sticky_pagination_layout.dart';
 import '../widgets/custom_page_header.dart';
 import '../widgets/no_active_party_display.dart';
 import '../utils/greeting_translator.dart';
 import '../utils/debug_log.dart';
 import '../utils/wish_paths.dart';
+import '../app_scaffold_messenger.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 class GesperrtPage extends StatefulWidget {
-  const GesperrtPage({super.key});
+  const GesperrtPage({
+    super.key,
+    this.isActive = false,
+  });
+
+  /// Tab sichtbar (IndexedStack) — erzwingt Reload beim Öffnen.
+  final bool isActive;
 
   @override
   State<GesperrtPage> createState() => _GesperrtPageState();
@@ -24,24 +33,40 @@ class GesperrtPage extends StatefulWidget {
 class _GesperrtPageState extends State<GesperrtPage> {
   int _currentPage = 1;
   int _resultsPerPage = ResultsPerPageService.defaultResultsPerPage;
-  String? _partyIdForPage;
-  VoidCallback? _partySessionListener;
-  final ScrollController _scrollController = ScrollController(); // ✅ Für Scrollen nach oben beim Seitenwechsel
+  final ScrollController _scrollController = ScrollController();
+  StreamSubscription? _visibilityKeepAlive;
+
+  /// Gleicher Cache-Pattern wie [RejectedWishesPage] — Stream nicht bei jedem Build neu.
+  String? _cachedPartyId;
+  Stream<QuerySnapshot>? _cachedRejectedWishesStream;
+  Stream<QuerySnapshot>? _cachedBlockedGuestsStream;
+
+  Stream<QuerySnapshot> _rejectedWishesStreamForParty(String partyId) {
+    if (_cachedPartyId != partyId) {
+      _cachedPartyId = partyId;
+      _cachedRejectedWishesStream =
+          WishManagementService.getWishesStream(partyId, 'rejected');
+      _cachedBlockedGuestsStream = FirebaseFirestore.instance
+          .collection('blocked_guests')
+          .where('party_id', isEqualTo: partyId)
+          .snapshots();
+    }
+    return _cachedRejectedWishesStream!;
+  }
+
+  Stream<QuerySnapshot> _blockedGuestsStreamForParty(String partyId) {
+    if (_cachedPartyId != partyId) {
+      _rejectedWishesStreamForParty(partyId);
+    }
+    return _cachedBlockedGuestsStream!;
+  }
 
   @override
   void initState() {
     super.initState();
-    _partyIdForPage = ActivePartyService.getStoredSession()?.partyId;
-    _partySessionListener = () {
-      final nextPartyId = ActivePartyService.storedSessionNotifier.value?.partyId;
-      if (nextPartyId == _partyIdForPage) return;
-      if (!mounted) return;
-      setState(() {
-        _partyIdForPage = nextPartyId;
-        _currentPage = 1;
-      });
-    };
-    ActivePartyService.storedSessionNotifier.addListener(_partySessionListener!);
+    OpenWishesVisibilityService.ensureWatching();
+    _visibilityKeepAlive =
+        OpenWishesVisibilityService.watch().listen((_) {});
     ResultsPerPageService.load().then((v) {
       if (mounted) setState(() => _resultsPerPage = v);
     });
@@ -49,10 +74,8 @@ class _GesperrtPageState extends State<GesperrtPage> {
 
   @override
   void dispose() {
-    if (_partySessionListener != null) {
-      ActivePartyService.storedSessionNotifier.removeListener(_partySessionListener!);
-    }
-    _scrollController.dispose(); // ✅ ScrollController aufräumen
+    unawaited(_visibilityKeepAlive?.cancel());
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -93,7 +116,7 @@ class _GesperrtPageState extends State<GesperrtPage> {
   /// Baut die Paginierungs-Buttons mit Rot/Schwarz Design (passend zu Gesperrt-Gästen)
   Widget _buildPaginationButtons(int currentPage, int totalPages, BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
 
     if (totalPages <= 1) {
       return const SizedBox.shrink();
@@ -163,17 +186,26 @@ class _GesperrtPageState extends State<GesperrtPage> {
     );
   }
 
-  /// Clientseitig: Party + abgelaufene temporäre Sperren (ohne Extra-Firestore-Roundtrips).
+  /// Clientseitig: Party-Treffer über Feld ODER Doc-ID (`clientId_partyId`).
   List<QueryDocumentSnapshot> _filterBlockedGuestsSync(
     List<QueryDocumentSnapshot> blockedGuests,
     String partyId,
   ) {
     final now = DateTime.now();
+    final suffix = '_$partyId';
     return blockedGuests.where((doc) {
       final data = doc.data() as Map<String, dynamic>;
-      final docPartyId = data['party_id'] as String?;
-      if (docPartyId != partyId) return false;
-      if (data['block_status'] == 'temporary') {
+      final docPartyId =
+          (data['party_id'] ?? data['partyId'] ?? '').toString().trim();
+      final idMatch = doc.id.endsWith(suffix);
+      if (docPartyId != partyId && !idMatch) return false;
+      final blockStatus = (data['block_status'] ?? '').toString().trim();
+      if (blockStatus.isNotEmpty &&
+          !const {'party_specific', 'permanent', 'temporary'}
+              .contains(blockStatus)) {
+        return false;
+      }
+      if (blockStatus == 'temporary') {
         final blockedUntil = data['blocked_until'] as Timestamp?;
         if (blockedUntil != null && now.isAfter(blockedUntil.toDate())) {
           return false;
@@ -181,6 +213,132 @@ class _GesperrtPageState extends State<GesperrtPage> {
       }
       return true;
     }).toList();
+  }
+
+  String _guestDisplayName(Map<String, dynamic> data) {
+    for (final key in ['name', 'guest_name', 'guest', 'blocked_as_name']) {
+      final v = (data[key] ?? '').toString().trim();
+      if (v.isNotEmpty) return v;
+    }
+    return '';
+  }
+
+  /// blocked_guests + blocked_devices + Abgelehnt-Wünsche (user_blocked).
+  List<_BlockedGuestRow> _mergeBlockedGuestRows({
+    required String partyId,
+    required List<QueryDocumentSnapshot> fromBlockedGuests,
+    required List<QueryDocumentSnapshot> fromBlockedDevices,
+    required List<QueryDocumentSnapshot> rejectedWishDocs,
+  }) {
+    final byClient = <String, _BlockedGuestRow>{};
+
+    void upsert({
+      required String docId,
+      required String name,
+      required String clientId,
+      Timestamp? blockedAt,
+      String? djId,
+    }) {
+      final key = clientId.isNotEmpty
+          ? clientId
+          : (name.isNotEmpty ? 'name:$name' : 'doc:$docId');
+      if (key.startsWith('doc:') && name.isEmpty && clientId.isEmpty) return;
+      final existing = byClient[key];
+      if (existing != null) {
+        if (existing.name.isEmpty && name.isNotEmpty) {
+          byClient[key] = _BlockedGuestRow(
+            docId: existing.docId,
+            name: name,
+            clientId: existing.clientId ??
+                (clientId.isNotEmpty ? clientId : null),
+            blockedAt: existing.blockedAt ?? blockedAt,
+            djId: existing.djId ?? djId,
+          );
+        }
+        return;
+      }
+      byClient[key] = _BlockedGuestRow(
+        docId: docId,
+        name: name,
+        clientId: clientId.isNotEmpty ? clientId : null,
+        blockedAt: blockedAt,
+        djId: djId,
+      );
+    }
+
+    for (final doc in fromBlockedGuests) {
+      final data = doc.data() as Map<String, dynamic>;
+      final clientId = (data['client_id'] ?? '').toString().trim();
+      final djRaw = (data['dj_id'] ?? '').toString().trim();
+      upsert(
+        docId: doc.id,
+        name: _guestDisplayName(data),
+        clientId: clientId,
+        blockedAt: data['blocked_at'] is Timestamp
+            ? data['blocked_at'] as Timestamp
+            : null,
+        djId: djRaw.isEmpty ? null : djRaw,
+      );
+    }
+
+    for (final doc in fromBlockedDevices) {
+      final data = doc.data() as Map<String, dynamic>;
+      final docParty =
+          (data['party_id'] ?? data['partyId'] ?? '').toString().trim();
+      if (docParty.isNotEmpty && docParty != partyId) continue;
+      final clientId =
+          (data['client_id'] ?? data['device_id'] ?? doc.id).toString().trim();
+      final djRaw = (data['dj_id'] ?? '').toString().trim();
+      upsert(
+        docId: clientId.isNotEmpty ? '${clientId}_$partyId' : doc.id,
+        name: _guestDisplayName(data),
+        clientId: clientId,
+        blockedAt: data['blocked_at'] is Timestamp
+            ? data['blocked_at'] as Timestamp
+            : null,
+        djId: djRaw.isEmpty ? null : djRaw,
+      );
+    }
+
+    for (final wish in rejectedWishDocs) {
+      final data = wish.data() as Map<String, dynamic>;
+      final rr = (data['rejection_reason'] ?? '').toString();
+      final auto = data['auto_rejected_by_block'] == true;
+      if (rr != 'user_blocked' && !auto) continue;
+
+      final clientId = (data['client_id'] ?? '').toString().trim();
+      final name = _guestDisplayName(data);
+      if (clientId.isEmpty && name.isEmpty) continue;
+
+      Timestamp? blockedAt;
+      final raw = data['rejectedAt'] ?? data['rejected_at'] ?? data['createdAt'];
+      if (raw is Timestamp) blockedAt = raw;
+
+      upsert(
+        docId: clientId.isNotEmpty
+            ? '${clientId}_$partyId'
+            : 'name_${name}_$partyId',
+        name: name,
+        clientId: clientId,
+        blockedAt: blockedAt,
+        djId: null,
+      );
+    }
+
+    final rows = byClient.values.toList()
+      ..sort((a, b) {
+        final at = a.blockedAt?.toDate() ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final bt = b.blockedAt?.toDate() ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return bt.compareTo(at);
+      });
+    debugLog(
+      'GesperrtPage: merge party=$partyId '
+      'guests=${fromBlockedGuests.length} '
+      'devices=${fromBlockedDevices.length} '
+      'wishes=${rejectedWishDocs.length} '
+      'rows=${rows.length}',
+    );
+    return rows;
   }
 
   String _formatDateTime(DateTime date) {
@@ -289,7 +447,7 @@ class _GesperrtPageState extends State<GesperrtPage> {
     } catch (e) {
       debugLog('❌ GesperrtPage: Fehler beim Laden der Wünsche: $e');
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${l10n.error_loading_info} $e'),
             backgroundColor: UIConstants.frameGesperrt,
@@ -301,7 +459,7 @@ class _GesperrtPageState extends State<GesperrtPage> {
 
     if (!context.mounted) return;
 
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
 
     showDialog(
       context: context,
@@ -530,7 +688,7 @@ class _GesperrtPageState extends State<GesperrtPage> {
     String partyId,
   ) async {
     final l10n = AppLocalizations.of(context)!;
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
     
     // ✅ Dialog: "Gast wieder freigeben?"
     final confirmed = await showDialog<bool>(
@@ -600,65 +758,90 @@ class _GesperrtPageState extends State<GesperrtPage> {
         debugLog('✅ ENTSPERR: Dokument aus blocked_devices gelöscht');
       }
 
-      // ✅ Stelle automatisch abgelehnte Wünsche wieder auf "pending"
-      // WICHTIG: Nur Wünsche mit rejection_reason: 'user_blocked' wiederherstellen!
-      // Manuell abgelehnte Songs (ohne rejection_reason) bleiben rejected
+      // Nur Wünsche wieder öffnen, die durch die Sperre geschlossen wurden.
+      // Manuell Abgelehnte (andere rejection_reason, kein auto_rejected_by_block)
+      // bleiben rejected — auch wenn sie vom selben Gast sind.
       try {
         final batch = FirebaseFirestore.instance.batch();
         int restoredCount = 0;
-        
+
         if (clientId != null && clientId.isNotEmpty && partyId.isNotEmpty) {
-          debugLog('🔓 ENTSPERR: Suche nach Wünschen mit rejection_reason: user_blocked');
-          
-          // ✅ PRÄZISE QUERY: Nur Wünsche mit rejection_reason: 'user_blocked'
-          final wishesQuery = WishPaths.partyWishes(partyId)
+          debugLog(
+            '🔓 ENTSPERR: Suche durch Sperre geschlossene Wünsche (user_blocked)',
+          );
+
+          // Alle rejected dieses Gasts laden, dann strikt filtern:
+          // nur user_blocked und/oder auto_rejected_by_block.
+          final rejectedSnap = await WishPaths.partyWishes(partyId)
               .where('client_id', isEqualTo: clientId)
               .where('status', isEqualTo: 'rejected')
-              .where('rejection_reason', isEqualTo: 'user_blocked');
-          
-          final wishesSnapshot = await wishesQuery.get();
-          debugLog('🔓 ENTSPERR: Gefundene Wünsche mit rejection_reason: user_blocked: ${wishesSnapshot.docs.length}');
-          
-          for (final wishDoc in wishesSnapshot.docs) {
+              .get();
+          final wishDocs = rejectedSnap.docs.where((doc) {
+            final d = doc.data();
+            final rr = d['rejection_reason'] as String?;
+            final auto = d['auto_rejected_by_block'] == true;
+            return rr == 'user_blocked' || auto;
+          }).toList();
+
+          debugLog(
+            '🔓 ENTSPERR: rejected gesamt=${rejectedSnap.docs.length}, '
+            'nur Block-Rejects=${wishDocs.length}',
+          );
+
+          for (final wishDoc in wishDocs) {
             final wishData = wishDoc.data();
             final currentStatus = wishData['status'] as String?;
             final rejectionReason = wishData['rejection_reason'] as String?;
-            
-            // ✅ SICHERHEITS-CHECK: Nur Wünsche mit rejection_reason: 'user_blocked' wiederherstellen
-            if (currentStatus == 'rejected' && rejectionReason == 'user_blocked') {
+            final autoBlk = wishData['auto_rejected_by_block'] == true;
+
+            // Doppelte Absicherung: nie manuelle Ablehnungen öffnen.
+            if (currentStatus == 'rejected' &&
+                (rejectionReason == 'user_blocked' || autoBlk)) {
               batch.update(wishDoc.reference, {
                 'status': 'pending',
-                'rejection_reason': FieldValue.delete(), // ✅ Entferne rejection_reason
-                'auto_rejected_by_block': FieldValue.delete(), // Kompatibilität
+                'rejection_reason': FieldValue.delete(),
+                'auto_rejected_by_block': FieldValue.delete(),
                 'rejectedAt': FieldValue.delete(),
+                'rejected_at': FieldValue.delete(),
               });
               restoredCount++;
-              debugLog('✅ ENTSPERR: Wunsch ${wishDoc.id} wird wiederhergestellt (pending)');
+              debugLog(
+                '✅ ENTSPERR: Wunsch ${wishDoc.id} → pending (Block-Reject)',
+              );
             } else {
-              debugLog('⚠️ ENTSPERR: Wunsch ${wishDoc.id} übersprungen (Status: $currentStatus, Reason: $rejectionReason)');
+              debugLog(
+                '⚠️ ENTSPERR: Wunsch ${wishDoc.id} übersprungen '
+                '(Status: $currentStatus, Reason: $rejectionReason, auto: $autoBlk)',
+              );
             }
           }
-          
+
           if (restoredCount > 0) {
             await batch.commit();
-            debugLog('✅✅✅ ENTSPERR: $restoredCount Wünsche wiederhergestellt (pending)');
-            
-            // ✅ SnackBar mit Anzahl der reaktivierten Songs
+            debugLog(
+              '✅✅✅ ENTSPERR: $restoredCount Wünsche wiederhergestellt (pending)',
+            );
+
             if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
+              showVibesSnackBar(
+                context,
                 SnackBar(
-                  content: Text(l10n.unblock_user_songs_reactivated(name, restoredCount)),
+                  content: Text(
+                    l10n.unblock_user_songs_reactivated(name, restoredCount),
+                  ),
                   backgroundColor: UIConstants.frameGespielt,
                   duration: const Duration(seconds: 3),
                 ),
               );
             }
           } else {
-            debugLog('ℹ️ ENTSPERR: Keine Wünsche mit rejection_reason: user_blocked gefunden');
-            
-            // ✅ SnackBar auch wenn keine Songs reaktiviert wurden
+            debugLog(
+              'ℹ️ ENTSPERR: Keine durch Sperre geschlossenen Wünsche gefunden',
+            );
+
             if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
+              showVibesSnackBar(
+                context,
                 SnackBar(
                   content: Text(l10n.unblock_user_wishes_restored(name)),
                   backgroundColor: UIConstants.frameGespielt,
@@ -668,18 +851,28 @@ class _GesperrtPageState extends State<GesperrtPage> {
             }
           }
         } else {
-          debugLog('⚠️ ENTSPERR: clientId oder partyId fehlt, kann keine Wünsche wiederherstellen');
+          debugLog(
+            '⚠️ ENTSPERR: clientId oder partyId fehlt, kann keine Wünsche wiederherstellen',
+          );
         }
       } catch (e) {
         debugLog('⚠️ ENTSPERR: Fehler beim Wiederherstellen der Wünsche: $e');
-        // Fehler nicht fatal - Sperre wurde bereits gelöscht
+        if (context.mounted) {
+          showVibesSnackBar(
+            context,
+            SnackBar(
+              content: Text('${l10n.error_unblocking} $e'),
+              backgroundColor: UIConstants.frameGesperrt,
+            ),
+          );
+        }
       }
 
-      // ✅ SnackBar wird bereits in der restoredCount-Logik angezeigt
+      // Liste aktualisiert sich über Firestore-Streams von selbst.
     } catch (e) {
       debugLog('❌ ENTSPERR: Fehler beim Freigeben: $e');
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${l10n.error_unblocking} $e'),
             backgroundColor: UIConstants.frameGesperrt,
@@ -688,6 +881,7 @@ class _GesperrtPageState extends State<GesperrtPage> {
       }
     }
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -698,19 +892,35 @@ class _GesperrtPageState extends State<GesperrtPage> {
       body: SafeArea(
         child: Column(
           children: [
-            // Titelleiste mit CustomPageHeader (erstes Kind)
             CustomPageHeader(
               icon: Icons.block,
               title: l10n.blocked_guests,
             ),
-            // Content-Bereich (zweites Kind)
             Expanded(
-              child: StickyPaginationLayout(
-                currentPage: _currentPage > 0 ? _currentPage : 1,
-                totalPages: 1,
-                onPrevious: null,
-                onNext: null,
-                child: _buildBlockedGuestsBody(context, l10n),
+              // Party wie Offen: Visibility → Session → Heartbeat (nicht nur Visibility).
+              child: ValueListenableBuilder(
+                valueListenable:
+                    OpenWishesVisibilityService.visibilityNotifier,
+                builder: (context, visibility, _) {
+                  return ValueListenableBuilder(
+                    valueListenable:
+                        ActivePartyService.storedSessionNotifier,
+                    builder: (context, session, _) {
+                      final partyId =
+                          (OpenWishesVisibilityService.resolveDjWishPartyId() ??
+                                  visibility?.partyId ??
+                                  session?.partyId ??
+                                  ActivePartyService.currentPartyId ??
+                                  '')
+                              .trim();
+
+                      if (partyId.isEmpty) {
+                        return const Center(child: NoActivePartyDisplay());
+                      }
+                      return _buildBlockedGuestsBody(context, l10n, partyId);
+                    },
+                  );
+                },
               ),
             ),
           ],
@@ -719,162 +929,187 @@ class _GesperrtPageState extends State<GesperrtPage> {
     );
   }
 
-  Widget _buildBlockedGuestsBody(BuildContext context, AppLocalizations l10n) {
-    final partyId = _partyIdForPage;
-    if (partyId == null || partyId.isEmpty) {
-      return const NoActivePartyDisplay();
-    }
-
+  Widget _buildBlockedGuestsBody(
+    BuildContext context,
+    AppLocalizations l10n,
+    String partyId,
+  ) {
     return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('blocked_guests')
-          .where('party_id', isEqualTo: partyId)
-          .where(
-            'block_status',
-            whereIn: ['party_specific', 'permanent', 'temporary'],
-          )
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          debugLog('❌ GesperrtPage: Stream-Fehler: ${snapshot.error}');
-          debugLog('   Party ID: $partyId');
-          return Center(
-            child: Text(
-              '${l10n.error_loading_info} ${snapshot.error}',
-              style: const TextStyle(color: UIConstants.frameGesperrt),
-            ),
-          );
-        }
-
-        if (!snapshot.hasData) {
-          return const Center(
-            child: CircularProgressIndicator(color: UIConstants.appOrange),
-          );
-        }
-
-        final filteredGuests = _filterBlockedGuestsSync(
-          snapshot.data!.docs,
-          partyId,
-        );
-
-        if (filteredGuests.isEmpty) {
-          return SingleChildScrollView(
-            padding: EdgeInsets.only(
-              left: 16,
-              right: 16,
-              top: 16,
-              bottom: MediaQuery.of(context).viewInsets.bottom + 16,
-            ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const SizedBox(height: 100),
-                const Icon(
-                  Icons.check_circle,
-                  size: 64,
-                  color: UIConstants.frameGespielt,
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  l10n.gesperrt_page_empty_active_party,
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        color: UIConstants.colorGrey,
-                      ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: UIConstants.kFooterPadding * 2),
-              ],
-            ),
-          );
-        }
-
-        final totalPages = HistoryPaginationService.calculateTotalPages(
-          filteredGuests.length,
-          itemsPerPage: _resultsPerPage,
-        );
-
-        if (_currentPage > totalPages && totalPages > 0) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) {
-              setState(() {
-                _currentPage = totalPages;
-              });
-            }
-          });
-        }
-
-        final paginatedGuests = HistoryPaginationService.getItemsForPage(
-          filteredGuests,
-          _currentPage > 0 ? _currentPage : 1,
-          itemsPerPage: _resultsPerPage,
-        );
-
-        final bottomPadding = totalPages > 1 ? 8.0 : 150.0;
-
-        return SingleChildScrollView(
-          controller: _scrollController,
-          padding: EdgeInsets.only(
-            left: 16,
-            right: 16,
-            top: 16,
-            bottom: MediaQuery.of(context).viewInsets.bottom + 16,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 24),
-              RepaintBoundary(
-                child: ListView.separated(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  padding: EdgeInsets.only(
-                    top: 8.0,
-                    bottom: bottomPadding,
+      stream: _blockedGuestsStreamForParty(partyId),
+      builder: (context, blockedSnap) {
+        return StreamBuilder<QuerySnapshot>(
+          stream: _rejectedWishesStreamForParty(partyId),
+          builder: (context, wishesSnap) {
+            final err = blockedSnap.error ?? wishesSnap.error;
+            if (err != null) {
+              debugLog('GesperrtPage stream error: $err');
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(
+                    '${l10n.error_loading_info} $err',
+                    style: const TextStyle(color: UIConstants.frameGesperrt),
+                    textAlign: TextAlign.center,
                   ),
-                  itemCount: paginatedGuests.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 8),
-                  itemBuilder: (context, index) {
-                    final doc = paginatedGuests[index];
-                    final data = doc.data() as Map<String, dynamic>;
-                    final name = data['name'] as String? ?? l10n.unknown;
-                    final clientId = data['client_id'] as String?;
-                    final blockedAt = data['blocked_at'] as Timestamp?;
-                    final djId = data['dj_id'] as String?;
-
-                    return _BlockedGuestCard(
-                      key: ValueKey(doc.id),
-                      name: name,
-                      clientId: clientId,
-                      blockedAt: blockedAt,
-                      djId: djId,
-                      onShowInfo: () => _showGuestInfoDialog(
-                        context,
-                        name,
-                        clientId,
-                        data,
-                        partyId,
-                        blockedDocId: doc.id,
-                      ),
-                      onUnblock: () => _unblockGuest(
-                        context,
-                        doc.id,
-                        clientId,
-                        name,
-                        partyId,
-                      ),
-                    );
-                  },
                 ),
-              ),
-              if (totalPages > 1)
-                _buildPaginationButtons(_currentPage, totalPages, context),
-              const SizedBox(height: UIConstants.kFooterPadding * 2),
-            ],
-          ),
+              );
+            }
+
+            if (wishesSnap.connectionState == ConnectionState.waiting &&
+                !wishesSnap.hasData) {
+              return const Center(
+                child: CircularProgressIndicator(color: UIConstants.appOrange),
+              );
+            }
+
+            final fromGuests = _filterBlockedGuestsSync(
+              blockedSnap.data?.docs ?? const [],
+              partyId,
+            );
+            final rows = _mergeBlockedGuestRows(
+              partyId: partyId,
+              fromBlockedGuests: fromGuests,
+              fromBlockedDevices: const [],
+              rejectedWishDocs: wishesSnap.data?.docs ?? const [],
+            );
+
+            return _buildBlockedGuestsList(context, l10n, partyId, rows);
+          },
         );
       },
     );
   }
+
+  Widget _buildBlockedGuestsList(
+    BuildContext context,
+    AppLocalizations l10n,
+    String partyId,
+    List<_BlockedGuestRow> rows,
+  ) {
+    if (rows.isEmpty) {
+      return SingleChildScrollView(
+        padding: EdgeInsets.only(
+          left: 16,
+          right: 16,
+          top: 16,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+        ),
+        child: Column(
+          children: [
+            const SizedBox(height: 24),
+            const Icon(
+              Icons.check_circle,
+              size: 64,
+              color: UIConstants.frameGespielt,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              l10n.gesperrt_page_empty_active_party,
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    color: UIConstants.colorGrey,
+                  ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: UIConstants.kFooterPadding * 2),
+          ],
+        ),
+      );
+    }
+
+    final totalPages = HistoryPaginationService.calculateTotalPages(
+      rows.length,
+      itemsPerPage: _resultsPerPage,
+    );
+    final page = (_currentPage < 1)
+        ? 1
+        : (_currentPage > totalPages ? totalPages : _currentPage);
+    if (page != _currentPage) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _currentPage = page);
+      });
+    }
+
+    final paginatedGuests = HistoryPaginationService.getItemsForPage(
+      rows,
+      page,
+      itemsPerPage: _resultsPerPage,
+    );
+    final bottomPadding = totalPages > 1 ? 8.0 : 150.0;
+
+    return SingleChildScrollView(
+      controller: _scrollController,
+      padding: EdgeInsets.only(
+        left: 16,
+        right: 16,
+        top: 16,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          RepaintBoundary(
+            child: ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              padding: EdgeInsets.only(top: 8.0, bottom: bottomPadding),
+              itemCount: paginatedGuests.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 8),
+              itemBuilder: (context, index) {
+                final row = paginatedGuests[index];
+                return _BlockedGuestCard(
+                  key: ValueKey(row.docId),
+                  name: row.name.isNotEmpty ? row.name : l10n.unknown,
+                  clientId: row.clientId,
+                  blockedAt: row.blockedAt,
+                  djId: row.djId,
+                  onShowInfo: () => _showGuestInfoDialog(
+                    context,
+                    row.name.isNotEmpty ? row.name : l10n.unknown,
+                    row.clientId,
+                    {
+                      'name': row.name,
+                      'client_id': row.clientId,
+                      'dj_id': row.djId,
+                      'party_id': partyId,
+                      'blocked_at': row.blockedAt,
+                    },
+                    partyId,
+                    blockedDocId: row.docId,
+                  ),
+                  onUnblock: () => _unblockGuest(
+                    context,
+                    row.docId,
+                    row.clientId,
+                    row.name,
+                    partyId,
+                  ),
+                );
+              },
+            ),
+          ),
+          if (totalPages > 1)
+            _buildPaginationButtons(_currentPage, totalPages, context),
+          const SizedBox(height: UIConstants.kFooterPadding * 2),
+        ],
+      ),
+    );
+  }
+}
+
+class _BlockedGuestRow {
+  const _BlockedGuestRow({
+    required this.docId,
+    required this.name,
+    required this.clientId,
+    required this.blockedAt,
+    required this.djId,
+  });
+
+  final String docId;
+  final String name;
+  final String? clientId;
+  final Timestamp? blockedAt;
+  final String? djId;
 }
 
 /// Karte + Historie-Badge per Firestore-Stream (kein Future pro Listen-Refresh).

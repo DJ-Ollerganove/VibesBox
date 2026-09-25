@@ -1399,7 +1399,22 @@ exports.saveToMusicDatabase = onRequest({
       throw limitError;
     }
 
-    const { spotify_id, title, artist, duration_ms, genres, dj_id, artist_ids } = req.body;
+    const {
+      spotify_id,
+      title,
+      artist,
+      duration_ms,
+      genres,
+      dj_id,
+      artist_ids,
+      camelot,
+      key,
+      musical_key,
+      musicalKey,
+      bpm,
+      duration,
+      market,
+    } = req.body;
 
     if (!title || !artist) {
       res.status(400).json({ error: 'title und artist sind erforderlich' });
@@ -1595,6 +1610,26 @@ exports.saveToMusicDatabase = onRequest({
       if (duration_ms != null && duration_ms !== undefined) {
         titleData.duration_ms = duration_ms;
       }
+      try {
+        const { normalizeCamelot, normalizeBpm, durationMsFromLabel } = require('./music_catalog');
+        const cam = normalizeCamelot(camelot);
+        const mk = String(key || musical_key || musicalKey || '').trim().slice(0, 12);
+        const bpmN = normalizeBpm(bpm);
+        const durLabel = String(duration || '').trim().slice(0, 12);
+        const marketN = String(market || '').trim().toLowerCase().slice(0, 12);
+        if (cam) titleData.camelot = cam;
+        if (mk) titleData.musical_key = mk;
+        if (bpmN != null) titleData.bpm = bpmN;
+        if (durLabel) titleData.duration_label = durLabel;
+        if (!titleData.duration_ms && durLabel) {
+          const fromLabel = durationMsFromLabel(durLabel);
+          if (fromLabel != null) titleData.duration_ms = fromLabel;
+        }
+        if (marketN) titleData.markets = [marketN];
+        titleData.setlist_suggest_count = 0;
+      } catch (metaErr) {
+        console.warn('saveToMusicDatabase mix-meta skip:', metaErr && metaErr.message);
+      }
       
       const titleRef = await db.collection('wunschbox_titel').add(titleData);
       titleId = titleRef.id;
@@ -1619,6 +1654,20 @@ exports.saveToMusicDatabase = onRequest({
       }
       if (duration_ms != null && duration_ms !== undefined && !titleData.duration_ms) {
         updateData.duration_ms = duration_ms;
+      }
+
+      try {
+        const { mergeTitleMixMeta } = require('./music_catalog');
+        await mergeTitleMixMeta(titleDoc.ref, titleData, {
+          camelot,
+          key: key || musical_key || musicalKey,
+          bpm,
+          duration,
+          duration_ms,
+          market,
+        });
+      } catch (metaErr) {
+        console.warn('saveToMusicDatabase mergeTitleMixMeta:', metaErr && metaErr.message);
       }
       
       // Initialisiere global_wish_count falls nicht vorhanden
@@ -3117,6 +3166,14 @@ async function assertCallerIsAdminOrDj(request) {
   if (!request.auth) {
     throw new HttpsError('unauthenticated', 'Authentication required.');
   }
+  const token = request.auth.token || {};
+  if (token.role === 'dj_browser') {
+    const ownerUid = String(token.ownerUid || '').trim();
+    if (!ownerUid) {
+      throw new HttpsError('failed-precondition', 'DJ-Browser: Besitzer fehlt.');
+    }
+    return ownerUid;
+  }
   const uid = request.auth.uid;
   const userSnap = await db.collection('users').doc(uid).get();
   if (!userSnap.exists) {
@@ -3276,7 +3333,32 @@ exports.translateGreeting = onCall(
     secrets: [GEMINI_API_KEY],
   },
   async (request) => {
-    await assertCallerIsAdminOrDj(request);
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Authentication required.');
+    }
+    const token = request.auth.token || {};
+    let rateUid = request.auth.uid;
+    if (token.role === 'rb_tool') {
+      const ownerUid = String(token.ownerUid || '').trim();
+      const sessionId = String(token.sessionId || '').trim();
+      if (!ownerUid || !sessionId) {
+        throw new HttpsError('permission-denied', 'Session ungültig.');
+      }
+      const sess = await db.collection('rb_tool_sessions').doc(sessionId).get();
+      if (!sess.exists || sess.data()?.active !== true || String(sess.data()?.ownerUid || '') !== ownerUid) {
+        throw new HttpsError('permission-denied', 'Session ungültig.');
+      }
+      const owner = await db.collection('users').doc(ownerUid).get();
+      if (owner.data()?.show_greeting_translations === false) {
+        return { skipped: true, translatedText: null };
+      }
+      rateUid = ownerUid;
+    } else {
+      await assertCallerIsAdminOrDj(request);
+      if (token.role === 'dj_browser') {
+        rateUid = String(token.ownerUid || request.auth.uid).trim();
+      }
+    }
 
     const data = request.data || {};
     const text = typeof data.text === 'string' ? data.text.trim() : '';
@@ -3300,9 +3382,8 @@ exports.translateGreeting = onCall(
       return { skipped: true, translatedText: null };
     }
 
-    const uid = request.auth.uid;
     const hour = Math.floor(Date.now() / 3600000);
-    await assertAuthEmailRateLimit(`greeting_tr_${uid}_${hour}`, 300);
+    await assertAuthEmailRateLimit(`greeting_tr_${rateUid}_${hour}`, 300);
 
     const apiKey = (GEMINI_API_KEY.value() || '').trim();
     if (!apiKey) {
@@ -3330,6 +3411,62 @@ exports.translateGreeting = onCall(
         'Übersetzung fehlgeschlagen. Bitte später erneut versuchen.',
       );
     }
+  },
+);
+
+/**
+ * Legt die Gruß-Übersetzung einmal am Wunsch ab, auch wenn der DJ die Anzeige aus hat.
+ * Kein zweiter Lauf: nur bei neuem Wunsch mit Gruß.
+ */
+exports.storeWishGreetingTranslation = onDocumentCreated(
+  {
+    document: 'parties/{partyId}/wishes/{wishId}',
+    region: 'us-central1',
+    timeoutSeconds: 30,
+    memory: '256MiB',
+    secrets: [GEMINI_API_KEY],
+  },
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+    const data = snap.data() || {};
+    const greeting = String(data.greeting || data.gruss || data.message || '').trim();
+    if (!greeting || greeting.length > 200) return;
+    if (String(data.greeting_translation_for || '') === greeting) return;
+    let target = 'de';
+    try {
+      const party = await db.collection('parties').doc(event.params.partyId).get();
+      const owner = String(party.data()?.created_by || data.dj_id || '').trim();
+      if (owner) {
+        const user = await db.collection('users').doc(owner).get();
+        const lang = user.data()?.language || user.data()?.selected_language || 'de';
+        target = normalizeGreetingLang(String(lang));
+      }
+    } catch (err) {
+      console.error('storeWishGreetingTranslation: language', err?.message || err);
+    }
+    const patch = {
+      greeting_translation_for: greeting,
+      greeting_translation_lang: target,
+      greeting_translation: '',
+    };
+    const apiKey = (GEMINI_API_KEY.value() || '').trim();
+    if (apiKey) {
+      try {
+        const translated = await translateGreetingViaGemini(
+          apiKey,
+          greeting,
+          target,
+          null,
+        );
+        if (translated && translated !== greeting) {
+          patch.greeting_translation = String(translated).slice(0, 500);
+        }
+      } catch (err) {
+        console.error('storeWishGreetingTranslation', err?.message || err);
+      }
+    }
+    await snap.ref.set(patch, { merge: true });
   },
 );
 
@@ -3510,7 +3647,8 @@ exports.revenueCatWebhook = functions.runWith({ secrets: [REVENUECAT_WEBHOOK_SEC
       country_code,
       transaction_id,
       expiration_at_ms,
-      purchased_at_ms
+      purchased_at_ms,
+      store,
     } = event;
 
     // Wir erwarten die Firebase UID als app_user_id
@@ -3548,7 +3686,9 @@ exports.revenueCatWebhook = functions.runWith({ secrets: [REVENUECAT_WEBHOOK_SEC
       await userRef.update({
         proUntil: expirationDate,
         isPro: isPro,
-        lastPaymentProvider: 'RevenueCat', // Info-Feld
+        planType: isPro ? 'pro' : (userData?.planType || 'free'),
+        lastPaymentProvider: 'RevenueCat',
+        lastPaymentStore: store || null,
         updated_at: now
       });
       console.log(`✅ User ${app_user_id}: proUntil aktualisiert auf ${expirationDate.toDate().toISOString()} (isPro: ${isPro})`);
@@ -3585,6 +3725,7 @@ exports.revenueCatWebhook = functions.runWith({ secrets: [REVENUECAT_WEBHOOK_SEC
         createdAt: now,
         type: type, // 'INITIAL_PURCHASE', 'RENEWAL', etc.
         source: 'REVENUECAT',
+        store: store || null,
         transactionId: transaction_id || '',
         amountGross: amountGross,
         currency: currency || 'USD',
@@ -3599,58 +3740,19 @@ exports.revenueCatWebhook = functions.runWith({ secrets: [REVENUECAT_WEBHOOK_SEC
       console.log(`✅ History-Eintrag erstellt: ${historyId} für User ${app_user_id}. Gross: ${amountGross}, NetPayout: ${netPayout.toFixed(2)}`);
     }
 
-    // 4. Referral-Bonus-Check
-    // Wenn der User geworben wurde, erhält der Werber 30 Tage Pro
+    // 4. DJ B2B — Bonus bei erster Zahlung eines Geworbenen (+14 Tage Hold)
     const userRefDoc = await userRef.get();
     const userData = userRefDoc.data();
-    const referredByUid = userData ? userData.referredBy : null;
-
-    if (referredByUid) {
-      // Prüfe, ob für diesen User schon einmal ein Bonus vergeben wurde (optional, um Missbrauch zu vermeiden)
-      // Wir prüfen einfach, ob es einen History-Eintrag vom Typ REFERRAL_BONUS mit description "Bonus for user [app_user_id]" gibt
-      // Aber hier machen wir es einfach: Jeder Kauf löst Bonus aus (oder nur der erste? Anforderung sagt: "bei einem Kauf")
-      // Wir machen es bei jedem Kauf/Verlängerung, um Anreize zu schaffen.
-      
-      if (RELEVANT_TYPES.includes(type)) {
-        const referrerRef = db.collection('users').doc(referredByUid);
-        const referrerDoc = await referrerRef.get();
-        
-        if (referrerDoc.exists) {
-          const referrerData = referrerDoc.data();
-          let currentProUntil = referrerData.proUntil ? referrerData.proUntil.toDate() : new Date();
-          
-          // Wenn Pro schon abgelaufen ist, starte ab jetzt
-          if (currentProUntil < new Date()) {
-            currentProUntil = new Date();
-          }
-          
-          // Addiere 30 Tage
-          const bonusDays = 30;
-          const newProUntil = new Date(currentProUntil.getTime() + (bonusDays * 24 * 60 * 60 * 1000));
-          
-          await referrerRef.update({
-            proUntil: admin.firestore.Timestamp.fromDate(newProUntil),
-            isPro: true,
-            updated_at: now
-          });
-          
-          // History Eintrag für den Werber
-          const bonusHistoryId = `referral_${app_user_id}_${Date.now()}`;
-          await referrerRef.collection('history').doc(bonusHistoryId).set({
-            id: bonusHistoryId,
-            timestamp: now,
-            createdAt: now,
-            type: 'REFERRAL_BONUS',
-            source: 'SYSTEM',
-            amountGross: 0,
-            currency: 'EUR',
-            description: `Bonus für geworbenen User: ${app_user_id}`,
-            bonusDays: bonusDays
-          });
-          
-          console.log(`🎁 Referral Bonus: User ${referredByUid} erhielt 30 Tage Pro für Kauf von ${app_user_id}`);
-        }
-      }
+    if (userData && (userData.referredByUid || userData.referredBy) && type === 'INITIAL_PURCHASE') {
+      await processDjB2bPurchaseBonus(
+        app_user_id,
+        type,
+        transaction_id,
+        purchased_at_ms,
+      );
+    }
+    if (userData && (userData.referredByUid || userData.referredBy) && REFUND_TYPES.includes(type)) {
+      await processDjB2bRefund(app_user_id);
     }
 
       res.status(200).json({ success: true });
@@ -3696,6 +3798,34 @@ function buildAppEmailVerificationLinkFromFirebaseLink(firebaseLink) {
     return out;
   } catch (e) {
     console.warn('buildAppEmailVerificationLinkFromFirebaseLink:', e.message || e);
+    return firebaseLink;
+  }
+}
+
+/**
+ * Passwort-Reset: nur Website (Formular in public/vb/verify.html + verify-auth.js).
+ * Nicht auf www.vibesbox.app/verify — das öffnet per App Links die App ohne Reset-UI.
+ * Host dj-ollerganove.web.app ist bewusst nicht in App Links / Associated Domains.
+ */
+function buildAppPasswordResetLinkFromFirebaseLink(firebaseLink) {
+  if (!firebaseLink || typeof firebaseLink !== 'string') return firebaseLink;
+  try {
+    const u = new URL(firebaseLink);
+    const oobCode = u.searchParams.get('oobCode');
+    if (!oobCode) {
+      console.error(
+        'buildAppPasswordResetLinkFromFirebaseLink: oobCode fehlt:',
+        firebaseLink.substring(0, 200),
+      );
+      return firebaseLink;
+    }
+    const out =
+      'https://dj-ollerganove.web.app/vb/verify.html?mode=resetPassword&oobCode=' +
+      encodeURIComponent(oobCode);
+    console.log('sendAuthEmail: Web-Passwort-Reset-Link (Vorschau):', out.substring(0, 160));
+    return out;
+  } catch (e) {
+    console.warn('buildAppPasswordResetLinkFromFirebaseLink:', e.message || e);
     return firebaseLink;
   }
 }
@@ -3884,6 +4014,7 @@ async function sendAuthEmailViaEmailJS({
   registrationRoleId,
   introStyle,
   oobCode = '',
+  uiLabels = {},
 }) {
   console.log('Versuche E-Mail zu senden via EmailJS/SMTP...');
   const {
@@ -3905,13 +4036,17 @@ async function sendAuthEmailViaEmailJS({
   const lang = normalizeEmailJsLocale(locale);
   const translations = getEmailJsContactTranslations();
   const t = translations[lang] || translations.de;
+  const pickUi = (key) => {
+    const v = uiLabels && typeof uiLabels[key] === 'string' ? uiLabels[key].trim() : '';
+    return v.length > 0 ? v : null;
+  };
   const now = new Date();
   const dateFormatted = formatEmailJsDateTime(now, lang, t);
   const mailSubject = subject;
   const introText =
     introStyle === 'registration'
-      ? t.registration_header
-      : t.auth_mail_intro;
+      ? pickUi('registrationHeader') || t.registration_header
+      : pickUi('authMailIntro') || t.auth_mail_intro;
   const roleLabel = resolveAuthEmailRegistrationRoleLabel(registrationRoleId, t);
   const templateParams = {
     to_email: toEmail,
@@ -3929,7 +4064,7 @@ async function sendAuthEmailViaEmailJS({
     party_info: '',
     created_at: dateFormatted,
     app_name: t.app_name,
-    mail_contact_header: t.auth_mail_header,
+    mail_contact_header: pickUi('authMailHeader') || t.auth_mail_header,
     mail_contact_subject_line: mailSubject,
     mail_contact_intro_text: introText,
     label_message: t.label_message,
@@ -3938,8 +4073,8 @@ async function sendAuthEmailViaEmailJS({
     label_role: t.label_role,
     label_party: '',
     label_date: t.label_date,
-    label_reply_button: t.label_reply_button,
-    mail_footer_automated: t.mail_footer_automated,
+    label_reply_button: pickUi('labelReplyButton') || t.label_reply_button,
+    mail_footer_automated: pickUi('authMailFooter') || t.mail_footer_automated,
     no_email_provided: t.no_email_provided,
     user_email_display: toEmail,
     /** Auth: Party-Zeile aus; Verifizierung: Template `{{{message}}}` für HTML */
@@ -3987,10 +4122,13 @@ async function sendAuthEmailViaEmailJS({
   console.log('Mail-Versand Status:', true);
 }
 
+// enforceAppCheck: false — wie getAppleMusicToken: ungültige/fehlende App-Check-Tokens
+// (häufig Debug ohne registriertes Token / Attestation) blockierten sonst Passwort-Reset
+// mit UNAUTHENTICATED, bevor der Handler lief. Schutz: reCAPTCHA + Rate-Limits + Email-Hash.
 exports.sendAuthEmail = onCall(
   {
     region: 'us-central1',
-    enforceAppCheck: true,
+    enforceAppCheck: false,
     secrets: [EMAILJS_PRIVATE_KEY, RECAPTCHA_ENTERPRISE_API_KEY],
     timeoutSeconds: 60,
   },
@@ -4083,6 +4221,22 @@ exports.sendAuthEmail = onCall(
 
     const hour = Math.floor(Date.now() / 3600000);
 
+    /** App-l10n für EmailJS-Chrome (Intro/Header/Footer/Reply); Fallback: getEmailJsContactTranslations. */
+    const uiLabels = {
+      authMailIntro:
+        typeof data.authMailIntro === 'string' ? data.authMailIntro : '',
+      authMailHeader:
+        typeof data.authMailHeader === 'string' ? data.authMailHeader : '',
+      registrationHeader:
+        typeof data.registrationHeader === 'string'
+          ? data.registrationHeader
+          : '',
+      authMailFooter:
+        typeof data.authMailFooter === 'string' ? data.authMailFooter : '',
+      labelReplyButton:
+        typeof data.labelReplyButton === 'string' ? data.labelReplyButton : '',
+    };
+
     if (type === 'verification') {
       const idToken = data.idToken;
       if (!idToken || typeof idToken !== 'string') {
@@ -4128,6 +4282,7 @@ exports.sendAuthEmail = onCall(
         registrationRoleId,
         introStyle: 'registration',
         oobCode,
+        uiLabels,
       });
       return { success: true };
     }
@@ -4163,7 +4318,7 @@ exports.sendAuthEmail = onCall(
         email,
         actionCodeSettings,
       );
-      link = rewriteFirebaseAuthHandlerLinkToPublicDomain(link);
+      link = buildAppPasswordResetLinkFromFirebaseLink(link);
       const oobCode = extractOobCodeFromAuthLink(link);
       const body = bodyTemplate
         .replace(/\{userName\}/g, userName)
@@ -4177,6 +4332,7 @@ exports.sendAuthEmail = onCall(
         registrationRoleId: '',
         introStyle: 'account_action',
         oobCode,
+        uiLabels,
       });
       return { success: true, sent: true };
     }
@@ -4443,39 +4599,73 @@ exports.notifyDjOnNewWishPush = onDocumentCreated(
       bodyLine = truncateUtf16(rawArtist, 140);
     }
 
+    const pushTitle = 'VibesBox';
+    const pushBody = truncateUtf16(bodyLine, 178);
+
+    const dataPayload = {
+      type: 'dj_new_wish',
+      wishId: String(wishId),
+      party_id: partyId,
+      title: pushTitle,
+      body: pushBody,
+      sound: soundOn ? '1' : '0',
+    };
+
     const androidNotification = {
       channelId: 'new_wishes_channel',
+      title: pushTitle,
+      body: pushBody,
     };
     if (soundOn) {
       androidNotification.sound = 'notification';
     }
-    const apsPayload = {};
+
+    // iOS: kein top-level notification — nur data + APNs-alert/content-available.
+    // Sonst zeigt FCM im Hintergrund oft nichts; Dart-Handler + APNs-Banner übernehmen.
+    const aps = {
+      alert: {
+        title: pushTitle,
+        body: pushBody,
+      },
+      'content-available': 1,
+    };
     if (soundOn) {
-      // Gleicher Ton wie Android `res/raw/notification.mp3` → ios/Runner/notification.caf
-      apsPayload.sound = 'notification.caf';
+      aps.sound = 'notification.caf';
     }
+    const apnsConfig = {
+      headers: {
+        'apns-priority': '10',
+        'apns-push-type': 'alert',
+      },
+      payload: { aps },
+    };
+
+    const platform =
+      typeof u.fcm_token_platform === 'string'
+        ? u.fcm_token_platform.trim().toLowerCase()
+        : '';
 
     const message = {
       token,
-      notification: {
-        title: 'VibesBox',
-        body: truncateUtf16(bodyLine, 178),
-      },
-      data: {
-        type: 'dj_new_wish',
-        wishId: String(wishId),
-        party_id: partyId,
-      },
-      android: {
+      data: dataPayload,
+    };
+
+    if (platform === 'ios') {
+      message.apns = apnsConfig;
+    } else if (platform === 'android') {
+      message.notification = { title: pushTitle, body: pushBody };
+      message.android = {
         priority: 'high',
         notification: androidNotification,
-      },
-      apns: {
-        payload: {
-          aps: apsPayload,
-        },
-      },
-    };
+      };
+    } else {
+      message.notification = { title: pushTitle, body: pushBody };
+      message.android = {
+        priority: 'high',
+        notification: androidNotification,
+      };
+      message.apns = apnsConfig;
+    }
 
     try {
       await admin.messaging().send(message);
@@ -4593,4 +4783,85 @@ exports.applyFloorSwapOnAccept = onDocumentUpdated(
     }
   },
 );
+
+// ==========================================
+// DJ B2B — Werber-System
+// ==========================================
+const {
+  registerDjB2bCallables,
+  registerDjB2bSchedules,
+  processDjB2bPurchaseBonus,
+  processDjB2bRefund,
+  backfillDjB2bCodesLogic,
+  REFUND_TYPES,
+} = require('./dj_b2b');
+
+const { registerCreatePartyCallables } = require('./create_party');
+registerCreatePartyCallables(exports);
+
+const { registerUserSelfSettingsCallables } = require('./user_self_settings');
+registerUserSelfSettingsCallables(exports);
+
+const { registerSavedTracksCallables } = require('./saved_tracks');
+registerSavedTracksCallables(exports);
+
+const { registerOpenaiMusicCallables } = require('./openai_music');
+registerOpenaiMusicCallables(exports);
+
+const { registerMusicCatalogCallables } = require('./music_catalog');
+registerMusicCatalogCallables(exports);
+
+registerDjB2bCallables(exports);
+registerDjB2bSchedules(exports);
+
+const { registerDjBrowserCallables, registerDjBrowserSchedules } = require('./dj_browser');
+registerDjBrowserCallables(exports);
+registerDjBrowserSchedules(exports);
+
+const { registerRbToolCallables } = require('./rb_tool');
+registerRbToolCallables(exports);
+
+// ==========================================
+// Gast-Profil: Musikwunsch-Zähler bei Löschung
+// ==========================================
+const { onGuestWishSubmittedCountDelete } = require('./guest_wish_stats');
+exports.onGuestWishSubmittedCountDelete = onGuestWishSubmittedCountDelete;
+
+// ==========================================
+// Admin-Gesamtstatistik (inkrementelle Zähler)
+// ==========================================
+const {
+  onAdminWishStatsCreated,
+  onAdminWishStatsUpdated,
+  onAdminWishStatsDeleted,
+  onAdminWishStatsPartyUpdated,
+  onAdminWishStatsPartyDeleted,
+  registerAdminWishStatsCallables,
+  registerAdminWishStatsSchedules,
+} = require('./admin_wish_stats');
+exports.onAdminWishStatsCreated = onAdminWishStatsCreated;
+exports.onAdminWishStatsUpdated = onAdminWishStatsUpdated;
+exports.onAdminWishStatsDeleted = onAdminWishStatsDeleted;
+exports.onAdminWishStatsPartyUpdated = onAdminWishStatsPartyUpdated;
+exports.onAdminWishStatsPartyDeleted = onAdminWishStatsPartyDeleted;
+registerAdminWishStatsCallables(exports);
+registerAdminWishStatsSchedules(exports);
+
+exports.backfillDjB2bCodes = onRequest({ memory: '512MB', timeoutSeconds: 540 }, async (req, res) => {
+  cors(req, res, async () => {
+    if (req.method === 'OPTIONS') {
+      res.status(204).send('');
+      return;
+    }
+    if (!(await requireMasterAdminFromIdToken(req, res))) return;
+    try {
+      const limit = Math.min(Number(req.query.limit || 500), 2000);
+      const result = await backfillDjB2bCodesLogic(limit);
+      res.status(200).json(result);
+    } catch (err) {
+      console.error('backfillDjB2bCodes:', err);
+      res.status(500).json({ error: String(err.message || err) });
+    }
+  });
+});
 

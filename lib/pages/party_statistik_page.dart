@@ -1,13 +1,15 @@
+import 'dart:ui' show ImageFilter;
+
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../l10n/app_localizations.dart';
 import '../utils/formatting_utils.dart';
 import '../utils/ui_constants.dart';
-import '../widgets/party_qr_code_dialog.dart' show Party, PartyQrCodeDialog;
 import '../utils/debug_log.dart';
 import '../utils/wish_paths.dart';
+import '../app_scaffold_messenger.dart';
+import '../services/app_diagnostic_log_service.dart';
 
 // Seite für Party-Statistik
 class PartyStatistikPage extends StatefulWidget {
@@ -18,6 +20,10 @@ class PartyStatistikPage extends StatefulWidget {
   final String partyCode;
   /// Optional: bereits geladenes Party-Dokument (z. B. aus Cache), spart erneuten Firestore-Read.
   final Map<String, dynamic>? preloadedPartyData;
+  /// Modal über der aktuellen Seite (kein Vollbild-Scaffold).
+  final bool embeddedInModal;
+  /// Messenger des Statistik-Dialogs — SnackBars über Modal statt hinter der App.
+  final GlobalKey<ScaffoldMessengerState>? modalScaffoldMessengerKey;
 
   const PartyStatistikPage({
     super.key,
@@ -27,7 +33,97 @@ class PartyStatistikPage extends StatefulWidget {
     required this.endDate,
     required this.partyCode,
     this.preloadedPartyData,
+    this.embeddedInModal = false,
+    this.modalScaffoldMessengerKey,
   });
+
+  /// Party-Statistik als Overlay: App im Hintergrund unscharf, oranger Rahmen.
+  static Future<void> show(
+    BuildContext context, {
+    required String partyId,
+    required String partyName,
+    required DateTime startDate,
+    required DateTime endDate,
+    required String partyCode,
+    Map<String, dynamic>? preloadedPartyData,
+  }) {
+    final size = MediaQuery.sizeOf(context);
+    final maxH = size.height * 0.88;
+    final maxW = (size.width - 32).clamp(0.0, 560.0);
+    final modalMessengerKey = GlobalKey<ScaffoldMessengerState>();
+
+    return showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: Colors.transparent,
+      barrierLabel: AppLocalizations.of(context)!.party_statistics_title,
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (_, __, ___) => const SizedBox.shrink(),
+      transitionBuilder: (dialogContext, animation, _, __) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+          reverseCurve: Curves.easeInCubic,
+        );
+        return FadeTransition(
+          opacity: curved,
+          child: Material(
+            type: MaterialType.transparency,
+            child: ScaffoldMessenger(
+              key: modalMessengerKey,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  GestureDetector(
+                    onTap: () => Navigator.of(dialogContext).pop(),
+                    behavior: HitTestBehavior.opaque,
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                      child: Container(
+                        color: Colors.black.withValues(alpha: 0.42),
+                      ),
+                    ),
+                  ),
+                  Center(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 24,
+                      ),
+                      child: Container(
+                        width: maxW,
+                        height: maxH,
+                        decoration: UIConstants.guestBoxDecoration.copyWith(
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.45),
+                              blurRadius: 24,
+                              offset: const Offset(0, 8),
+                            ),
+                          ],
+                        ),
+                        clipBehavior: Clip.antiAlias,
+                        child: PartyStatistikPage(
+                          partyId: partyId,
+                          partyName: partyName,
+                          startDate: startDate,
+                          endDate: endDate,
+                          partyCode: partyCode,
+                          preloadedPartyData: preloadedPartyData,
+                          embeddedInModal: true,
+                          modalScaffoldMessengerKey: modalMessengerKey,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 
   @override
   State<PartyStatistikPage> createState() => _PartyStatistikPageState();
@@ -45,8 +141,17 @@ class _PartyStatistikPageState extends State<PartyStatistikPage> {
   int _firstFullHour = 0; // Erste volle Stunde der Party
   int _lastFullHour = 23; // Letzte volle Stunde der Party
   List<int> _hoursInRange = []; // Liste aller Stunden im Party-Zeitraum
-  String? _djCode; // DJ-Code der Party
   String? _djName; // DJ-Name der Party
+
+  void _showPageSnackBar(SnackBar snackBar) {
+    final modalMessenger = widget.modalScaffoldMessengerKey?.currentState;
+    if (widget.embeddedInModal && modalMessenger != null) {
+      AppDiagnosticLogService.instance.recordSnackBar(snackBar);
+      modalMessenger.showSnackBar(snackBar);
+      return;
+    }
+    showVibesSnackBar(context, snackBar);
+  }
 
   @override
   void initState() {
@@ -92,10 +197,6 @@ class _PartyStatistikPageState extends State<PartyStatistikPage> {
 
       // Wenn DJ-Code gefunden wurde, lade den DJ-Namen
       if (djCode != null && djCode.isNotEmpty) {
-        setState(() {
-          _djCode = djCode;
-        });
-        
         // Lade DJ-Namen aus users Collection
         try {
           final userDoc = await FirebaseFirestore.instance
@@ -126,13 +227,11 @@ class _PartyStatistikPageState extends State<PartyStatistikPage> {
       
       // Wenn kein DJ-Code oder Name gefunden wurde, setze auf null
       setState(() {
-        _djCode = null;
         _djName = null;
       });
     } catch (e) {
       debugLog('Fehler beim Laden des DJ-Codes: $e');
       setState(() {
-        _djCode = null;
         _djName = null;
       });
     }
@@ -297,7 +396,8 @@ class _PartyStatistikPageState extends State<PartyStatistikPage> {
       
       debugLog('📅 Party-Zeitraum: ${partyStart.toString()} bis ${partyEnd.toString()}');
       
-      // Erstelle Liste aller Stunden im Zeitraum
+      // Volle Stunden-Buckets [H:00, H+1:00), die mit [partyStart, partyEnd) überlappen.
+      // Endet die Party exakt um 2:00, zählt 2:00 nicht (letzter Bucket ist 1:00–1:59).
       final hoursInRange = <int>[];
       DateTime currentHour = DateTime(
         partyStart.year,
@@ -305,14 +405,15 @@ class _PartyStatistikPageState extends State<PartyStatistikPage> {
         partyStart.day,
         partyStart.hour,
       );
-      
+
       int iterationCount = 0;
-      while (currentHour.isBefore(partyEnd) || currentHour.isAtSameMomentAs(partyEnd)) {
+      while (currentHour.isBefore(partyEnd)) {
         hoursInRange.add(currentHour.hour);
-        debugLog('⏰ Stunde hinzugefügt: ${currentHour.hour}:00 (${currentHour.toString()})');
+        debugLog(
+          '⏰ Stunde hinzugefügt: ${currentHour.hour}:00 (${currentHour.toString()})',
+        );
         currentHour = currentHour.add(const Duration(hours: 1));
         iterationCount++;
-        // Verhindere Endlosschleife bei sehr langen Partys
         if (iterationCount > 48) {
           debugLog('⚠️ Zu viele Stunden, breche ab');
           break;
@@ -381,117 +482,86 @@ class _PartyStatistikPageState extends State<PartyStatistikPage> {
     return FormattingUtils.formatDateTime(date, context);
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context)!;
-    return Scaffold(
-      backgroundColor: UIConstants.djShellPageBackground,
-      appBar: AppBar(
-        iconTheme: UIConstants.appBarIconTheme,
-        titleTextStyle: UIConstants.appBarTitleTextStyle,
-        backgroundColor: UIConstants.appBarBackgroundColor,
-        title: Text(l10n.party_statistics_title),
-        actions: [
+  Widget _buildModalHeader(AppLocalizations l10n) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 4, 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              l10n.party_statistics_title,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
           IconButton(
-            icon: const Icon(Icons.qr_code_2, color: Colors.white),
-            onPressed: () async {
-              String? djLogoUrl;
-              String? profileImageUrl;
-              String? djName = _djName;
-              String? djEmail = null;
-              String? djPhone = null;
-              String? djAlternativeEmail = null;
-
-              try {
-                // Versuche Daten vom DJ zu laden (basierend auf _djCode)
-                final targetDjId = _djCode ?? FirebaseAuth.instance.currentUser?.uid;
-
-                if (targetDjId != null) {
-                  final userDoc = await FirebaseFirestore.instance.collection('users').doc(targetDjId).get();
-                  if (userDoc.exists) {
-                    final userData = userDoc.data();
-                    djLogoUrl = userData?['djLogoUrl'];
-                    profileImageUrl = userData?['profileImageUrl'] ?? userData?['photoURL'];
-                    // Falls noch kein DJ Name bekannt, nimm den aus dem Profil
-                    if (djName == null || djName.isEmpty) {
-                      djName = userData?['displayName'] ?? userData?['name'];
-                    }
-                    djEmail = userData?['email'] as String? ?? FirebaseAuth.instance.currentUser?.email;
-                    djPhone = userData?['phoneNumber'] as String?;
-                    if (userData?['useAlternativeEmail'] == true) {
-                      djAlternativeEmail = userData?['alternativeEmail'] as String?;
-                    }
-                  }
-                }
-              } catch (e) {
-                debugLog('Fehler beim Laden der DJ-Daten für QR-Code: $e');
-              }
-
-              if (context.mounted) {
-                PartyQrCodeDialog.show(
-                  context: context,
-                  party: Party(
-                    partyName: widget.partyName,
-                    startDate: widget.startDate,
-                    endDate: widget.endDate,
-                    partyCode: widget.partyCode.isNotEmpty ? widget.partyCode : null,
-                    partyId: widget.partyId,
-                  ),
-                  djName: djName,
-                  djLogoUrl: djLogoUrl,
-                  profileImageUrl: profileImageUrl,
-                  djEmail: djEmail,
-                  djPhone: djPhone,
-                  djAlternativeEmail: djAlternativeEmail,
-                );
-              }
-            },
-            tooltip: 'QR-Code anzeigen',
+            onPressed: () => Navigator.of(context).pop(),
+            icon: const Icon(Icons.close, color: Colors.white70),
           ),
         ],
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
+    );
+  }
+
+  Widget _buildStatisticsBody(AppLocalizations l10n) {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(16, 0, 16, widget.embeddedInModal ? 16 : 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Card(
+            color: UIConstants.djShellPageBackground,
+            elevation: 0,
+            shape: UIConstants.djChromeCardShape,
+            child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Party-Daten
-                  Card(
-                    color: UIConstants.djShellPageBackground,
-                    elevation: 0,
-                    shape: UIConstants.djChromeCardShape,
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            widget.partyName,
-                            style: const TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text('${l10n.party_code_label} ${widget.partyCode}'),
-                          const SizedBox(height: 4),
-                          Text(_djName != null && _djName!.isNotEmpty 
-                              ? '${l10n.dj_name_label} $_djName' 
-                              : l10n.no_dj_name),
-                          const SizedBox(height: 4),
-                          Text('${l10n.party_start_label} ${_formatDateTime(widget.startDate, context)}'),
-                          const SizedBox(height: 4),
-                          Text('${l10n.party_end_label} ${_formatDateTime(widget.endDate, context)}'),
-                        ],
-                      ),
+                  Text(
+                    widget.partyName,
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
                     ),
                   ),
-                  const SizedBox(height: 24),
-                  
-                  // Statistiken
-                  Card(
+                  const SizedBox(height: 8),
+                  Text(
+                    '${l10n.party_code_label} ${widget.partyCode}',
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _djName != null && _djName!.isNotEmpty
+                        ? '${l10n.dj_name_label} $_djName'
+                        : l10n.no_dj_name,
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${l10n.party_start_label} ${_formatDateTime(widget.startDate, context)}',
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${l10n.party_end_label} ${_formatDateTime(widget.endDate, context)}',
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // Statistiken
+          Card(
                     color: UIConstants.djShellPageBackground,
                     elevation: 0,
                     shape: UIConstants.djChromeCardShape,
@@ -514,7 +584,7 @@ class _PartyStatistikPageState extends State<PartyStatistikPage> {
                           const SizedBox(height: 8),
                           _buildStatRow(l10n.rejected_songs, _rejectedWishes.toString(), UIConstants.frameAbgelehnt, context),
                           const SizedBox(height: 8),
-                          _buildStatRow(l10n.not_played_songs, _notPlayedWishes.toString(), Colors.orange, context),
+                          _buildStatRow(l10n.not_played_songs, _notPlayedWishes.toString(), Colors.blue, context),
                           if (_playedWishes > 0 && _averagePlayTimeMinutes > 0) ...[
                             const SizedBox(height: 8),
                             _buildStatRow(
@@ -630,12 +700,38 @@ class _PartyStatistikPageState extends State<PartyStatistikPage> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 24),
-                  const SizedBox(height: 24),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 16),
                 ],
               ),
-            ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+
+    if (widget.embeddedInModal) {
+      return Scaffold(
+        backgroundColor: Colors.transparent,
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _buildModalHeader(l10n),
+            Expanded(child: _buildStatisticsBody(l10n)),
+          ],
+        ),
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: UIConstants.djShellPageBackground,
+      appBar: AppBar(
+        iconTheme: UIConstants.appBarIconTheme,
+        titleTextStyle: UIConstants.appBarTitleTextStyle,
+        backgroundColor: UIConstants.appBarBackgroundColor,
+        title: Text(l10n.party_statistics_title),
+      ),
+      body: _buildStatisticsBody(l10n),
     );
   }
 
@@ -719,7 +815,7 @@ class _PartyStatistikPageState extends State<PartyStatistikPage> {
         PieChartSectionData(
           value: _notPlayedWishes.toDouble(),
           title: '${notPlayedPercentage.toStringAsFixed(1)}%',
-          color: Colors.orange,
+          color: Colors.blue,
           radius: 80,
           titleStyle: const TextStyle(
             fontSize: 14,
@@ -741,7 +837,7 @@ class _PartyStatistikPageState extends State<PartyStatistikPage> {
         const SizedBox(height: 8),
         _buildLegendItem(l.rejected_songs, UIConstants.frameAbgelehnt, _rejectedWishes),
         const SizedBox(height: 8),
-        _buildLegendItem(l.not_played_songs, Colors.orange, _notPlayedWishes),
+        _buildLegendItem(l.not_played_songs, Colors.blue, _notPlayedWishes),
       ],
     );
   }
@@ -758,11 +854,14 @@ class _PartyStatistikPageState extends State<PartyStatistikPage> {
           ),
         ),
         const SizedBox(width: 8),
-        Text(label),
+        Text(
+          label,
+          style: TextStyle(color: color, fontWeight: FontWeight.w500),
+        ),
         const Spacer(),
         Text(
           count.toString(),
-          style: const TextStyle(fontWeight: FontWeight.bold),
+          style: TextStyle(fontWeight: FontWeight.bold, color: color),
         ),
       ],
     );
@@ -852,10 +951,11 @@ class _PartyStatistikPageState extends State<PartyStatistikPage> {
   Future<void> _generateSmallStatisticsPDF() async {
     // Placeholder - implement later if needed
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      _showPageSnackBar(
         SnackBar(
           content: Text(AppLocalizations.of(context)!.pdf_generation_not_implemented),
           backgroundColor: Colors.orange,
+          behavior: SnackBarBehavior.floating,
         ),
       );
     }
@@ -864,10 +964,11 @@ class _PartyStatistikPageState extends State<PartyStatistikPage> {
   Future<void> _generateDetailedStatisticsPDF() async {
     // Placeholder - implement later if needed
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      _showPageSnackBar(
         SnackBar(
           content: Text(AppLocalizations.of(context)!.pdf_generation_not_implemented),
           backgroundColor: Colors.orange,
+          behavior: SnackBarBehavior.floating,
         ),
       );
     }

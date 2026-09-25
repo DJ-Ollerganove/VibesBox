@@ -19,6 +19,7 @@ class ProFreeStatusResult {
 enum ProFreeStatus {
   PRO_LIFE,
   PRO,
+  DJ_B2B,
   FREE,
 }
 
@@ -44,8 +45,17 @@ class ProFreeCheck {
     final proUntilDate = user.proUntil?.toDate();
     final trialUntilDate = user.trialUntil?.toDate();
 
-    // Check 1 (Life): proUntil im Jahr 2099 oder später -> PRO_LIFE
+    // Check 1 (Life): proUntil im Jahr 2099 oder später, oder planType pro_life
     if (proUntilDate != null && proUntilDate.year >= 2099) {
+      return ProFreeStatusResult(
+        status: ProFreeStatus.PRO_LIFE,
+        displayDate: proUntilDate,
+        isActive: true,
+      );
+    }
+    if (user.planType == 'pro_life' &&
+        proUntilDate != null &&
+        proUntilDate.isAfter(now)) {
       return ProFreeStatusResult(
         status: ProFreeStatus.PRO_LIFE,
         displayDate: proUntilDate,
@@ -64,9 +74,34 @@ class ProFreeCheck {
       );
     }
 
+    // Check 2b: Bezahltes Store-Abo (RevenueCat) vor DJ B2B
+    if (_hasActivePaidStoreSubscription(user, now)) {
+      final expiry = proUntilDate ?? trialUntilDate;
+      if (expiry != null && expiry.isAfter(now)) {
+        return ProFreeStatusResult(
+          status: ProFreeStatus.PRO,
+          displayDate: expiry,
+          isActive: true,
+        );
+      }
+    }
+
+    // Check 2c: DJ B2B-Verbrauch aktiv
+    if (user.isDjB2bActive) {
+      return ProFreeStatusResult(
+        status: ProFreeStatus.DJ_B2B,
+        displayDate: proUntilDate,
+        isActive: true,
+      );
+    }
+
     // Abgelaufenes Trial oder Free ohne bezahltes Pro — kein Pro, keine Kulanz auf trialUntil
     final hasPaidProEntitlement =
-        user.isPro || user.planType == 'pro' || _hasPaidProInHistory(historyEntries);
+        user.isPro ||
+        user.planType == 'pro' ||
+        user.planType == 'pro_life' ||
+        _hasPaidProInHistory(historyEntries) ||
+        _hasActivePaidStoreSubscription(user, now);
 
     if (!hasPaidProEntitlement) {
       if (trialUntilDate != null &&
@@ -141,6 +176,19 @@ class ProFreeCheck {
       }
     }
     return false;
+  }
+
+  static bool _hasActivePaidStoreSubscription(UserModel user, DateTime now) {
+    if (!user.isPro) return false;
+    final proUntil = user.proUntil?.toDate();
+    if (proUntil == null || !proUntil.isAfter(now)) return false;
+    if (proUntil.year >= 2099) return true;
+    if (user.planType == 'trial') return false;
+    if (user.isDjB2bActive) return false;
+    final provider = user.lastPaymentProvider.trim();
+    return provider == 'RevenueCat' ||
+        user.planType == 'pro' ||
+        user.planType == 'pro_life';
   }
 
   /// Erster Kalendertag (lokal, 00:00), an dem der User nach der Kulanz-Regel ([determineStatus] Check 4)

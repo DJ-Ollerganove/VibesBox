@@ -3,6 +3,7 @@ import '../../../models/playlist_model.dart';
 import '../../../l10n/app_localizations.dart';
 import '../../../utils/formatting_utils.dart';
 import '../../../utils/relative_time_minutes.dart';
+import 'package:vibesbox/l10n/text_direction_helper.dart';
 
 /// Widget für die Anzeige eines einzelnen Songs in der History
 class SongTile extends StatelessWidget {
@@ -26,7 +27,7 @@ class SongTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
-    final isRtl = ['ar', 'he', 'fa', 'ur'].contains(Localizations.localeOf(context).languageCode);
+    final isRtl = VbTextDirection.isRtl(context);
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
       decoration: BoxDecoration(
@@ -69,6 +70,19 @@ class SongTile extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
+                    if (track.mixMetaLabel.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        track.mixMetaLabel,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Colors.grey[500],
+                          fontSize: 11,
+                        ),
+                        textAlign: isRtl ? TextAlign.right : null,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
                   ],
                 ),
               ),

@@ -11,6 +11,7 @@ import '../utils/debug_log.dart';
 import '../utils/party_grace_period_helper.dart';
 import 'app_diagnostic_log_service.dart';
 import 'grace_period_settings_service.dart';
+import 'open_wishes_visibility_service.dart';
 import '../utils/party_helper.dart';
 import '../utils/pre_wish_helper.dart';
 import '../utils/wish_paths.dart';
@@ -325,17 +326,13 @@ class ActivePartyService {
     return djId ?? user.uid;
   }
 
-  /// Einheitliche Definition „Party läuft jetzt“ (Stream, [getActivePartyInfo], Validierung, Heartbeat).
+  /// Einheitliche Definition „Party läuft jetzt“ — wie [DjHomePartySnapshot] / DJ-Startseite.
   ///
-  /// Zwingend: `start_date` und `end_date` vorhanden und `DateTime.now()` liegt im halb-offenen
-  /// Intervall \[start, end) (nach Start, vor Ende – volle Uhrzeit aus Firestore-Timestamp).
+  /// Party **läuft**, sobald die **geplante Startzeit** erreicht ist und das Ende noch nicht
+  /// vorbei ist (`start_time_posix`/`end_time_posix` oder `start_date`/`end_date`).
+  /// Kein manueller Start-Schalter nötig.
   ///
-  /// Zusätzlich: mindestens eines von
-  /// `lifecycle_status == 'active'`, `status == 'active'`, `isActive == true`.
-  ///
-  /// Außerhalb des Zeitfensters: immer **false**, unabhängig von Lifecycle/Legacy (kein Frühstart).
-  /// `finished`, `standby` oder `finished_at` gesetzt: immer **false**.
-  /// Öffentliche Prüfung „Party läuft jetzt“ (z. B. Vorab-Freigabe beim Start).
+  /// `finished`, `standby` oder `finished_at`: immer **false**.
   static bool isPartyDocumentRunningNow(
     Map<String, dynamic> data, {
     DateTime? now,
@@ -346,7 +343,6 @@ class ActivePartyService {
     Map<String, dynamic> data, {
     DateTime? now,
   }) {
-    final effectiveNow = now ?? DateTime.now();
     final lifecycleStatus = data['lifecycle_status'] as String?;
     final finishedAt = data['finished_at'];
     if (lifecycleStatus == 'finished' ||
@@ -355,22 +351,63 @@ class ActivePartyService {
       return false;
     }
 
-    final startTimestamp = data['start_date'] as Timestamp?;
-    final endTimestamp = data['end_date'] as Timestamp?;
-    if (startTimestamp == null || endTimestamp == null) {
-      return false;
-    }
-    final startDate = startTimestamp.toDate();
-    final endDate = endTimestamp.toDate();
-    final inTimeWindow =
-        !effectiveNow.isBefore(startDate) && effectiveNow.isBefore(endDate);
-    if (!inTimeWindow) {
-      return false;
+    final effectiveNow = now ?? DateTime.now();
+    final nowUnix = effectiveNow.toUtc().millisecondsSinceEpoch ~/ 1000;
+
+    final startPosix = data['start_time_posix'];
+    final endPosix = data['end_time_posix'];
+    if (startPosix is num && endPosix is num) {
+      return nowUnix >= startPosix.toInt() && nowUnix < endPosix.toInt();
     }
 
-    final status = data['status'] as String?;
-    final isActiveFlag = data['isActive'] as bool? ?? false;
-    return lifecycleStatus == 'active' || status == 'active' || isActiveFlag;
+    final startTimestamp = data['start_date'] as Timestamp?;
+    final endTimestamp = data['end_date'] as Timestamp?;
+    if (startTimestamp != null && endTimestamp != null) {
+      final startDate = startTimestamp.toDate();
+      final endDate = endTimestamp.toDate();
+      return !effectiveNow.isBefore(startDate) &&
+          effectiveNow.isBefore(endDate);
+    }
+
+    return false;
+  }
+
+  static String effectiveDjIdForCurrentUser() {
+    return _getEffectiveDjId(FirebaseAuth.instance.currentUser?.uid);
+  }
+
+  /// music_history-Session für [partyId] finden oder anlegen (z. B. History-Tab ohne Heartbeat).
+  static Future<String?> ensureMusicHistorySessionIdForParty(String partyId) async {
+    if (partyId.isEmpty) return null;
+    final effectiveDjId = effectiveDjIdForCurrentUser();
+    if (effectiveDjId.isEmpty) return null;
+
+    final existing = await resolveMusicHistorySessionIdForParty(
+      partyId,
+      djId: effectiveDjId,
+    );
+    if (existing != null && existing.isNotEmpty) return existing;
+
+    try {
+      final partyDoc = await FirebaseFirestore.instance
+          .collection('parties')
+          .doc(partyId)
+          .get();
+      if (!partyDoc.exists) return null;
+      final data = partyDoc.data() ?? {};
+      final partyName =
+          (data['party_name'] ?? data['name'] ?? 'Party').toString();
+      return _ensureMusicHistorySession(
+        djId: effectiveDjId,
+        partyId: partyId,
+        partyName: partyName,
+      );
+    } catch (e) {
+      debugLog(
+        '[ACTIVE-PARTY-SERVICE] ⚠️ ensureMusicHistorySessionIdForParty: $e',
+      );
+      return null;
+    }
   }
 
   /// Prüft [partyId] in Firestore: gehört [effectiveDjId] (`created_by`) und erfüllt [_isPartyDocumentRunningNow].
@@ -593,6 +630,8 @@ class ActivePartyService {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       _initializeBootstrapKey = null;
+      // Kein Login → keine DJ-Session aus Prefs anzeigen (Update/Backup-Geister).
+      await clearLocalSession();
       return;
     }
 
@@ -629,10 +668,6 @@ class ActivePartyService {
             );
             await clearLocalSession();
           } else {
-            _currentHeartbeatPartyId = lastPartyId;
-            debugLog(
-              '[ACTIVE-PARTY-SERVICE] 💾 Session aus Prefs übernommen (Firebase bestätigt aktiv): $lastPartyId',
-            );
             final partyCode = prefs.getString(_prefsKeyPartyCode);
             final partyName = prefs.getString(_prefsKeyPartyName);
             final startMillis = prefs.getInt(_prefsKeyStartDate);
@@ -641,6 +676,7 @@ class ActivePartyService {
             final sessionId = prefs.getString(_prefsKeyPartyId);
             final hasQueuedPreWishes =
                 prefs.getBool(_prefsKeyHasQueuedPreWishes) ?? false;
+            _currentHeartbeatPartyId = lastPartyId;
             _storedSessionInfo = ActivePartyInfo(
               partyId: lastPartyId,
               partyCode: partyCode,
@@ -659,6 +695,9 @@ class ActivePartyService {
             _lastSessionEstablishedAt = DateTime.now();
             storedSessionNotifier.value = _storedSessionInfo;
             _startQueuedPreWishesWatch(lastPartyId);
+            debugLog(
+              '[ACTIVE-PARTY-SERVICE] 💾 Session aus Prefs übernommen (Firebase bestätigt): $lastPartyId',
+            );
           }
         }
       }
@@ -693,6 +732,7 @@ class ActivePartyService {
     debugLog(
       '[ACTIVE-PARTY-SERVICE] Parties-Listener gestartet für DJ $effectiveDjId – Zustand nur aus Firestore',
     );
+    OpenWishesVisibilityService.ensureWatching(effectiveDjId);
   }
 
   /// Legt eine music_history-Session an, falls noch keine für diese Party existiert.
@@ -868,7 +908,7 @@ class ActivePartyService {
     }
   }
 
-  /// Validiert Heartbeat-Party: gleiche Regel wie [_isPartyDocumentRunningNow] (Zeitfenster + aktive Flags).
+  /// Validiert Heartbeat-Party: gleiche Regel wie [_isPartyDocumentRunningNow] (manuell gestartet).
   static Future<bool> _validateHeartbeatParty() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
@@ -925,13 +965,13 @@ class ActivePartyService {
 
       if (!_isPartyDocumentRunningNow(partyData)) {
         debugLog(
-          '[ACTIVE-PARTY-SERVICE] ❌ Validierung fehlgeschlagen: nicht im Zeitfenster oder keine aktiven Flags (Heartbeat)',
+          '[ACTIVE-PARTY-SERVICE] ❌ Validierung fehlgeschlagen: Party läuft nicht (Heartbeat nur bei laufender Party)',
         );
         return false;
       }
 
       debugLog(
-        '[ACTIVE-PARTY-SERVICE] ✅ Validierung erfolgreich: Party $partyId ist aktiv für DJ $currentDjId',
+        '[ACTIVE-PARTY-SERVICE] ✅ Validierung erfolgreich: Party $partyId läuft für DJ $currentDjId',
       );
       return true;
     } catch (e) {
@@ -1066,16 +1106,37 @@ class ActivePartyService {
     }
     final session = _storedSessionInfo ?? storedSessionNotifier.value;
     if (session?.endDate != null &&
-        DateTime.now().isAfter(session!.endDate!) &&
+        session!.partyId.isNotEmpty &&
+        DateTime.now().isAfter(session.endDate!) &&
         PartyGracePeriodHelper.isWithinGracePeriod(
           DateTime.now(),
           session.endDate!,
           GracePeriodSettingsService.current,
         )) {
-      debugLog(
-        '[ACTIVE-PARTY-SERVICE] Nachlaufzeit (${GracePeriodSettingsService.current} min) – Session nicht gelöscht',
-      );
-      return;
+      try {
+        final partyDoc = await FirebaseFirestore.instance
+            .collection('parties')
+            .doc(session.partyId)
+            .get();
+        final data = partyDoc.data();
+        if (data != null &&
+            PartyGracePeriodHelper.shouldShowOpenWishes(
+              now: DateTime.now(),
+              endDate: session.endDate!,
+              graceMinutes: GracePeriodSettingsService.current,
+              wishesManuallyHidden:
+                  PartyGracePeriodHelper.wishesManuallyHidden(data),
+            )) {
+          debugLog(
+            '[ACTIVE-PARTY-SERVICE] Nachlaufzeit (${GracePeriodSettingsService.current} min) – Session nicht gelöscht',
+          );
+          return;
+        }
+      } catch (e) {
+        debugLog(
+          '[ACTIVE-PARTY-SERVICE] ⚠️ Nachlaufzeit-Check (manuell beendet?): $e',
+        );
+      }
     }
     debugLog(
       '[ACTIVE-PARTY-SERVICE] ${force ? "Party beendet" : "Keine aktive Party (bestätigt)"} – clearLocalSession()',
@@ -1232,6 +1293,10 @@ class ActivePartyService {
     final String? partyNameEarly =
         (partyData['party_name'] ?? partyData['name'] ?? partyData['title'])
             as String?;
+    final isRunningNow = _isPartyDocumentRunningNow(partyData);
+    if (!isRunningNow) {
+      stopHeartbeat();
+    }
 
     // Session + Heartbeat laufen bereits für dieselbe Party → kein erneutes music_history-.get().
     final cachedSession = _currentHeartbeatSessionId;
@@ -1297,12 +1362,14 @@ class ActivePartyService {
     String? sessionId;
     if (sessionQuery.docs.isNotEmpty) {
       sessionId = sessionQuery.docs.first.id;
-      try {
-        await _startHeartbeat(sessionId!);
-      } catch (e) {
-        debugLog(
-          '[ACTIVE-PARTY-SERVICE] ⚠️ Fehler beim Starten des Heartbeats: $e',
-        );
+      if (isRunningNow) {
+        try {
+          await _startHeartbeat(sessionId!);
+        } catch (e) {
+          debugLog(
+            '[ACTIVE-PARTY-SERVICE] ⚠️ Fehler beim Starten des Heartbeats: $e',
+          );
+        }
       }
     } else {
       sessionId = await _ensureMusicHistorySession(
@@ -1310,7 +1377,7 @@ class ActivePartyService {
         partyId: activePartyId,
         partyName: partyName ?? 'Unbenannte Party',
       );
-      if (sessionId != null) {
+      if (sessionId != null && isRunningNow) {
         try {
           await _startHeartbeat(sessionId);
         } catch (e) {
@@ -1334,6 +1401,164 @@ class ActivePartyService {
       endDate: endDate,
       status: 'laufend',
     );
+  }
+
+  /// Nach erfolgreichem Track-Save: Anzeige-/Heartbeat-Session an Schreibziel anbinden.
+  /// Verhindert leere History, wenn Tracks in einer anderen music_history-Session landen.
+  static Future<void> applyMusicHistorySessionId({
+    required String partyId,
+    required String sessionId,
+  }) async {
+    if (partyId.isEmpty || sessionId.isEmpty) return;
+    final cur = _storedSessionInfo ?? storedSessionNotifier.value;
+
+    // Immer Prefs/Memory auf die Schreib-Session ziehen, sobald die Party passt
+    // (auch wenn vorher keine stored Session da war — typisch iOS-Timing).
+    if (cur != null && cur.partyId != partyId) {
+      return;
+    }
+    if (cur != null && cur.sessionId == sessionId) {
+      return;
+    }
+
+    await _updatePersistentSession(
+      ActivePartyInfo(
+        partyId: partyId,
+        partyCode: cur?.partyCode,
+        sessionId: sessionId,
+        partyName: cur?.partyName,
+        startDate: cur?.startDate,
+        endDate: cur?.endDate,
+        status: cur?.status ?? 'laufend',
+        hasQueuedPreWishes: cur?.hasQueuedPreWishes ?? false,
+      ),
+    );
+    if (_currentHeartbeatPartyId == partyId) {
+      try {
+        await _startHeartbeat(sessionId);
+      } catch (e) {
+        debugLog(
+          '[ACTIVE-PARTY-SERVICE] ⚠️ Heartbeat nach Session-Sync: $e',
+        );
+      }
+    }
+  }
+
+  /// music_history-Session für [partyId] (auch Nachlaufzeit, ohne laufenden Heartbeat).
+  ///
+  /// Bei mehreren Sessions für dieselbe Party: Session mit dem neuesten Track
+  /// (nicht blind lokale stored.sessionId — die kann leer sein, während Saves
+  /// per Callable in eine andere Session schreiben).
+  static Future<String?> resolveMusicHistorySessionIdForParty(
+    String partyId, {
+    String? djId,
+  }) async {
+    if (partyId.isEmpty) return null;
+    final effectiveDjId = _getEffectiveDjId(djId);
+    if (effectiveDjId.isEmpty) return null;
+
+    final stored = _storedSessionInfo ?? storedSessionNotifier.value;
+
+    try {
+      final bySnake = await FirebaseFirestore.instance
+          .collection('music_history')
+          .where('djId', isEqualTo: effectiveDjId)
+          .where('party_id', isEqualTo: partyId)
+          .limit(20)
+          .get();
+      final byCamel = await FirebaseFirestore.instance
+          .collection('music_history')
+          .where('djId', isEqualTo: effectiveDjId)
+          .where('partyId', isEqualTo: partyId)
+          .limit(20)
+          .get();
+      final seen = <String>{};
+      final docs = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+      for (final d in [...bySnake.docs, ...byCamel.docs]) {
+        if (seen.add(d.id)) docs.add(d);
+      }
+      if (docs.isNotEmpty) {
+        final withTracks = await _pickMusicHistorySessionWithLatestTrack(docs);
+        final chosen = withTracks ??
+            _pickNewestMusicHistorySession(docs) ??
+            docs.first.id;
+        // Auch wenn noch keine stored Session: Anzeige an Session-mit-Tracks binden.
+        if (stored == null ||
+            stored.partyId != partyId ||
+            stored.sessionId != chosen) {
+          unawaited(
+            applyMusicHistorySessionId(partyId: partyId, sessionId: chosen),
+          );
+        }
+        return chosen;
+      }
+    } catch (e) {
+      debugLog(
+        '[ACTIVE-PARTY-SERVICE] ⚠️ resolveMusicHistorySessionIdForParty: $e',
+      );
+    }
+
+    if (stored != null &&
+        stored.partyId == partyId &&
+        stored.sessionId != null &&
+        stored.sessionId!.isNotEmpty) {
+      return stored.sessionId;
+    }
+    return null;
+  }
+
+  static DateTime _musicHistoryStartTime(Map<String, dynamic> data) {
+    final raw = data['startTime'];
+    if (raw is Timestamp) return raw.toDate();
+    return DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  static String? _pickNewestMusicHistorySession(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) {
+    if (docs.isEmpty) return null;
+    QueryDocumentSnapshot<Map<String, dynamic>>? best;
+    var bestTs = DateTime.fromMillisecondsSinceEpoch(0);
+    for (final d in docs) {
+      final ts = _musicHistoryStartTime(d.data());
+      if (best == null || ts.isAfter(bestTs)) {
+        best = d;
+        bestTs = ts;
+      }
+    }
+    return best?.id;
+  }
+
+  /// Unter mehreren Sessions die mit dem neuesten Track — sonst null (alle leer).
+  static Future<String?> _pickMusicHistorySessionWithLatestTrack(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) async {
+    if (docs.isEmpty) return null;
+    String? bestId;
+    DateTime? bestTs;
+    for (final d in docs) {
+      try {
+        final tracks = await d.reference
+            .collection('tracks')
+            .limit(25)
+            .get();
+        if (tracks.docs.isEmpty) continue;
+        for (final t in tracks.docs) {
+          final raw = t.data()['timestamp'];
+          DateTime ts = DateTime.fromMillisecondsSinceEpoch(0);
+          if (raw is Timestamp) ts = raw.toDate();
+          if (bestTs == null || ts.isAfter(bestTs)) {
+            bestTs = ts;
+            bestId = d.id;
+          }
+        }
+      } catch (e) {
+        debugLog(
+          '[ACTIVE-PARTY-SERVICE] ⚠️ Tracks-Check Session ${d.id}: $e',
+        );
+      }
+    }
+    return bestId;
   }
 
   /// Lädt die aktive Party-ID für einen DJ (einmalige Abfrage, **dieselbe** Aktiv-Logik wie der Stream).
@@ -1381,8 +1606,46 @@ class ActivePartyService {
         }
       }
 
+      final graceMinutes = await GracePeriodSettingsService.load();
+      final gracePartyId = _findGracePartyIdFromSnapshot(
+        partiesSnapshot,
+        graceMinutes,
+        now,
+      );
+      if (gracePartyId != null) {
+        for (final partyDoc in partiesSnapshot.docs) {
+          if (partyDoc.id != gracePartyId) continue;
+          debugLog(
+            '✅ ActivePartyService: Nachlaufzeit-Party $gracePartyId (getActivePartyInfo)',
+          );
+          final info = await _materializeActivePartyForDj(
+            effectiveDjId,
+            gracePartyId,
+            partyDoc.data(),
+          );
+          if (info != null) {
+            await _updatePersistentSession(info);
+            return info;
+          }
+        }
+      }
+
+      final stored = _storedSessionInfo ?? storedSessionNotifier.value;
+      if (stored != null && stored.partyId.isNotEmpty) {
+        final stillValid = await validateStoredPartyAgainstFirebase(
+          stored.partyId,
+          effectiveDjId,
+        );
+        if (stillValid) {
+          debugLog(
+            '[ACTIVE-PARTY-SERVICE] getActivePartyInfo: Session ${stored.partyId} noch gültig (Nachlaufzeit)',
+          );
+          return stored;
+        }
+      }
+
       debugLog(
-        '[DEBUG] ❌ ActivePartyService: Keine aktive Party gefunden für DJ $effectiveDjId',
+        '[DEBUG] ❌ ActivePartyService: Keine laufende/Grace-Party für DJ $effectiveDjId',
       );
       await clearCache();
       return null;
@@ -1488,6 +1751,31 @@ class ActivePartyService {
     nextStartDateNotifier.value = nextStart;
 
     final wasActivePartyId = _currentHeartbeatPartyId;
+
+    // Nach manuellem Beenden: Session behalten, solange Nachlaufzeit für dieselbe Party gilt.
+    if (activePartyId == null && wasActivePartyId != null) {
+      for (final doc in snapshot.docs) {
+        if (doc.id != wasActivePartyId) continue;
+        final data = doc.data() as Map<String, dynamic>;
+        final endDate = PartyGracePeriodHelper.partyEndDate(data);
+        if (endDate != null &&
+            PartyGracePeriodHelper.shouldShowOpenWishes(
+              now: now2,
+              endDate: endDate,
+              graceMinutes: GracePeriodSettingsService.current,
+              wishesManuallyHidden:
+                  PartyGracePeriodHelper.wishesManuallyHidden(data),
+            )) {
+          activePartyId = wasActivePartyId;
+          _consecutiveNoActivePartyStreamTicks = 0;
+          debugLog(
+            '[ACTIVE-PARTY-SERVICE] ⏳ Nachlaufzeit für $wasActivePartyId — Session bleibt',
+          );
+        }
+        break;
+      }
+    }
+
     if (wasActivePartyId != null && activePartyId != wasActivePartyId) {
       final partyNowFinished = snapshot.docs.any((d) {
         if (d.id != wasActivePartyId) return false;
@@ -1496,6 +1784,29 @@ class ActivePartyService {
             data['finished_at'] != null;
       });
       if (partyNowFinished) {
+        var keepForGrace = false;
+        for (final doc in snapshot.docs) {
+          if (doc.id != wasActivePartyId) continue;
+          final data = doc.data() as Map<String, dynamic>;
+          final endDate = PartyGracePeriodHelper.partyEndDate(data);
+          if (endDate != null &&
+              PartyGracePeriodHelper.shouldShowOpenWishes(
+                now: now2,
+                endDate: endDate,
+                graceMinutes: GracePeriodSettingsService.current,
+                wishesManuallyHidden:
+                    PartyGracePeriodHelper.wishesManuallyHidden(data),
+              )) {
+            activePartyId = wasActivePartyId;
+            _consecutiveNoActivePartyStreamTicks = 0;
+            keepForGrace = true;
+            debugLog(
+              '[ACTIVE-PARTY-SERVICE] ⏳ Party $wasActivePartyId beendet — Nachlaufzeit, Session bleibt',
+            );
+          }
+          break;
+        }
+        if (!keepForGrace) {
         debugLog(
           '[ACTIVE-PARTY-SERVICE] ⏹️ Party $wasActivePartyId beendet (lifecycle/finished_at) – Session sofort löschen',
         );
@@ -1521,6 +1832,7 @@ class ActivePartyService {
         }
         _lastEmittedPartyInfo = null;
         return null;
+        }
       }
     }
 

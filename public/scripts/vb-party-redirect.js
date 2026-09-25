@@ -49,11 +49,11 @@
     try {
       var sp = new URLSearchParams(window.location.search || '');
       var l = (sp.get('lang') || '').trim().toLowerCase().split('-')[0];
-      if (l && l !== 'ar') return l;
+      if (l) return l;
     } catch (eL) {}
     try {
       var stored = (localStorage.getItem('pwa_language') || localStorage.getItem('language') || '').trim().split('-')[0].toLowerCase();
-      if (stored && stored !== 'ar') return stored;
+      if (stored) return stored;
     } catch (eS) {}
     return '';
   }

@@ -7,19 +7,22 @@
   'use strict';
 
   var DEFAULT_LANG = 'en';
-  var ALLOWED = (typeof window !== 'undefined' && window.PWA_ALLOWED_LANG) ? window.PWA_ALLOWED_LANG : { de: 1, en: 1, fr: 1, ru: 1, zh: 1, es: 1, tr: 1, pt: 1, it: 1, uk: 1, hi: 1, sq: 1, vi: 1 };
-  var STATIC_PWA_LANG_CODES = (typeof window !== 'undefined' && window.PWA_STATIC_LANG_CODES) ? window.PWA_STATIC_LANG_CODES.slice() : ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi'];
+  var ALLOWED = (typeof window !== 'undefined' && window.PWA_ALLOWED_LANG) ? window.PWA_ALLOWED_LANG : { de: 1, en: 1, fr: 1, ru: 1, zh: 1, es: 1, tr: 1, pt: 1, it: 1, uk: 1, hi: 1, sq: 1, vi: 1, ja: 1, el: 1, nl: 1, pl: 1, cs: 1, th: 1, ar: 1 };
+  var STATIC_PWA_LANG_CODES = (typeof window !== 'undefined' && window.PWA_STATIC_LANG_CODES) ? window.PWA_STATIC_LANG_CODES.slice() : ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi', 'ja', 'el', 'nl', 'pl', 'cs', 'th', 'ar'];
   var REGION_TO_LANG = { de: 'de', at: 'de', ch: 'de', fr: 'fr', es: 'es', it: 'it', ru: 'ru', tr: 'tr', pt: 'pt', br: 'pt', zh: 'zh', cn: 'zh', tw: 'zh', ua: 'uk', in: 'hi', al: 'sq', vn: 'vi', ar: 'ar', sa: 'ar', eg: 'ar' };
   var PERMANENT_LOCALE_KEY = 'permanent_user_locale';
   var VB_ENTRY_LANG_KEY = 'vb_entry_lang';
-  var LANGUAGE_NAMES = { de: 'German', en: 'English', fr: 'French', ru: 'Russian', zh: 'Chinese', es: 'Spanish', tr: 'Turkish', pt: 'Portuguese', it: 'Italian', uk: 'Ukrainian', hi: 'Hindi', sq: 'Albanian', vi: 'Vietnamese' };
+  var LANGUAGE_NAMES = { de: 'German', en: 'English', fr: 'French', ru: 'Russian', zh: 'Chinese', es: 'Spanish', tr: 'Turkish', pt: 'Portuguese', it: 'Italian', uk: 'Ukrainian', hi: 'Hindi', sq: 'Albanian', vi: 'Vietnamese', ar: 'Arabic' };
 
   window.IS_DEBUG = new URLSearchParams(window.location.search || '').get('x') === '99';
+  /** Cache-Bust für /vb/lang/*.js — bei neuen i18n-Keys erhöhen (sonst bleibt altes Paket im Browser-Cache). */
+  var LANG_ASSET_V = '20260909l10n';
+  window.VB_LANG_ASSET_V = LANG_ASSET_V;
 
   function normalizeCode(raw) {
     if (!raw) return '';
     var v = String(raw).trim().toLowerCase();
-    if (!v || v === 'ar') return '';
+    if (!v) return '';
     if (v.length > 2 && v.charAt(2) === '-') v = v.slice(0, 2);
     return ALLOWED[v] ? v : '';
   }
@@ -32,7 +35,7 @@
 
   function effectiveCodes() {
     var list = window.pwaAvailableLanguages && window.pwaAvailableLanguages.length ? window.pwaAvailableLanguages : [];
-    list = list.filter(function (e) { return e && e.code && e.code !== 'ar'; });
+    list = list.filter(function (e) { return e && e.code; });
     if (list.length) return list.map(function (e) { return e.code; });
     var d = window.DEFAULT_PWA_LANGUAGES;
     if (d && d.length) return d.map(function (e) { return e.code; });
@@ -71,7 +74,6 @@
   function readManualStoredLanguageIfValid(codes) {
     if (!isManualLanguageLocked()) return '';
     var s = readStoredLanguage();
-    if (s === 'ar') return '';
     if (s && codes.indexOf(s) !== -1) return s;
     return '';
   }
@@ -81,7 +83,7 @@
       var keys = ['pwa_language', 'language', PERMANENT_LOCALE_KEY];
       for (var i = 0; i < keys.length; i++) {
         var v = (window.localStorage.getItem(keys[i]) || '').trim();
-        if (v && v !== 'ar' && codes.indexOf(v) !== -1) return v;
+        if (v && codes.indexOf(v) !== -1) return v;
       }
     } catch (e) {}
     return '';
@@ -116,7 +118,6 @@
 
   function resolvePwaLanguageImpl(codes) {
     var live = readUrlLang();
-    if (live === 'ar') live = '';
     if (live && urlLangSupportedForPwa(live, codes)) {
       window.persistUrlLanguageToAllStorage(live);
       return live;
@@ -130,12 +131,11 @@
 
     try {
       var fromRoot = (window.sessionStorage.getItem(VB_ENTRY_LANG_KEY) || '').trim().toLowerCase();
-      if (fromRoot === 'ar') fromRoot = '';
       if (fromRoot && codes.indexOf(fromRoot) !== -1) return fromRoot;
     } catch (e) {}
 
     var autoStored = readStoredLanguage();
-    if (autoStored && autoStored !== 'ar' && codes.indexOf(autoStored) !== -1) {
+    if (autoStored && codes.indexOf(autoStored) !== -1) {
       return autoStored;
     }
 
@@ -253,28 +253,34 @@
       document.querySelectorAll('[data-i18n]').forEach(function (el) {
         var key = el.getAttribute('data-i18n');
         if (!key) return;
+        var txt = gt(key);
+        // Fehlender Key: HTML-Fallback behalten (nie rohen Key wie suggestions_auto_appear zeigen).
+        if (txt == null || txt === '' || txt === key) return;
         var tag = (el.tagName || '').toUpperCase();
         if (tag === 'INPUT' || tag === 'TEXTAREA') {
-          el.placeholder = gt(key) || '';
+          el.placeholder = txt;
         } else {
-          el.textContent = gt(key) || '';
+          el.textContent = txt;
         }
       });
       document.querySelectorAll('[data-i18n-aria-label]').forEach(function (ael) {
         var akey = ael.getAttribute('data-i18n-aria-label');
         if (akey) {
           var atxt = gt(akey);
-          if (atxt) ael.setAttribute('aria-label', atxt);
+          if (atxt && atxt !== akey) ael.setAttribute('aria-label', atxt);
         }
       });
       document.querySelectorAll('[data-i18n-placeholder]').forEach(function (pel) {
         var pkey = pel.getAttribute('data-i18n-placeholder');
         if (pkey) {
           var ptxt = gt(pkey);
-          if (ptxt) pel.setAttribute('placeholder', ptxt);
+          if (ptxt && ptxt !== pkey) pel.setAttribute('placeholder', ptxt);
         }
       });
       document.documentElement.lang = resolvedLangForUi();
+      if (typeof window.pwaApplyTextDirection === 'function') {
+        window.pwaApplyTextDirection(resolvedLangForUi());
+      }
     } catch (e) {
       if (window.IS_DEBUG) console.warn('translatePage', e);
     }
@@ -306,17 +312,25 @@
     if (typeof window.updateDrawerCurrentLanguage === 'function') window.updateDrawerCurrentLanguage();
     if (typeof window.updateBrandingLine === 'function') window.updateBrandingLine();
     if (typeof window.syncPreWishDisclaimerUi === 'function') window.syncPreWishDisclaimerUi();
+    if (typeof window.vbRefreshWishErrorI18n === 'function') window.vbRefreshWishErrorI18n();
     window.dispatchEvent(new Event('translationsReady'));
   };
 
   function injectLangScript(code, onDone) {
-    var url = '/vb/lang/' + code + '.js';
+    var url = '/vb/lang/' + code + '.js?v=' + LANG_ASSET_V;
     var sel = 'script[data-vb-lang="' + code + '"]';
     var existing = document.head.querySelector(sel);
-    if (existing && window['lang_' + code]) {
+    var existingSrc = existing ? (existing.getAttribute('src') || '') : '';
+    var existingIsCurrent = !!(existing && existingSrc.indexOf('v=' + LANG_ASSET_V) !== -1);
+    if (existingIsCurrent && window['lang_' + code]) {
       window.translations[code] = window['lang_' + code];
       if (onDone) onDone(null);
       return;
+    }
+    if (existing && !existingIsCurrent) {
+      try { existing.remove(); } catch (eRem) {}
+      try { delete window['lang_' + code]; } catch (eDel) { window['lang_' + code] = undefined; }
+      existing = null;
     }
     if (existing && !window['lang_' + code]) {
       existing.addEventListener('load', function () {
@@ -336,7 +350,7 @@
       return;
     }
     var s = document.createElement('script');
-    s.src = url + (window.IS_DEBUG ? '?v=' + Date.now() : '');
+    s.src = url;
     s.async = true;
     s.setAttribute('data-vb-lang', code);
     s.onload = function () {
@@ -434,7 +448,7 @@
   function buildDatabaseLangMenu(containerId, isModal) {
     var list = window.pwaAvailableLanguages;
     if (!list || !list.length) return;
-    list = list.filter(function (e) { return e && e.code && e.code !== 'ar'; });
+    list = list.filter(function (e) { return e && e.code; });
     if (!list.length) return;
     var container = document.getElementById(containerId);
     if (!container) return;
@@ -513,7 +527,7 @@
       btn.type = 'button';
       btn.className = 'main-lang-btn';
       btn.id = 'mainLangBtn';
-      btn.setAttribute('aria-label', 'Sprache wählen');
+      btn.setAttribute('aria-label', (typeof window.pwaSelectLanguageLabel === 'function') ? window.pwaSelectLanguageLabel() : (typeof window.getTranslation === 'function' ? window.getTranslation('select_language') : 'Select language'));
       btn.setAttribute('aria-haspopup', 'true');
       btn.setAttribute('aria-expanded', 'false');
       btn.textContent = '\uD83C\uDF10';

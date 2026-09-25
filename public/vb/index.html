@@ -35,23 +35,39 @@
   <script src="scripts/generated/pwa-lang-codes.js"></script>
   <script src="scripts/generated/party-locale-map.js"></script>
   <script src="scripts/generated/party-locale-opts.js"></script>
+  <script src="/pwa-text-direction.js?v=2"></script>
+  <script>
+    (function () {
+      try {
+        var c = '';
+        try { c = (new URLSearchParams(location.search).get('lang') || '').trim().toLowerCase().split('-')[0]; } catch (e0) {}
+        if (!c) c = (localStorage.getItem('pwa_language') || localStorage.getItem('language') || '').trim().toLowerCase().split('-')[0];
+        if (c === 'ar' || c === 'he' || c === 'fa' || c === 'ur') {
+          document.documentElement.setAttribute('dir', 'rtl');
+          document.documentElement.lang = c;
+          document.documentElement.classList.add('pwa-rtl');
+        }
+      } catch (e) {}
+    })();
+  </script>
   <script src="/lang-menu-columns.js"></script>
-  <script src="scripts/vb-url-lang.js"></script>
+  <script src="scripts/vb-url-lang.js?v=20260909bl3"></script>
   <!-- Theme (Farbvariablen) -->
   <script src="styles/theme.js"></script>
   <!-- Firebase SDK (ausgelagert) — nach Sprach-UI -->
   <script type="module" src="scripts/firebase-init.js"></script>
-  <script src="/party_shared.js"></script>
-  <link rel="stylesheet" href="styles/main.css">
+  <script src="/party_shared.js?v=20260918boot1"></script>
+  <link rel="stylesheet" href="styles/main.css?v=20260918hist1">
+  <link rel="stylesheet" href="/pwa-rtl.css?v=2">
   </head>
   <body>
   <main>
   <div class="container">
     <!-- ✅ Statischer App-Header (immer sichtbar, außerhalb der Pages) -->
     <div class="app-header" id="appHeader">
-      <button type="button" class="header-lang-btn" id="headerLangBtn" onclick="openLanguageModal(); return false;" aria-label="Language" title="Language">🌐</button>
+      <button type="button" class="header-lang-btn" id="headerLangBtn" onclick="openLanguageModal(); return false;" data-i18n-aria-label="select_language" aria-label="Select language" title="Language">🌐</button>
       <!-- ✅ Logo links (fixiert, klickbar für Lightbox) -->
-      <img src="icon/vibesbox-logo.png" alt="VibesBox Logo" class="header-logo" id="appHeaderLogo" onclick="openLogoLightbox()" onerror="this.style.display='none';">
+      <img src="icon/vibesbox-logo.webp" alt="VibesBox Logo" class="header-logo" id="appHeaderLogo" onclick="openLogoLightbox()" onerror="this.onerror=null;this.src='icon/vibesbox-logo.png';">
       
       <!-- ✅ Dynamischer Bereich neben Logo (VibesBox Text oder Party-Name + DJ-Info) -->
       <div class="header-branding" id="headerBranding" style="flex: 1; min-width: 0;">
@@ -89,7 +105,7 @@
     <!-- ✅ Lightbox-Overlay für VibesBox Logo -->
     <div class="logo-lightbox-overlay" id="logoLightboxOverlay" onclick="closeLogoLightbox()">
       <div class="logo-lightbox-content" onclick="event.stopPropagation();">
-        <img src="icon/vibesbox-logo.png" alt="VibesBox Logo" class="logo-lightbox-image" id="logoLightboxImage">
+        <img src="icon/vibesbox-logo.webp" alt="VibesBox Logo" class="logo-lightbox-image" id="logoLightboxImage" onerror="this.onerror=null;this.src='icon/vibesbox-logo.png';">
       </div>
     </div>
     
@@ -106,6 +122,16 @@
     
     <!-- ✅ Drawer Overlay (für Klick außerhalb des Menüs) -->
     <div class="drawer-overlay" id="drawerOverlay" onclick="closeDrawer()"></div>
+
+    <!-- Multi-Floor: Vollbild-Auswahl (Modal, blockiert Wunschbox bis Floor gewählt) -->
+    <div id="guestFloorPickerOverlay" class="guest-floor-picker-overlay" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="guestFloorPickerTitle">
+      <div id="guestFloorPicker" class="guest-floor-picker-modal" aria-live="polite">
+        <h2 id="guestFloorPickerTitle" class="guest-floor-picker-title" data-i18n="guest_floor_picker_title">Choose a floor</h2>
+        <p id="guestFloorPickerSubtitle" class="guest-floor-picker-subtitle" data-i18n="guest_floor_picker_choose">Select the floor for your music requests.</p>
+        <p id="guestFloorPickerInfo" class="guest-floor-picker-info" style="display: none;"></p>
+        <div id="guestFloorPickerOptions" class="guest-floor-picker-options"></div>
+      </div>
+    </div>
 
     <!-- ✅ Floating Menu (verankert an Header-Box) -->
     <div class="drawer-menu" id="drawerMenu">
@@ -129,15 +155,6 @@
         <span>🚪</span>
         <span>Leave Party</span>
       </a>
-      
-      <div class="drawer-language-section">
-        <button class="drawer-language-menu-item" id="drawerLanguageToggle" onclick="openLanguageModal(); return false;">
-          <span id="drawerCurrentLanguage">
-            <span class="language-icon">🌐</span>
-            <span id="drawerCurrentLanguageName">English</span>
-          </span>
-        </button>
-      </div>
     </div>
 
     <!-- WunschBox Seite (nur mit gültiger Party-ID erreichbar – Gatekeeper leitet sonst zur Main-PWA um) -->
@@ -190,14 +207,11 @@
           <p id="preWishBannerText" data-i18n="pre_wish_banner_body">You can send the DJ music requests in advance here.</p>
         </div>
 
-        <button type="button" id="guestFloorSwitchBtn" class="guest-floor-switch-btn" style="display: none;" data-i18n="guest_floor_switch_button">Change room</button>
-
-        <div id="guestFloorPicker" class="guest-floor-picker" style="display: none;" aria-live="polite">
-          <h2 class="guest-floor-picker-title" data-i18n="guest_floor_picker_title">Choose a room</h2>
-          <p class="guest-floor-picker-subtitle" data-i18n="guest_floor_picker_choose">Select the room for your music requests.</p>
-          <p id="guestFloorPickerInfo" class="guest-floor-picker-info" style="display: none;"></p>
-          <div id="guestFloorPickerOptions" class="guest-floor-picker-options"></div>
+        <div id="preWishesPausedNotice" class="pre-wishes-paused-notice" style="display: none;">
+          <p id="preWishesPausedNoticeText" data-i18n="pre_wishes_paused_guest_message">Enough advance requests have already been received – no further requests can be submitted for now.</p>
         </div>
+
+        <button type="button" id="guestFloorSwitchBtn" class="guest-floor-switch-btn" style="display: none;" data-i18n="guest_floor_switch_button">Switch floor</button>
 
         <!-- Block-Nachricht für gesperrte Gäste -->
         <div class="wishbox-blocked-message" id="wishboxBlockedMessage" style="display: none; padding: 24px; margin: 16px 0; background-color: #fff3e0; border: 2px solid #ff9800; border-radius: 12px; text-align: center;">
@@ -224,7 +238,7 @@
         <form id="wishForm" style="display: none; visibility: hidden;">
           <input type="hidden" id="partyCodeInput" name="partyCode" value="">
           
-          <p class="wishbox-intro-disclaimer" data-i18n="wish_sent_disclaimer">Please understand that the DJ can only play the songs they currently have in their collection. Whether a track gets played is up to the DJ, to match the vibes – not every request fits the moment of the party. Thanks for your understanding!</p>
+          <p class="wishbox-intro-disclaimer" data-i18n="wish_sent_disclaimer">Your music wish is a suggestion for the DJ. Whether it gets played is their call, based on the vibe and set. You are not entitled to have it played.</p>
           
           <!-- ✅ NEUE REIHENFOLGE: 1. Branding (oben), 2. Interpret, 3. Titel, 4. Name & Gruß (am Ende) -->
           
@@ -313,7 +327,7 @@
         </div>
         
         <p class="wish-sent-headline" data-i18n="wish_sent_received">Your request has been received</p>
-        <p class="wish-sent-disclaimer" data-i18n="wish_sent_disclaimer">Please understand that the DJ can only play the songs they currently have in their collection. Whether a track gets played is up to the DJ, to match the vibes – not every request fits the moment of the party. Thanks for your understanding!</p>
+        <p class="wish-sent-disclaimer" data-i18n="wish_sent_disclaimer">Your music wish is a suggestion for the DJ. Whether it gets played is their call, based on the vibe and set. You are not entitled to have it played.</p>
         
         <!-- ✅ Button-Bereich mit Lade-Status -->
         <div id="successActionArea" style="margin-top: 32px; min-height: 60px; padding-top: 16px;">
@@ -480,7 +494,7 @@
         <div class="about-content">
           <!-- VibesBox Logo zentriert oben -->
           <div style="text-align: center; margin-bottom: 24px;">
-            <img src="icon/vibesbox-logo.png" alt="VibesBox Logo" style="height: 100px; width: auto; object-fit: contain;" onerror="this.style.display='none';">
+            <img src="icon/vibesbox-logo.webp" alt="VibesBox Logo" style="height: 140px; width: auto; object-fit: contain;" onerror="this.onerror=null;this.src='icon/vibesbox-logo.png';">
           </div>
           <!-- Gast-Text -->
           <p data-i18n="about_subtitle" style="text-align: center; line-height: 1.6; color: rgba(255, 255, 255, 0.9); margin: 0;">Your request matters! With VibesBox you send your favorite songs straight to the DJ's display – no crowding at the deck or paperwork. Send greetings with your song and enjoy the party. Have fun!</p>
@@ -548,6 +562,6 @@
   </div>
   </main>
 
-  <script src="app.js?v=20260519-prewish-nav" defer></script>
+  <script src="app.js?v=20260918hist1" defer></script>
 </body>
 </html>

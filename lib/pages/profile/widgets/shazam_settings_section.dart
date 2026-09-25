@@ -10,7 +10,9 @@ import '../../../models/user_model.dart';
 import '../../../utils/ui_constants.dart';
 import '../../../l10n/app_localizations.dart';
 import '../../../utils/debug_log.dart';
+import '../../../services/user_self_settings_service.dart';
 import '../../../widgets/music_recognition_info_dialog.dart';
+import '../../../app_scaffold_messenger.dart';
 
 /// Widget für Shazam-Einstellungen (Intervall und Mikrofon-Empfindlichkeit)
 class ShazamSettingsSection extends StatefulWidget {
@@ -45,6 +47,10 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
   static const Duration _autoAdjustDebounceDuration = Duration(milliseconds: 120);
   static const double _autoAdjustUiEpsilon = 0.005;
   String _prefsKey(String uid, String key) => 'audio_settings_${uid}_$key';
+
+  Future<void> _writeUserSetting(Map<String, dynamic> fields) async {
+    await UserSelfSettingsService.instance.write(fields);
+  }
 
   Future<void> _saveLocalTogglePrefs({
     required String uid,
@@ -104,7 +110,7 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
   void _onSubscriptionTierChanged() {
     if (!mounted) return;
     final wasFree = _profileIsFree == true;
-    final next = UserService().currentUser.value?.isFree ?? true;
+    final next = DjProSessionService.instance.isFreeDj;
     setState(() => _profileIsFree = next);
     if (wasFree && !next) {
       unawaited(_shazamService.loadScanInterval());
@@ -149,7 +155,7 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
       if (userDoc.exists) {
         final data = userDoc.data();
         final model = UserModel.fromFirestore(userDoc);
-        _profileIsFree = model.isFree;
+        _profileIsFree = DjProSessionService.instance.isFreeDj;
 
         final rawInterval = data?['shazam_scan_interval_seconds'];
         int? interval;
@@ -190,7 +196,7 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
               smartThresholdEnabled: smartThreshold,
             );
           } else if (smartThreshold != localSmart) {
-            await FirebaseFirestore.instance.collection('users').doc(user.uid).update({
+            await _writeUserSetting({
               'smart_threshold_enabled': localSmart!,
             });
           }
@@ -206,7 +212,7 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
               autoStartRecognition: autoStart,
             );
           } else if (autoStart != localAutoStart) {
-            await FirebaseFirestore.instance.collection('users').doc(user.uid).update({
+            await _writeUserSetting({
               'auto_start_recognition': localAutoStart!,
             });
           }
@@ -232,7 +238,7 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
           }
         }
       } else {
-        _profileIsFree = UserService().currentUser.value?.isFree ?? true;
+        _profileIsFree = DjProSessionService.instance.isFreeDj;
       }
       await _shazamService.setShowStatusNotificationEnabled(
         statusNotifForService,
@@ -242,7 +248,7 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
     } catch (e) {
       debugLog('Fehler beim Laden der Shazam-Einstellungen: $e');
     } finally {
-      _profileIsFree ??= UserService().currentUser.value?.isFree ?? true;
+      _profileIsFree ??= DjProSessionService.instance.isFreeDj;
       if (mounted) setState(() => _isLoading = false);
     }
   }
@@ -254,7 +260,7 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
     try {
       await _shazamService.saveScanIntervalWithRestart(seconds);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(l.shazam_scan_interval_set(_formatInterval(l, seconds))),
             backgroundColor: Colors.green,
@@ -265,7 +271,7 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
       return true;
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${l.error_saving} $e'),
             backgroundColor: Colors.red,
@@ -289,7 +295,7 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
       } catch (e2) {
         if (mounted) {
           final l = AppLocalizations.of(context)!;
-          ScaffoldMessenger.of(context).showSnackBar(
+          showVibesSnackBar(context, 
             SnackBar(
               content: Text('${l.error_saving} $e2'),
               backgroundColor: Colors.red,
@@ -335,7 +341,7 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
       await _shazamService.saveMicSensitivityWithRestart(sensitivity);
       if (mounted) {
         ScaffoldMessenger.of(context).clearSnackBars();
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Row(
               children: [
@@ -356,7 +362,7 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${l.error_saving} $e'),
             backgroundColor: Colors.red,
@@ -384,7 +390,7 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
-    final isFree = _profileIsFree ?? UserService().currentUser.value?.isFree ?? false;
+    final isFree = _profileIsFree ?? DjProSessionService.instance.isFreeDj;
     final intervalLocked = isFree;
     final scanSliderValue = intervalLocked
         ? _shazamService.effectiveScanIntervalSeconds
@@ -415,7 +421,7 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Musikerkennung-Einstellungen',
+                    l.music_recognition_settings_title,
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                           fontWeight: FontWeight.bold,
                         ),
@@ -427,7 +433,7 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
                   color: Theme.of(context).colorScheme.primary,
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(),
-                  tooltip: 'Informationen zur Musikerkennung',
+                  tooltip: l.music_recognition_info_tooltip,
                   onPressed: () => showMusicRecognitionInfoDialog(context),
                 ),
               ],
@@ -488,11 +494,11 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  '30 Sek.',
+                  '30 ${l.interval_seconds_short}',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 Text(
-                  '5 Min.',
+                  '5 ${l.interval_minutes_short}',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
@@ -504,7 +510,7 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
               children: [
                 Expanded(
                   child: Text(
-                    'Mikrofon-Empfindlichkeit: ${_micSensitivity.toStringAsFixed(1)}',
+                    '${l.mic_sensitivity_label} ${_micSensitivity.toStringAsFixed(1)}',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           fontWeight: FontWeight.w500,
                         ),
@@ -534,11 +540,11 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  '0.5 (Niedrig)',
+                  l.sensitivity_low,
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 Text(
-                  '2.0 (Hoch)',
+                  l.sensitivity_high,
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
@@ -590,7 +596,7 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Mikrofon-Pegel:',
+                      l.microphone_level_label,
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         fontWeight: FontWeight.w500,
                       ),
@@ -648,7 +654,7 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
               children: [
                 Expanded(
                   child: Text(
-                    'Schwellenwert: ${(_recognitionThreshold * 100).toStringAsFixed(0)}%',
+                    '${l.recognition_threshold_label} ${(_recognitionThreshold * 100).toStringAsFixed(0)}%',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           fontWeight: FontWeight.w500,
                         ),
@@ -676,11 +682,11 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  '0% (Niedrig)',
+                  l.threshold_low,
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 Text(
-                  '100% (Hoch)',
+                  l.threshold_high,
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
@@ -699,13 +705,13 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Intelligente Anpassung',
+                        l.smart_threshold_label,
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),
                       Text(
                         isFree
                             ? (l.music_recognition_pro_only_notice)
-                            : 'Funktion derzeit deaktiviert (Deaktiviert)',
+                            : l.feature_currently_disabled,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                               color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
                             ),
@@ -747,12 +753,12 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Musikerkennung automatisch starten, wenn Party aktiv',
+                        l.shazam_autostart_label,
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'Startet die Musikerkennung automatisch, sobald eine deiner Partys in der Cloud aktiv wird',
+                        l.shazam_autostart_description,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                               color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
                             ),
@@ -774,14 +780,9 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
   Future<void> _saveRecognitionThresholdSilent(double threshold) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
-    
+
     try {
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .update({
-        'recognition_threshold': threshold,
-      });
+      await _writeUserSetting({'recognition_threshold': threshold});
       // Keine Snackbar bei automatischen Updates
     } catch (e) {
       debugLog('Fehler beim Speichern des Schwellenwerts (automatisch): $e');
@@ -793,16 +794,11 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
     if (user == null) return;
     final l = AppLocalizations.of(context)!;
     try {
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .update({
-        'recognition_threshold': threshold,
-      });
+      await _writeUserSetting({'recognition_threshold': threshold});
       
       if (mounted) {
         ScaffoldMessenger.of(context).clearSnackBars();
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Row(
               children: [
@@ -823,7 +819,7 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${l.error_saving} $e'),
             backgroundColor: Colors.red,
@@ -837,18 +833,13 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
   Future<void> _saveSmartThresholdEnabled(bool enabled) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
-    
+
     try {
       await _saveLocalTogglePrefs(
         uid: user.uid,
         smartThresholdEnabled: enabled,
       );
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .update({
-        'smart_threshold_enabled': enabled,
-      });
+      await _writeUserSetting({'smart_threshold_enabled': enabled});
       
       // Keine SnackBar, da dies eine Hintergrund-Einstellung ist
     } catch (e) {
@@ -866,16 +857,11 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
         uid: user.uid,
         autoStartRecognition: enabled,
       );
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .update({
-        'auto_start_recognition': enabled,
-      });
+      await _writeUserSetting({'auto_start_recognition': enabled});
 
       if (mounted) {
         final loc = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(enabled
                 ? loc.shazam_autostart_enabled_snackbar
@@ -890,7 +876,7 @@ class _ShazamSettingsSectionState extends State<ShazamSettingsSection> {
       debugLog('Fehler beim Speichern der Autostart-Einstellung: $e');
       if (mounted) {
         final locErr = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text('${locErr.error_saving} $e'),
             backgroundColor: Colors.red,

@@ -14,6 +14,7 @@ import '../../services/app_update_service.dart';
 import '../../services/navigation_service.dart';
 import '../../utils/ui_constants.dart';
 import '../../helpers/security_helper.dart';
+import '../../widgets/home_cells/admin_sync_tool_card.dart';
 import '../../widgets/home_cells/global_announcement_card.dart';
 import '../../widgets/home_cells/admin_platform_totals_card.dart';
 import '../../widgets/home_cells/login_counter_card.dart';
@@ -23,6 +24,7 @@ import '../../utils/debug_log.dart';
 import '../../services/admin_platform_totals_service.dart';
 import '../../services/announcement_languages_service.dart';
 import '../../services/duplicate_check_service.dart';
+import '../../app_scaffold_messenger.dart';
 
 class HomeAdmin extends StatefulWidget {
   final Widget Function(BuildContext context, Widget child) cardBuilder;
@@ -128,7 +130,7 @@ class _HomeAdminState extends State<HomeAdmin> {
     if (!mounted) return;
     setState(() => _preferredStartView = value);
     final l = AppLocalizations.of(context)!;
-    ScaffoldMessenger.of(context).showSnackBar(
+    showVibesSnackBar(context, 
       SnackBar(
         content: Text(l.admin_start_view_saved),
         backgroundColor: Colors.green,
@@ -416,7 +418,7 @@ class _HomeAdminState extends State<HomeAdmin> {
     );
     if (code.isEmpty || nameEn.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(l.admin_language_fill_code_and_english_name),
           backgroundColor: Colors.orange,
@@ -433,7 +435,7 @@ class _HomeAdminState extends State<HomeAdmin> {
       if (!mounted) return;
       _newLangCodeController.clear();
       _newLangNameController.clear();
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(l.admin_language_saved_snackbar),
           backgroundColor: Colors.green,
@@ -441,7 +443,7 @@ class _HomeAdminState extends State<HomeAdmin> {
       );
     } on StateError catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(e.message),
           backgroundColor: Colors.orange,
@@ -449,7 +451,7 @@ class _HomeAdminState extends State<HomeAdmin> {
       );
     } on FormatException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(e.message),
           backgroundColor: Colors.orange,
@@ -457,7 +459,7 @@ class _HomeAdminState extends State<HomeAdmin> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(l.snackbar_error_details(e)),
           backgroundColor: Colors.red,
@@ -828,7 +830,7 @@ class _HomeAdminState extends State<HomeAdmin> {
       debugLog('admin_config/app_update: Update erfolgreich gespeichert: $data');
       if (mounted) {
         final msg = AppLocalizations.of(context)!.updateSavedMessage;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(content: Text(msg), backgroundColor: Colors.green),
         );
       }
@@ -837,7 +839,7 @@ class _HomeAdminState extends State<HomeAdmin> {
       if (mounted) {
         final msg =
             AppLocalizations.of(context)!.updateSaveErrorMessage(e.toString());
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(content: Text(msg), backgroundColor: Colors.red),
         );
       }
@@ -955,7 +957,7 @@ class _HomeAdminState extends State<HomeAdmin> {
       // In-Memory aktualisieren, damit die nächste PDF-Generierung sofort den neuen Text nutzt
       AppConfig.pdfFooterText = text.isEmpty ? null : text;
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(
               AppLocalizations.of(context)!.updateSavedMessage,
@@ -967,7 +969,7 @@ class _HomeAdminState extends State<HomeAdmin> {
     } catch (e) {
       if (mounted) {
         final loc = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
+        showVibesSnackBar(context, 
           SnackBar(
             content: Text(loc.snackbar_error_details(e)),
             backgroundColor: Colors.red,
@@ -1486,6 +1488,8 @@ class _HomeAdminState extends State<HomeAdmin> {
               const SizedBox(height: 20),
               // App-Update: Steuerungs-Matrix (admin_config/app_update)
               widget.cardBuilder(context, _buildAppUpdateMatrixCard(context)),
+              const SizedBox(height: 20),
+              widget.cardBuilder(context, const AdminSyncToolCard()),
               const SizedBox(height: 20),
               if (isAdminRole) ...[
                 _buildLastAnnouncementManagementCard(context),

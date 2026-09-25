@@ -13,6 +13,8 @@ import '../utils/footer_helper.dart';
 import '../utils/ui_constants.dart';
 import '../utils/debug_log.dart';
 import '../l10n/app_localizations.dart';
+import '../utils/party_location_export_helper.dart';
+import '../app_scaffold_messenger.dart';
 
 /// Full-Screen Karten-Picker für Location-Auswahl
 class LocationMapPickerPage extends StatefulWidget {
@@ -366,7 +368,7 @@ class _LocationMapPickerPageState extends State<LocationMapPickerPage> {
   Future<void> _confirmSelection() async {
     if (_selectedPosition == null) {
       final l = AppLocalizations.of(context)!;
-      ScaffoldMessenger.of(context).showSnackBar(
+      showVibesSnackBar(context, 
         SnackBar(
           content: Text(l.map_pick_location_first),
           backgroundColor: Colors.red,
@@ -380,7 +382,19 @@ class _LocationMapPickerPageState extends State<LocationMapPickerPage> {
     final coordFallback = '${_selectedPosition!.latitude}, ${_selectedPosition!.longitude}';
     final addr = _selectedAddress ?? coordFallback;
     final hasRealAddress = addr != coordFallback && addr.contains(',');
-    final locationName = hasRealAddress ? (_selectedCity ?? _selectedStreet ?? addr) : '';
+    // Name: nur expliziter POI (z. B. aus Suche) — nicht Straße/Ort aus Reverse-Geocoding.
+    final initialName = widget.initialLocationName?.trim();
+    String locationName = '';
+    if (initialName != null &&
+        initialName.isNotEmpty &&
+        PartyLocationExportHelper.isExplicitLocationName(
+          initialName,
+          street: _selectedStreet,
+          city: _selectedCity,
+          address: hasRealAddress ? addr : null,
+        )) {
+      locationName = initialName;
+    }
     final locationResult = LocationResult(
       placeId: 'manual_${_selectedPosition!.latitude}_${_selectedPosition!.longitude}',
       name: locationName,
@@ -418,15 +432,15 @@ class _LocationMapPickerPageState extends State<LocationMapPickerPage> {
       body: Stack(
         children: [
           if (!_mapReady || _selectedPosition == null)
-            const Center(
+            Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  CircularProgressIndicator(color: UIConstants.appOrange),
-                  SizedBox(height: 16),
+                  const CircularProgressIndicator(color: UIConstants.appOrange),
+                  const SizedBox(height: 16),
                   Text(
-                    'Standort wird ermittelt…',
-                    style: TextStyle(color: Colors.white70, fontSize: 14),
+                    AppLocalizations.of(context)!.location_determining,
+                    style: const TextStyle(color: Colors.white70, fontSize: 14),
                   ),
                 ],
               ),
@@ -511,8 +525,8 @@ class _LocationMapPickerPageState extends State<LocationMapPickerPage> {
                           Expanded(
                             child: Text(
                               _locationPermissionDenied
-                                  ? 'Bitte aktiviere GPS in den Einstellungen, um deinen Standort zu finden.'
-                                  : 'Tippe auf den Standort-Button (oben rechts), um deine Position zu verwenden.',
+                                  ? l.location_enable_gps_hint
+                                  : l.location_tap_button_hint,
                               style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
                             ),
                           ),
@@ -534,8 +548,7 @@ class _LocationMapPickerPageState extends State<LocationMapPickerPage> {
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
-                              'Dein Standort konnte nicht ermittelt werden; die Karte zeigt eine Standardposition. '
-                              'Tippe auf das Fadenkreuz in der App-Leiste, um es erneut zu versuchen.',
+                              l.location_fallback_banner,
                               style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
                             ),
                           ),
@@ -544,13 +557,13 @@ class _LocationMapPickerPageState extends State<LocationMapPickerPage> {
                     ),
                   if (_selectedPosition != null) ...[
                     Text(
-                      'Position: ${_selectedPosition!.latitude.toStringAsFixed(6)}, ${_selectedPosition!.longitude.toStringAsFixed(6)}',
+                      '${l.location_position_label}: ${_selectedPosition!.latitude.toStringAsFixed(6)}, ${_selectedPosition!.longitude.toStringAsFixed(6)}',
                       style: const TextStyle(color: Colors.white, fontSize: 12),
                     ),
                     const SizedBox(height: 4),
                   ],
                   if (_isLoadingLocationData)
-                    const Row(
+                    Row(
                       children: [
                         SizedBox(
                           width: 16,
@@ -562,20 +575,20 @@ class _LocationMapPickerPageState extends State<LocationMapPickerPage> {
                         ),
                         SizedBox(width: 8),
                         Text(
-                          'Adresse und Zeitzone werden ermittelt...',
+                          l.location_resolving_address,
                           style: TextStyle(color: Colors.white, fontSize: 12),
                         ),
                       ],
                     )
                   else if (_selectedTimezoneId != null) ...[
                     Text(
-                      'Zeitzone: $_selectedTimezoneId',
+                      '${l.party_timezone_prefix} $_selectedTimezoneId',
                       style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
                     ),
                     if (_selectedAddress != null && _selectedAddress!.isNotEmpty) ...[
                       const SizedBox(height: 4),
                       Text(
-                        'Adresse: $_selectedAddress',
+                        '${l.location_address_prefix} $_selectedAddress',
                         style: TextStyle(color: Colors.grey.shade300, fontSize: 12),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
@@ -595,9 +608,9 @@ class _LocationMapPickerPageState extends State<LocationMapPickerPage> {
                           borderRadius: BorderRadius.circular(8),
                         ),
                       ),
-                      child: const Text(
-                        'Position bestätigen',
-                        style: TextStyle(
+                      child: Text(
+                        l.location_confirm_position,
+                        style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
                         ),
