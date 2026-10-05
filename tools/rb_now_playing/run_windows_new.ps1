@@ -15,8 +15,8 @@ Get-Process -Name 'VibesBoxSync','rb_now_playing' -ErrorAction SilentlyContinue 
 Write-Host "==> git pull" -ForegroundColor Cyan
 Set-Location $RepoRoot
 git fetch origin
-git checkout cursor/windows-sync-installer-b710
-git pull origin cursor/windows-sync-installer-b710
+git checkout cursor/djay-pro-library-b710
+git pull origin cursor/djay-pro-library-b710
 Set-Location $ToolRoot
 
 $session = Get-Content -Raw -Encoding UTF8 '.\lib\tool_session.dart'

@@ -258,6 +258,18 @@ void main() {
     expect(DjSoftware.tryParse('ableton'), isNull);
     expect(DjSoftware.tryParse('cross dj'), isNull);
     expect(DjSoftware.tryParse('ultramixer'), isNull);
+    expect(
+      DjSoftware.values.map((e) => e.label).toList(),
+      [
+        'DJAY Pro',
+        'Engine DJ',
+        'Mixxx',
+        'Rekordbox',
+        'Serato DJ Pro',
+        'Traktor Pro',
+        'Virtual DJ',
+      ],
+    );
   });
 
   test('hat in jeder Sprache dieselben Texte', () {
@@ -288,7 +300,7 @@ void main() {
     expect(compareSyncVersions('1.0.1', '1.0.2') < 0, isTrue);
     expect(compareSyncVersions('1.0.1+1', '1.0.1'), 0);
     expect(compareSyncVersions('1.0.2', '1.0.1') > 0, isTrue);
-    expect(kSyncToolVersion, '1.0.2');
+    expect(kSyncToolVersion, '1.0.3');
     expect(formatToolDevice('macos', 'Version 26.6.2 (Build 25G83)'), 'macOS 26.6.2');
     expect(formatToolDevice('windows', '10.0.22631'), 'Windows 11');
     expect(formatToolDevice('windows', '10.0.19045'), 'Windows 10');

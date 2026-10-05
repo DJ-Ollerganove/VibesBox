@@ -6,60 +6,38 @@ import 'package:flutter/services.dart';
 
 import 'rekordbox_history.dart';
 
+/// Reihenfolge = Anzeige alphabetisch nach [label].
 enum DjSoftware {
+  djayPro,
+  engineDj,
+  mixxx,
   rekordbox,
   serato,
-  virtualDj,
   traktor,
-  mixxx,
-  engineDj,
-  djayPro;
+  virtualDj;
 
   String get id => switch (this) {
+        DjSoftware.djayPro => 'djaypro',
+        DjSoftware.engineDj => 'enginedj',
+        DjSoftware.mixxx => 'mixxx',
         DjSoftware.rekordbox => 'rekordbox',
         DjSoftware.serato => 'serato',
-        DjSoftware.virtualDj => 'virtualdj',
         DjSoftware.traktor => 'traktor',
-        DjSoftware.mixxx => 'mixxx',
-        DjSoftware.engineDj => 'enginedj',
-        DjSoftware.djayPro => 'djaypro',
+        DjSoftware.virtualDj => 'virtualdj',
       };
 
   String get label => switch (this) {
+        DjSoftware.djayPro => 'DJAY Pro',
+        DjSoftware.engineDj => 'Engine DJ',
+        DjSoftware.mixxx => 'Mixxx',
         DjSoftware.rekordbox => 'Rekordbox',
         DjSoftware.serato => 'Serato DJ Pro',
-        DjSoftware.virtualDj => 'Virtual DJ',
         DjSoftware.traktor => 'Traktor Pro',
-        DjSoftware.mixxx => 'Mixxx',
-        DjSoftware.engineDj => 'Engine DJ',
-        DjSoftware.djayPro => 'DJAY Pro',
+        DjSoftware.virtualDj => 'Virtual DJ',
       };
 
   static DjSoftware? tryParse(String? raw) {
     switch (raw?.trim().toLowerCase()) {
-      case 'rekordbox':
-        return DjSoftware.rekordbox;
-      case 'serato':
-      case 'serato dj':
-      case 'serato dj pro':
-      case 'seratodj':
-        return DjSoftware.serato;
-      case 'virtualdj':
-      case 'virtual_dj':
-      case 'virtual dj':
-        return DjSoftware.virtualDj;
-      case 'traktor':
-      case 'traktor pro':
-      case 'traktorpro':
-      case 'traktordj':
-        return DjSoftware.traktor;
-      case 'mixxx':
-        return DjSoftware.mixxx;
-      case 'enginedj':
-      case 'engine':
-      case 'engine dj':
-      case 'engine prime':
-        return DjSoftware.engineDj;
       case 'djay':
       case 'djay pro':
       case 'djaypro':
@@ -68,6 +46,29 @@ enum DjSoftware {
       case 'algoriddim djay':
       case 'algoriddim djay pro':
         return DjSoftware.djayPro;
+      case 'enginedj':
+      case 'engine':
+      case 'engine dj':
+      case 'engine prime':
+        return DjSoftware.engineDj;
+      case 'mixxx':
+        return DjSoftware.mixxx;
+      case 'rekordbox':
+        return DjSoftware.rekordbox;
+      case 'serato':
+      case 'serato dj':
+      case 'serato dj pro':
+      case 'seratodj':
+        return DjSoftware.serato;
+      case 'traktor':
+      case 'traktor pro':
+      case 'traktorpro':
+      case 'traktordj':
+        return DjSoftware.traktor;
+      case 'virtualdj':
+      case 'virtual_dj':
+      case 'virtual dj':
+        return DjSoftware.virtualDj;
       default:
         return null;
     }
