@@ -164,7 +164,20 @@ if (-not $Iscc) {
 }
 
 $IssPath = Join-Path $ToolRoot 'installer\vibesbox_sync.iss'
-Write-Step "Inno Setup: $Iscc"
+$AppIcon = Join-Path $ToolRoot 'windows\runner\resources\app_icon.ico'
+$SetupIcon = Join-Path $ToolRoot 'installer\vibesbox_sync.ico'
+if (-not (Test-Path $AppIcon)) { throw "App-Icon fehlt: $AppIcon" }
+if (-not (Test-Path $SetupIcon)) { throw "Setup-Icon fehlt: $SetupIcon" }
+
+# Alte Setup-Dateien mit anderer Versionsnummer entfernen, damit nichts Verwirrung stiftet
+Get-ChildItem -Path $DistDir -Filter 'VibesBoxSync-Setup-*.exe' -ErrorAction SilentlyContinue |
+  Where-Object { $_.Name -ne "VibesBoxSync-Setup-$AppVersion.exe" } |
+  ForEach-Object {
+    Write-Host "Entferne alte Setup-Datei: $($_.Name)" -ForegroundColor Yellow
+    Remove-Item -Force $_.FullName
+  }
+
+Write-Step "Inno Setup: $Iscc  (Version $AppVersion)"
 & $Iscc "/DMyAppVersion=$AppVersion" $IssPath
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup fehlgeschlagen (Exit $LASTEXITCODE)" }
 
@@ -177,3 +190,7 @@ Write-Host ""
 Write-Host "Fertig." -ForegroundColor Green
 Write-Host "Installer: $SetupExe"
 Write-Host "Portable:  $ZipPath"
+Write-Host ""
+Write-Host "Wichtig: Dateiname muss VibesBoxSync-Setup-$AppVersion.exe sein." -ForegroundColor Cyan
+Write-Host "Danach ggf. auf die Website:"
+Write-Host "  ..\..\scripts\deploy_sync_windows.ps1"

@@ -25,6 +25,7 @@ OutputDir=..\dist
 OutputBaseFilename=VibesBoxSync-Setup-{#MyAppVersion}
 SetupIconFile=vibesbox_sync.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
+; Icon der installierten App kommt aus VibesBoxSync.exe (windows/runner/resources/app_icon.ico)
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
