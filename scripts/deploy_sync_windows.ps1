@@ -44,7 +44,7 @@ if (-not (Test-Path $MacPath)) {
   $MacUrl = "https://vibesbox.app/sync/$MacName"
   Write-Host "==> Lade bestehende Mac-PKG von Live: $MacUrl" -ForegroundColor Cyan
   Invoke-WebRequest -Uri $MacUrl -OutFile $MacPath -UseBasicParsing
-  Write-Host "OK: $MacPath ($([math]::Round((Get-Item $MacPath).Length / 1MB, 1)) MB)"
+  Write-Host ("OK: {0} ({1} MB)" -f $MacPath, [math]::Round((Get-Item $MacPath).Length / 1MB, 1))
 } else {
   Write-Host "Mac-PKG bereits lokal: $MacPath"
 }
@@ -54,13 +54,14 @@ $DestPath = Join-Path $DestDir $DestName
 
 Write-Host "==> Kopiere Windows-Installer nach public\sync\$DestName" -ForegroundColor Cyan
 Copy-Item -Force $SetupExe $DestPath
-Write-Host "OK: $DestPath ($([math]::Round((Get-Item $DestPath).Length / 1MB, 1)) MB)"
+Write-Host ("OK: {0} ({1} MB)" -f $DestPath, [math]::Round((Get-Item $DestPath).Length / 1MB, 1))
 
 # Sicherstellen, dass die Sync-Seite den Windows-Link hat (Branch-Stand)
 $SyncHtml = Join-Path $DestDir 'index.html'
-$html = Get-Content -Raw $SyncHtml
-if ($html -notmatch [regex]::Escape("/sync/$DestName")) {
-  throw "public/sync/index.html verlinkt nicht auf $DestName – bitte zuerst: git pull (Branch mit Windows-Link)."
+$html = Get-Content -Raw -Encoding UTF8 $SyncHtml
+$linkNeedle = "/sync/$DestName"
+if ($html -notlike "*$linkNeedle*") {
+  throw "public/sync/index.html verlinkt nicht auf $DestName. Bitte zuerst: git pull"
 }
 
 $firebase = Get-Command firebase -ErrorAction SilentlyContinue
@@ -81,4 +82,4 @@ Write-Host ""
 Write-Host "Fertig. Pruefen:" -ForegroundColor Green
 Write-Host "  https://vibesbox.app/sync/"
 Write-Host "  https://vibesbox.app/download/vibesbox-sync-windows"
-Write-Host "  https://vibesbox.app/sync/$DestName"
+Write-Host ("  https://vibesbox.app/sync/{0}" -f $DestName)
