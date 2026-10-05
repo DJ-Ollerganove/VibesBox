@@ -158,6 +158,8 @@ class DjLibraryPrefs extends ChangeNotifier {
   bool? readLibrary;
   bool autoUpdate = false;
   bool alwaysOnTop = false;
+  /// Windows: Sync starten, wenn eine integrierte DJ-Software startet.
+  bool launchWithDj = false;
   final Map<DjSoftware, String> _customPaths = {};
 
   bool get wantsRead => software != null && readLibrary == true;
@@ -198,6 +200,7 @@ class DjLibraryPrefs extends ChangeNotifier {
       readLibrary = read is bool ? read : null;
       autoUpdate = data['autoUpdate'] == true;
       alwaysOnTop = data['alwaysOnTop'] == true;
+      launchWithDj = data['launchWithDj'] == true;
       _customPaths.clear();
       void take(DjSoftware key, String jsonKey) {
         final v = data[jsonKey]?.toString().trim();
@@ -215,6 +218,17 @@ class DjLibraryPrefs extends ChangeNotifier {
       if (alwaysOnTop) {
         await WindowChrome.setAlwaysOnTop(true);
       }
+      // Windows-Run-Key ist die Wahrheit für den Watcher; Prefs angleichen.
+      if (Platform.isWindows) {
+        final native = await WindowChrome.isLaunchWithDj();
+        if (native != null && native != launchWithDj) {
+          launchWithDj = native;
+          await save();
+          notifyListeners();
+        } else if (launchWithDj) {
+          await WindowChrome.setLaunchWithDj(true);
+        }
+      }
     } catch (_) {
       notifyListeners();
     }
@@ -226,6 +240,16 @@ class DjLibraryPrefs extends ChangeNotifier {
     await save();
     notifyListeners();
     await WindowChrome.setAlwaysOnTop(value);
+  }
+
+  Future<void> setLaunchWithDj(bool value) async {
+    if (launchWithDj == value) return;
+    launchWithDj = value;
+    await save();
+    notifyListeners();
+    if (Platform.isWindows) {
+      await WindowChrome.setLaunchWithDj(value);
+    }
   }
 
   Future<void> setSoftware(DjSoftware? value) async {
@@ -293,6 +317,7 @@ class DjLibraryPrefs extends ChangeNotifier {
         'readLibrary': readLibrary,
         'autoUpdate': autoUpdate,
         'alwaysOnTop': alwaysOnTop,
+        'launchWithDj': launchWithDj,
         'pathRekordbox': _customPaths[DjSoftware.rekordbox],
         'pathSerato': _customPaths[DjSoftware.serato],
         'pathVirtualDj': _customPaths[DjSoftware.virtualDj],
@@ -407,6 +432,25 @@ class WindowChrome {
       await _channel.invokeMethod<bool>('setAlwaysOnTop', on);
     } on PlatformException {
       return;
+    }
+  }
+
+  /// Windows: HKCU-Run + Watcher. Andere Plattformen: no-op / null.
+  static Future<bool> setLaunchWithDj(bool on) async {
+    if (!Platform.isWindows) return false;
+    try {
+      return await _channel.invokeMethod<bool>('setLaunchWithDj', on) ?? false;
+    } on PlatformException {
+      return false;
+    }
+  }
+
+  static Future<bool?> isLaunchWithDj() async {
+    if (!Platform.isWindows) return null;
+    try {
+      return await _channel.invokeMethod<bool>('isLaunchWithDj');
+    } on PlatformException {
+      return null;
     }
   }
 }
