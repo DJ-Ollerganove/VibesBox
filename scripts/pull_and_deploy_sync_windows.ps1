@@ -40,11 +40,11 @@ if (git cat-file -e "origin/$Branch`:scripts/pull_and_deploy_sync_windows.ps1" 2
 git checkout "origin/$Branch" -- @files
 if ($LASTEXITCODE -ne 0) { throw 'git checkout der Sync-Dateien fehlgeschlagen' }
 
-$marker = Select-String -Path 'tools\rb_now_playing\scripts\sync_version_from_pubspec.ps1' -Pattern 'SYNC_HOSTING_STABLE_v2' -SimpleMatch -ErrorAction SilentlyContinue
+$marker = Select-String -Path 'tools\rb_now_playing\scripts\sync_version_from_pubspec.ps1' -Pattern 'SYNC_HOSTING_STABLE_v3' -SimpleMatch -ErrorAction SilentlyContinue
 if (-not $marker) {
   throw "sync_version_from_pubspec.ps1 ist immer noch alt. Branch/Remote pruefen."
 }
-Write-Host "OK: SYNC_HOSTING_STABLE_v2 vorhanden" -ForegroundColor Green
+Write-Host "OK: SYNC_HOSTING_STABLE_v3 vorhanden" -ForegroundColor Green
 
 $deployArgs = @{}
 if ($SetupExe) { $deployArgs['SetupExe'] = $SetupExe }

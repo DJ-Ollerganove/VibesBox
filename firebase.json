@@ -11,6 +11,18 @@
   "hosting": {
     "public": "public",
     "ignore": ["firebase.json", "**/node_modules/**"],
+    "redirects": [
+      {
+        "source": "/download/vibesbox-sync-windows",
+        "destination": "/sync/VibesBox-Sync-windows.exe",
+        "type": 302
+      },
+      {
+        "source": "/download/vibesbox-sync-mac",
+        "destination": "/sync/VibesBox-Sync-mac.pkg",
+        "type": 302
+      }
+    ],
     "rewrites": [
       { "source": "/invite", "destination": "/invite.html" },
       { "source": "/invite/**", "destination": "/invite.html" },
@@ -25,8 +37,6 @@
       { "source": "/vb/**", "destination": "/vb/index.html" },
       { "source": "/sync", "destination": "/sync/index.html" },
       { "source": "/sync/", "destination": "/sync/index.html" },
-      { "source": "/download/vibesbox-sync-mac", "destination": "/sync/VibesBox-Sync-mac.pkg" },
-      { "source": "/download/vibesbox-sync-windows", "destination": "/sync/VibesBox-Sync-windows.exe" },
       { "source": "**", "destination": "/index.html" }
     ],
     "headers": [
@@ -145,7 +155,7 @@
         "source": "/sync/VibesBox-Sync-windows.exe",
         "headers": [
           { "key": "Content-Type", "value": "application/octet-stream" },
-          { "key": "Content-Disposition", "value": "attachment" },
+          { "key": "Content-Disposition", "value": "attachment; filename=\"VibesBox-Sync-windows.exe\"" },
           { "key": "Cache-Control", "value": "no-cache, max-age=0" }
         ]
       },
@@ -153,7 +163,7 @@
         "source": "/sync/VibesBox-Sync-mac.pkg",
         "headers": [
           { "key": "Content-Type", "value": "application/octet-stream" },
-          { "key": "Content-Disposition", "value": "attachment" },
+          { "key": "Content-Disposition", "value": "attachment; filename=\"VibesBox-Sync-mac.pkg\"" },
           { "key": "Cache-Control", "value": "no-cache, max-age=0" }
         ]
       },
@@ -161,14 +171,14 @@
         "source": "/sync/*.pkg",
         "headers": [
           { "key": "Content-Type", "value": "application/octet-stream" },
-          { "key": "Content-Disposition", "value": "attachment" }
+          { "key": "Content-Disposition", "value": "attachment; filename=\"VibesBox-Sync-mac.pkg\"" }
         ]
       },
       {
         "source": "/sync/*.exe",
         "headers": [
           { "key": "Content-Type", "value": "application/octet-stream" },
-          { "key": "Content-Disposition", "value": "attachment" }
+          { "key": "Content-Disposition", "value": "attachment; filename=\"VibesBox-Sync-windows.exe\"" }
         ]
       },
       {

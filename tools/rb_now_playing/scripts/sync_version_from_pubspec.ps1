@@ -5,9 +5,9 @@
 
 .NOTES
   Nur ASCII in diesem Skript (Windows PowerShell 5.1 / Codepage).
-  Hosting: feste Dateinamen. -UpdateHosting schreibt version.json und
-  stellt index.html + firebase.json auf stabile Links um (kein fragiles Regex).
-  Marker: SYNC_HOSTING_STABLE_v2
+  Hosting: feste Dateinamen + Redirects (nicht Rewrite), damit Browser
+  eine echte .exe/.pkg mit Dateiname speichern.
+  Marker: SYNC_HOSTING_STABLE_v3
 #>
 
 [CmdletBinding()]
@@ -55,7 +55,6 @@ if ($UpdateHosting) {
   $syncDir = Join-Path $RepoRoot 'public\sync'
   New-Item -ItemType Directory -Force -Path $syncDir | Out-Null
 
-  # Mac-Version aus vorhandener version.json behalten
   $macVer = '1.0.2'
   $versionJsonPath = Join-Path $syncDir 'version.json'
   if (Test-Path $versionJsonPath) {
@@ -69,33 +68,26 @@ if ($UpdateHosting) {
   [System.IO.File]::WriteAllText($versionJsonPath, $versionJson, $utf8NoBom)
   Write-Host ("OK: public/sync/version.json -> windows={0} mac={1}" -f $Version, $macVer)
 
-  # firebase.json: JEDE Windows/Mac Sync-Destination auf festen Namen
   $firebasePath = Join-Path $RepoRoot 'firebase.json'
   $firebase = [System.IO.File]::ReadAllText($firebasePath)
-  $firebase2 = [regex]::Replace(
-    $firebase,
-    '"/download/vibesbox-sync-windows"\s*,\s*"destination"\s*:\s*"/sync/[^"]+"',
-    '"/download/vibesbox-sync-windows", "destination": "/sync/VibesBox-Sync-windows.exe"'
-  )
-  $firebase2 = [regex]::Replace(
-    $firebase2,
-    '"/download/vibesbox-sync-mac"\s*,\s*"destination"\s*:\s*"/sync/[^"]+"',
-    '"/download/vibesbox-sync-mac", "destination": "/sync/VibesBox-Sync-mac.pkg"'
-  )
-  if ($firebase2 -notlike '*/sync/VibesBox-Sync-windows.exe*') {
-    throw "firebase.json Windows-Rewrite fehlt komplett."
+  if ($firebase -notlike '*"redirects"*') {
+    throw "firebase.json hat keine redirects-Sektion (SYNC_HOSTING_STABLE_v3 fehlt)."
   }
-  if ($firebase2 -notlike '*/sync/VibesBox-Sync-mac.pkg*') {
-    throw "firebase.json Mac-Rewrite fehlt komplett."
+  if ($firebase -notlike '*/download/vibesbox-sync-windows*') {
+    throw "firebase.json fehlt Redirect /download/vibesbox-sync-windows"
   }
-  if ($firebase2 -ne $firebase) {
-    [System.IO.File]::WriteAllText($firebasePath, $firebase2, $utf8NoBom)
-    Write-Host "OK: firebase.json -> feste Sync-URLs"
-  } else {
-    Write-Host "OK: firebase.json bereits feste Sync-URLs"
+  if ($firebase -notlike '*/sync/VibesBox-Sync-windows.exe*') {
+    throw "firebase.json Redirect zeigt nicht auf /sync/VibesBox-Sync-windows.exe"
   }
+  $rewritesChunk = ''
+  if ($firebase -match '"rewrites"\s*:\s*\[([\s\S]*?)\]') {
+    $rewritesChunk = $Matches[1]
+  }
+  if ($rewritesChunk -like '*/download/vibesbox-sync-windows*') {
+    throw "firebase.json hat Download noch als rewrite - muss redirect sein. Bitte git pull."
+  }
+  Write-Host "OK: firebase.json Download-Redirects vorhanden"
 
-  # index.html: komplette Sync-Seite mit festen Links schreiben (kein Regex-Kampf)
   $htmlPath = Join-Path $syncDir 'index.html'
   $html = @'
 <!DOCTYPE html>
@@ -185,7 +177,7 @@ if ($UpdateHosting) {
       </svg>
       <div>
         Fuer Windows-OS:
-        <a class="download" href="/download/vibesbox-sync-windows">Download</a>
+        <a class="download" href="/sync/VibesBox-Sync-windows.exe" download="VibesBox-Sync-windows.exe">Download</a>
         <span class="ver" id="win-ver">Version …</span>
       </div>
     </div>
@@ -195,7 +187,7 @@ if ($UpdateHosting) {
       </svg>
       <div>
         Fuer Mac-OS:
-        <a class="download" href="/download/vibesbox-sync-mac">Download</a>
+        <a class="download" href="/sync/VibesBox-Sync-mac.pkg" download="VibesBox-Sync-mac.pkg">Download</a>
         <span class="ver" id="mac-ver">Version …</span>
       </div>
     </div>
@@ -213,7 +205,7 @@ if ($UpdateHosting) {
 </html>
 '@
   [System.IO.File]::WriteAllText($htmlPath, $html.Replace("`r`n", "`n"), $utf8NoBom)
-  Write-Host "OK: public/sync/index.html (feste Download-URLs, SYNC_HOSTING_STABLE_v2)"
+  Write-Host "OK: public/sync/index.html (direkte .exe/.pkg Links, SYNC_HOSTING_STABLE_v3)"
 }
 
 Write-Host ("Version sync fertig: {0}" -f $Version)
