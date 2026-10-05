@@ -2,6 +2,23 @@
 
 Desktop-Tool: DJ-Library / Now-Playing mit VibesBox verbinden (macOS + Windows).
 
+## Version / Updates
+
+**Eine Quelle:** `tools/rb_now_playing/pubspec.yaml` → Zeile `version:` (z. B. `1.0.3+3`).
+
+Beim Windows-Build/Deploy wird daraus automatisch:
+- `lib/tool_version.dart` (`kSyncToolVersion` für den Update-Check im Tool)
+- Installer-Dateiname
+- `public/sync/index.html` + `firebase.json` Download-Link (beim Deploy)
+
+**Neues Release (Beispiel 1.0.3):**
+
+1. In `pubspec.yaml` Version auf `1.0.3+3` setzen  
+2. Windows: `.\build_windows_installer.ps1` dann `.\scripts\deploy_sync_windows.ps1`  
+3. In der VibesBox-App (Admin → VibesBox Sync): Windows = `1.0.3`, Download-URL setzen, **Mindestversion** anhaken wenn alte Clients blockiert werden sollen  
+
+Mac-Build vorher: `./scripts/sync_version_from_pubspec.sh`
+
 ## Windows: Installer bauen
 
 Auf einem **Windows-PC** (Flutter Windows-Build läuft nicht auf dem Mac).
@@ -74,4 +91,8 @@ Zum Testen dort `VibesBoxSync.exe` starten.
 
 ## macOS
 
-Wie bisher über Xcode / `flutter build macos --release` im Ordner `tools/rb_now_playing`.
+```bash
+cd tools/rb_now_playing
+./scripts/sync_version_from_pubspec.sh
+flutter build macos --release
+```

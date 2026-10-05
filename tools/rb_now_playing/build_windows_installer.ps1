@@ -31,12 +31,12 @@ function Write-Step([string]$msg) {
   Write-Host "==> $msg" -ForegroundColor Cyan
 }
 
-# Version aus pubspec.yaml (z. B. 1.0.2+2 -> 1.0.2)
+# Eine Versionsquelle: pubspec.yaml (schreibt tool_version.dart + Inno-Default)
+Write-Step "Version aus pubspec synchronisieren"
+$AppVersion = & (Join-Path $ToolRoot 'scripts\sync_version_from_pubspec.ps1')
+if (-not $AppVersion) { throw "Version-Sync lieferte keine Versionsnummer." }
+$AppVersion = "$AppVersion".Trim()
 $pubspec = Get-Content -Raw -Encoding UTF8 (Join-Path $ToolRoot 'pubspec.yaml')
-if ($pubspec -notmatch '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)') {
-  throw "Konnte version in pubspec.yaml nicht lesen."
-}
-$AppVersion = $Matches[1]
 Write-Host "VibesBox Sync Version: $AppVersion"
 
 # Quelle muss die Windows-Fixes enthalten (sonst baut man die alte EXE weiter).
