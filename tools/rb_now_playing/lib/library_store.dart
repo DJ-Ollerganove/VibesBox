@@ -20,6 +20,7 @@ String libraryCacheFileName(String? softwareId) {
     case 'traktor':
     case 'mixxx':
     case 'enginedj':
+    case 'djaypro':
       return 'library_$softwareId.json';
     default:
       return 'library.json';

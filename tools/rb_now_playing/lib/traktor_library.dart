@@ -252,6 +252,7 @@ List<HistoryTrack> parseTraktorHistoryNml(String nml) {
         bpm: null,
         musicalKey: null,
         length: null,
+        location: toDragLocation(parsed.path),
       ),
     );
   }
@@ -287,6 +288,13 @@ List<HistoryTrack> parseTraktorLastPlayed(String nml) {
           length: intOrNull(info['PLAYTIME']) == null
               ? null
               : Duration(seconds: intOrNull(info['PLAYTIME'])!),
+          location: toDragLocation(
+            traktorLocationToPath(
+              volume: _firstTag(match.group(2) ?? '', 'LOCATION')['VOLUME'],
+              dir: _firstTag(match.group(2) ?? '', 'LOCATION')['DIR'],
+              file: _firstTag(match.group(2) ?? '', 'LOCATION')['FILE'],
+            ),
+          ),
         ),
       ),
     );

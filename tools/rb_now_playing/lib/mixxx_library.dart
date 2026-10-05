@@ -47,11 +47,22 @@ LIMIT 1
       if (latest.isNotEmpty) {
         final id = latest.first['id'];
         final name = textOrNull(latest.first['name']) ?? 'History';
+        final locations = sqliteHasTable(db, 'track_locations')
+            ? 'track_locations'
+            : sqliteHasTable(db, 'Track_Locations')
+                ? 'Track_Locations'
+                : null;
+        final locJoin = locations == null
+            ? ''
+            : 'LEFT JOIN "$locations" loc ON loc.id = l.location';
+        final locCol = locations == null ? 'NULL' : 'loc.location';
         final rows = db.select('''
-SELECT l.title, l.artist, l.bpm, l.key AS musicalKey, l.duration
+SELECT l.title, l.artist, l.bpm, l.key AS musicalKey, l.duration,
+       $locCol AS location
 ${hasWhen ? ', pt.pl_datetime_added AS playedAt' : ''}
 FROM "$playlistTracks" pt
 JOIN "$library" l ON l.id = pt.track_id
+$locJoin
 WHERE pt.playlist_id = ?
 ORDER BY ${hasWhen ? 'pt.pl_datetime_added DESC, ' : ''}pt.position DESC
 LIMIT 80
@@ -65,12 +76,23 @@ LIMIT 80
       }
     }
     if (sqliteHasColumn(db, library, 'last_played_at')) {
+      final locations = sqliteHasTable(db, 'track_locations')
+          ? 'track_locations'
+          : sqliteHasTable(db, 'Track_Locations')
+              ? 'Track_Locations'
+              : null;
+      final locJoin = locations == null
+          ? ''
+          : 'LEFT JOIN "$locations" loc ON loc.id = l.location';
+      final locCol = locations == null ? 'NULL' : 'loc.location';
       final rows = db.select('''
-SELECT title, artist, bpm, key AS musicalKey, duration, last_played_at AS playedAt
-FROM "$library"
-WHERE IFNULL(title, '') != ''
-  AND last_played_at IS NOT NULL
-ORDER BY last_played_at DESC
+SELECT l.title, l.artist, l.bpm, l.key AS musicalKey, l.duration,
+       l.last_played_at AS playedAt, $locCol AS location
+FROM "$library" l
+$locJoin
+WHERE IFNULL(l.title, '') != ''
+  AND l.last_played_at IS NOT NULL
+ORDER BY l.last_played_at DESC
 LIMIT 80
 ''');
       return HistorySnapshot(
@@ -216,6 +238,7 @@ WHERE IFNULL(title, '') != ''
           bpm: doubleOrNull(row['bpm']),
           musicalKey: textOrNull(row['musicalKey']),
           length: sec == null ? null : Duration(seconds: sec),
+          location: toDragLocation(textOrNull(row['location'])),
         ),
       );
     }

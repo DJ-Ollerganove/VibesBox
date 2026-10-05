@@ -23,13 +23,19 @@ class EngineDjLibrarySource implements DjLibrarySource {
   HistorySnapshot readHistory() {
     final db = _ensure();
     final track = sqliteTable(db, const ['Track', 'track']);
+    final uriCol = sqliteHasColumn(db, track, 'uri') ? 't.uri' : 'NULL';
+    final pathCol = sqliteHasColumn(db, track, 'path') ? 't.path' : 'NULL';
+    final fileCol =
+        sqliteHasColumn(db, track, 'filename') ? 't.filename' : 'NULL';
+    final keyCol = sqliteHasColumn(db, track, 'key') ? 't.key' : 'NULL';
     // Zuerst Quellen mit Einträgen prüfen (leere Haupttabelle nicht bevorzugen).
     for (final candidate in [
       (
         table: 'hist.HistorylistEntity',
         name: 'hm.HistorylistEntity',
         sql: '''
-SELECT e.startTime AS playedAt, t.title, t.artist, t.bpm, t.key AS musicalKey, t.length
+SELECT e.startTime AS playedAt, t.title, t.artist, t.bpm, $keyCol AS musicalKey, t.length,
+       $pathCol AS path, $fileCol AS filename, $uriCol AS uri
 FROM hist.HistorylistEntity e
 JOIN "$track" t ON t.id = e.trackId
 ORDER BY e.startTime DESC
@@ -40,7 +46,8 @@ LIMIT 80
         table: 'HistorylistEntity',
         name: 'HistorylistEntity',
         sql: '''
-SELECT e.startTime AS playedAt, t.title, t.artist, t.bpm, t.key AS musicalKey, t.length
+SELECT e.startTime AS playedAt, t.title, t.artist, t.bpm, $keyCol AS musicalKey, t.length,
+       $pathCol AS path, $fileCol AS filename, $uriCol AS uri
 FROM HistorylistEntity e
 JOIN "$track" t ON t.id = e.trackId
 ORDER BY e.startTime DESC
@@ -64,7 +71,8 @@ LIMIT 80
           ? 'h.date'
           : 'NULL';
       final rows = db.select('''
-SELECT $dateCol AS playedAt, t.title, t.artist, t.bpm, t.key AS musicalKey, t.length
+SELECT $dateCol AS playedAt, t.title, t.artist, t.bpm, $keyCol AS musicalKey, t.length,
+       $pathCol AS path, $fileCol AS filename, $uriCol AS uri
 FROM HistorylistTrackList h
 JOIN "$track" t ON t.id = h.trackId
 ORDER BY $dateCol DESC
@@ -240,6 +248,7 @@ FROM "$track" t
   }
 
   List<HistoryTrack> _historyRows(ResultSet rows) {
+    final root = engineLibraryRoot(_dbPath ?? '');
     final tracks = <HistoryTrack>[];
     var n = 0;
     for (final row in rows) {
@@ -247,6 +256,12 @@ FROM "$track" t
       if (title == null) continue;
       n += 1;
       final sec = intOrNull(row['length']);
+      final location = toDragLocation(textOrNull(row['uri'])) ??
+          engineAbsolutePath(
+            root,
+            textOrNull(row['path']),
+            textOrNull(row['filename']),
+          );
       tracks.add(
         HistoryTrack(
           trackNo: n,
@@ -257,6 +272,7 @@ FROM "$track" t
           bpm: doubleOrNull(row['bpm']),
           musicalKey: textOrNull(row['musicalKey']),
           length: sec == null ? null : Duration(seconds: sec),
+          location: location,
         ),
       );
     }

@@ -38,6 +38,8 @@ WHERE collection = 'historySessionItems'
 ORDER BY rowid DESC
 LIMIT 80
 ''');
+    final localLoc = _mapByKey(db, 'localMediaItemLocations');
+    final globalLoc = _mapByKey(db, 'globalMediaItemLocations');
     final tracks = <HistoryTrack>[];
     var n = 0;
     for (final row in rows) {
@@ -56,8 +58,11 @@ LIMIT 80
       }
       if (title == null || title.isEmpty) continue;
       n += 1;
-      final analyzed =
-          parsed.titleId == null ? null : _analyzedById(db, parsed.titleId!);
+      final titleId = parsed.titleId;
+      final analyzed = titleId == null ? null : _analyzedById(db, titleId);
+      final location = titleId == null
+          ? null
+          : _locationFor(localLoc[titleId], globalLoc[titleId]);
       tracks.add(
         HistoryTrack(
           trackNo: n,
@@ -70,6 +75,7 @@ LIMIT 80
           length: parsed.duration == null
               ? null
               : Duration(seconds: parsed.duration!.round()),
+          location: location,
         ),
       );
     }
@@ -422,25 +428,40 @@ List<String> extractDjaySourceUris(Uint8List blob) {
   return uris;
 }
 
-String? resolveDjayUri(String? raw) {
+String? resolveDjayUri(String? raw, {bool? windows}) {
   if (raw == null || raw.trim().isEmpty) return null;
   final text = raw.trim();
   final lower = text.toLowerCase();
+  final isWindows = windows ?? Platform.isWindows;
   if (lower.startsWith('file://')) {
     try {
-      var path = Uri.parse(text).toFilePath();
-      if (Platform.isWindows && path.startsWith('/') && path.length > 2 && path[2] == ':') {
-        path = path.substring(1);
+      // Windows: file:///D:%5CMusic%5Csong.mp3 → D:\Music\song.mp3
+      // Entspricht what's-now-playing resolve_file_uri (path[1:] wenn drive letter).
+      var path = Uri.parse(text).toFilePath(windows: isWindows);
+      if (isWindows) {
+        path = path.replaceAll('/', '\\');
+        if (path.startsWith('\\') &&
+            path.length > 2 &&
+            path[2] == ':') {
+          path = path.substring(1);
+        }
       }
+      if (path.isEmpty || path == '/' || path == '\\') return null;
       return toDragLocation(path) ?? path;
     } catch (_) {
-      var path = Uri.decodeFull(text.substring('file://'.length));
-      if (path.startsWith('/') &&
-          Platform.isWindows &&
-          path.length > 2 &&
-          path[2] == ':') {
-        path = path.substring(1);
+      var path = Uri.decodeFull(
+        text.replaceFirst(RegExp(r'^file:///?', caseSensitive: false), ''),
+      );
+      path = Uri.decodeFull(path);
+      if (isWindows) {
+        path = path.replaceAll('/', '\\');
+        if (path.startsWith('\\') && path.length > 2 && path[2] == ':') {
+          path = path.substring(1);
+        }
+      } else if (!path.startsWith('/')) {
+        path = '/$path';
       }
+      if (path.isEmpty || path == '/' || path == '\\') return null;
       return toDragLocation(path) ?? path;
     }
   }
@@ -451,6 +472,8 @@ String? resolveDjayUri(String? raw) {
   return null;
 }
 
+/// keySignatureIndex 0..23 — verifiziert gegen what's-now-playing / djay Pro.
+/// Gerade = Dur (Camelot B), ungerade = paralleles Moll (Camelot A).
 String? djayKeyName(int index) {
   const map = <int, String>{
     0: 'Db',

@@ -291,6 +291,7 @@ List<HistoryTrack> parseVirtualDjM3u(String raw) {
         bpm: null,
         musicalKey: null,
         length: null,
+        location: toDragLocation(text),
       ),
     );
     pendingTitle = null;

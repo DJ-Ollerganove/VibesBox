@@ -145,6 +145,7 @@ LIMIT 50
           bpm: doubleOrNull(row['bpm']),
           musicalKey: textOrNull(row['musicalKey']),
           length: _length(intOrNull(row['lengthSec'])),
+          location: seratoPortableToPath(textOrNull(row['location'])),
         ),
       );
       n -= 1;
