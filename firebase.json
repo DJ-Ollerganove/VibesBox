@@ -25,7 +25,7 @@
       { "source": "/vb/**", "destination": "/vb/index.html" },
       { "source": "/sync", "destination": "/sync/index.html" },
       { "source": "/sync/", "destination": "/sync/index.html" },
-      { "source": "/download/vibesbox-sync-mac", "destination": "/sync/VibesBox-Sync-1.0.1-mac.pkg" },
+      { "source": "/download/vibesbox-sync-mac", "destination": "/sync/VibesBox-Sync-1.0.2-mac.pkg" },
       { "source": "/download/vibesbox-sync-windows", "destination": "/sync/VibesBox-Sync-1.0.2-windows.exe" },
       { "source": "**", "destination": "/index.html" }
     ],
