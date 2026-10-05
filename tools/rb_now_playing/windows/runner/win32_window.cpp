@@ -96,7 +96,7 @@ const wchar_t* WindowClassRegistrar::GetWindowClass() {
     window_class.cbClsExtra = 0;
     window_class.cbWndExtra = 0;
     window_class.hInstance = GetModuleHandle(nullptr);
-    // hIconSm gibt es nur in WNDCLASSEX — ohne RegisterClassEx bleibt
+    // hIconSm gibt es nur in WNDCLASSEX - ohne RegisterClassEx bleibt
     // die Taskleiste beim generischen Datei-Icon.
     window_class.hIcon = reinterpret_cast<HICON>(LoadImage(
         window_class.hInstance, MAKEINTRESOURCE(IDI_APP_ICON), IMAGE_ICON,
