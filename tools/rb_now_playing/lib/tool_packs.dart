@@ -845,7 +845,7 @@ const toolPacks = <String, Map<String, String>>{
     'actReject': 'Afwijzen',
     'actDelete': 'Verwijderen',
     'actBlock': 'Gast blokkeren',
-    'actSave': 'Op de merklĳst',
+    'actSave': 'Op de merklijst',
     'actBlacklist': 'Op de blacklist',
     'actUp': 'Omhoog',
     'actDown': 'Omlaag',
