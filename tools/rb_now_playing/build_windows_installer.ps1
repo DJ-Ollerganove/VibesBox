@@ -31,13 +31,27 @@ function Write-Step([string]$msg) {
   Write-Host "==> $msg" -ForegroundColor Cyan
 }
 
-# Eine Versionsquelle: pubspec.yaml (schreibt tool_version.dart + Inno-Default)
-Write-Step "Version aus pubspec synchronisieren"
-$AppVersion = & (Join-Path $ToolRoot 'scripts\sync_version_from_pubspec.ps1')
-if (-not $AppVersion) { throw "Version-Sync lieferte keine Versionsnummer." }
-$AppVersion = "$AppVersion".Trim()
-$pubspec = Get-Content -Raw -Encoding UTF8 (Join-Path $ToolRoot 'pubspec.yaml')
-Write-Host "VibesBox Sync Version: $AppVersion"
+# Eine Versionsquelle: pubspec.yaml – direkt hier lesen (nicht aus Script-Output raten)
+Write-Step "Version aus pubspec lesen"
+$pubspecPath = Join-Path $ToolRoot 'pubspec.yaml'
+$pubspec = Get-Content -Raw -Encoding UTF8 $pubspecPath
+if ($pubspec -notmatch '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)') {
+  throw "Konnte version in pubspec.yaml nicht lesen."
+}
+$AppVersion = $Matches[1]
+if ($AppVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
+  throw "Ungueltige Version aus pubspec: '$AppVersion'"
+}
+Write-Host "pubspec.yaml version -> $AppVersion"
+
+# tool_version.dart + iss-Default mitschreiben (Hosting optional nur beim Deploy)
+$null = & (Join-Path $ToolRoot 'scripts\sync_version_from_pubspec.ps1')
+# Nochmal aus pubspec bestaetigen (Sync-Script darf die Wahrheit nicht aendern)
+$pubspec = Get-Content -Raw -Encoding UTF8 $pubspecPath
+if ($pubspec -notmatch '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)' -or $Matches[1] -ne $AppVersion) {
+  throw "Version nach Sync inkonsistent (erwartet $AppVersion)."
+}
+Write-Host "VibesBox Sync Version: $AppVersion" -ForegroundColor Green
 
 # Quelle muss die Windows-Fixes enthalten (sonst baut man die alte EXE weiter).
 $sessionSrc = Get-Content -Raw -Encoding UTF8 (Join-Path $ToolRoot 'lib\tool_session.dart')
@@ -169,21 +183,63 @@ $SetupIcon = Join-Path $ToolRoot 'installer\vibesbox_sync.ico'
 if (-not (Test-Path $AppIcon)) { throw "App-Icon fehlt: $AppIcon" }
 if (-not (Test-Path $SetupIcon)) { throw "Setup-Icon fehlt: $SetupIcon" }
 
-# Alte Setup-Dateien mit anderer Versionsnummer entfernen, damit nichts Verwirrung stiftet
+$ExpectedSetupName = "VibesBoxSync-Setup-$AppVersion.exe"
+$SetupExe = Join-Path $DistDir $ExpectedSetupName
+
+# Version FEST in die .iss schreiben (literaler Dateiname, kein /D, kein Macro)
+Write-Step "Inno-.iss auf Version $AppVersion festnageln"
+$issText = [System.IO.File]::ReadAllText($IssPath)
+$issText = [regex]::Replace(
+  $issText,
+  '#define MyAppVersion\s+"[^"]+"',
+  "#define MyAppVersion `"$AppVersion`""
+)
+$issText = [regex]::Replace(
+  $issText,
+  'OutputBaseFilename=VibesBoxSync-Setup-[^\r\n]+',
+  "OutputBaseFilename=VibesBoxSync-Setup-$AppVersion"
+)
+if ($issText -notlike "*#define MyAppVersion `"$AppVersion`"*") {
+  throw "Konnte MyAppVersion in vibesbox_sync.iss nicht auf $AppVersion setzen."
+}
+if ($issText -notlike "*OutputBaseFilename=VibesBoxSync-Setup-$AppVersion*") {
+  throw "Konnte OutputBaseFilename in vibesbox_sync.iss nicht auf $AppVersion setzen."
+}
+$utf8NoBom = New-Object System.Text.UTF8Encoding $false
+[System.IO.File]::WriteAllText($IssPath, $issText, $utf8NoBom)
+Write-Host "OK: OutputBaseFilename=VibesBoxSync-Setup-$AppVersion"
+
+# Komplette dist\VibesBoxSync-Setup-*.exe weg, dann neu bauen
 Get-ChildItem -Path $DistDir -Filter 'VibesBoxSync-Setup-*.exe' -ErrorAction SilentlyContinue |
-  Where-Object { $_.Name -ne "VibesBoxSync-Setup-$AppVersion.exe" } |
   ForEach-Object {
     Write-Host "Entferne alte Setup-Datei: $($_.Name)" -ForegroundColor Yellow
     Remove-Item -Force $_.FullName
   }
 
-Write-Step "Inno Setup: $Iscc  (Version $AppVersion)"
-& $Iscc "/DMyAppVersion=$AppVersion" $IssPath
+Write-Step "Inno Setup: $Iscc"
+Write-Host "Erwartete Ausgabe: $SetupExe"
+& $Iscc $IssPath
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup fehlgeschlagen (Exit $LASTEXITCODE)" }
 
-$SetupExe = Join-Path $DistDir "VibesBoxSync-Setup-$AppVersion.exe"
+$found = @(Get-ChildItem -Path $DistDir -Filter 'VibesBoxSync-Setup-*.exe' -ErrorAction SilentlyContinue)
+Write-Host "Setup-Dateien in dist\:"
+$found | ForEach-Object { Write-Host "  - $($_.Name)" }
+
 if (-not (Test-Path $SetupExe)) {
-  throw "Setup-EXE wurde nicht erzeugt: $SetupExe"
+  $names = ($found | ForEach-Object { $_.Name }) -join ', '
+  throw @"
+Setup-EXE mit falschem Namen. Erwartet:
+  $ExpectedSetupName
+Vorhanden: $names
+
+pubspec.yaml version muss $AppVersion sein. Bitte:
+  Get-Content .\pubspec.yaml | Select-String '^version:'
+  .\build_windows_installer.ps1
+"@
+}
+
+if ($found.Count -ne 1 -or $found[0].Name -ne $ExpectedSetupName) {
+  throw "Unerwartete Setup-Dateien in dist\. Nur $ExpectedSetupName ist erlaubt."
 }
 
 Write-Host ""
@@ -191,6 +247,5 @@ Write-Host "Fertig." -ForegroundColor Green
 Write-Host "Installer: $SetupExe"
 Write-Host "Portable:  $ZipPath"
 Write-Host ""
-Write-Host "Wichtig: Dateiname muss VibesBoxSync-Setup-$AppVersion.exe sein." -ForegroundColor Cyan
 Write-Host "Danach ggf. auf die Website:"
 Write-Host "  ..\..\scripts\deploy_sync_windows.ps1"

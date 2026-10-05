@@ -34,12 +34,16 @@ Write-Host "OK: lib/tool_version.dart"
 
 $issPath = Join-Path $ToolRoot 'installer\vibesbox_sync.iss'
 $iss = [System.IO.File]::ReadAllText($issPath)
-$iss2 = [regex]::Replace($iss, '(#define MyAppVersion\s+)"[^"]+"', "`$1`"$Version`"")
-if ($iss2 -eq $iss -and $iss -notmatch [regex]::Escape("`"$Version`"")) {
+$iss2 = [regex]::Replace($iss, '#define MyAppVersion\s+"[^"]+"', "#define MyAppVersion `"$Version`"")
+$iss2 = [regex]::Replace($iss2, 'OutputBaseFilename=VibesBoxSync-Setup-[^\r\n]+', "OutputBaseFilename=VibesBoxSync-Setup-$Version")
+if ($iss2 -notlike "*#define MyAppVersion `"$Version`"*") {
   throw "Konnte MyAppVersion in vibesbox_sync.iss nicht setzen."
 }
+if ($iss2 -notlike "*OutputBaseFilename=VibesBoxSync-Setup-$Version*") {
+  throw "Konnte OutputBaseFilename in vibesbox_sync.iss nicht setzen."
+}
 [System.IO.File]::WriteAllText($issPath, $iss2, $utf8NoBom)
-Write-Host "OK: installer/vibesbox_sync.iss"
+Write-Host "OK: installer/vibesbox_sync.iss -> VibesBoxSync-Setup-$Version.exe"
 
 if ($UpdateHosting) {
   $winFile = "VibesBox-Sync-$Version-windows.exe"

@@ -18,7 +18,8 @@ const kSyncToolVersion = '$VERSION';
 EOF
 ISS="$TOOL_ROOT/installer/vibesbox_sync.iss"
 if [[ -f "$ISS" ]]; then
-  perl -0pi -e "s/(#define MyAppVersion\\s+)\\\"[^\\\"]+\\\"/\$1\\\"$VERSION\\\"/" "$ISS"
+  perl -0pi -e "s/#define MyAppVersion\\s+\\\"[^\\\"]+\\\"/#define MyAppVersion \\\"$VERSION\\\"/" "$ISS"
+  perl -0pi -e "s/OutputBaseFilename=VibesBoxSync-Setup-[^\\r\\n]+/OutputBaseFilename=VibesBoxSync-Setup-$VERSION/" "$ISS"
 fi
-echo "OK: lib/tool_version.dart (+ installer default)"
+echo "OK: lib/tool_version.dart + installer/vibesbox_sync.iss -> Setup-$VERSION"
 echo "$VERSION"

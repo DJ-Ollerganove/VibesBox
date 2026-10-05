@@ -1,14 +1,13 @@
 ; VibesBox Sync – Windows Installer (Inno Setup 6/7)
 ; Wird von build_windows_installer.ps1 aufgerufen.
-; Voraussetzung: Flutter Release-Build unter ..\build\windows\x64\runner\Release\
+; MyAppVersion und OutputBaseFilename werden vor dem Compile
+; aus pubspec.yaml ueberschrieben.
 
 #define MyAppName "VibesBox Sync"
 #define MyAppExeName "VibesBoxSync.exe"
 #define MyAppPublisher "VibesBox"
 #define MyAppURL "https://vibesbox.app"
-#ifndef MyAppVersion
-  #define MyAppVersion "1.0.3"
-#endif
+#define MyAppVersion "1.0.3"
 
 [Setup]
 AppId={{A7C3E9B1-4D2F-4F8A-9C11-6E2B8D0F4A71}
@@ -22,10 +21,9 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=..\dist
-OutputBaseFilename=VibesBoxSync-Setup-{#MyAppVersion}
+OutputBaseFilename=VibesBoxSync-Setup-1.0.3
 SetupIconFile=vibesbox_sync.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
-; Icon der installierten App kommt aus VibesBoxSync.exe (windows/runner/resources/app_icon.ico)
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
