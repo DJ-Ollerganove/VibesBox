@@ -130,6 +130,7 @@ class DjLibraryPrefs extends ChangeNotifier {
   DjSoftware? software;
   bool? readLibrary;
   bool autoUpdate = false;
+  bool alwaysOnTop = false;
   final Map<DjSoftware, String> _customPaths = {};
 
   bool get wantsRead => software != null && readLibrary == true;
@@ -169,6 +170,7 @@ class DjLibraryPrefs extends ChangeNotifier {
       final read = data['readLibrary'];
       readLibrary = read is bool ? read : null;
       autoUpdate = data['autoUpdate'] == true;
+      alwaysOnTop = data['alwaysOnTop'] == true;
       _customPaths.clear();
       void take(DjSoftware key, String jsonKey) {
         final v = data[jsonKey]?.toString().trim();
@@ -182,9 +184,20 @@ class DjLibraryPrefs extends ChangeNotifier {
       take(DjSoftware.mixxx, 'pathMixxx');
       take(DjSoftware.engineDj, 'pathEngineDj');
       notifyListeners();
+      if (alwaysOnTop) {
+        await WindowChrome.setAlwaysOnTop(true);
+      }
     } catch (_) {
       notifyListeners();
     }
+  }
+
+  Future<void> setAlwaysOnTop(bool value) async {
+    if (alwaysOnTop == value) return;
+    alwaysOnTop = value;
+    await save();
+    notifyListeners();
+    await WindowChrome.setAlwaysOnTop(value);
   }
 
   Future<void> setSoftware(DjSoftware? value) async {
@@ -250,6 +263,7 @@ class DjLibraryPrefs extends ChangeNotifier {
         'software': software?.id,
         'readLibrary': readLibrary,
         'autoUpdate': autoUpdate,
+        'alwaysOnTop': alwaysOnTop,
         'pathRekordbox': _customPaths[DjSoftware.rekordbox],
         'pathSerato': _customPaths[DjSoftware.serato],
         'pathVirtualDj': _customPaths[DjSoftware.virtualDj],
@@ -329,4 +343,18 @@ String _joinHome(
   }
   final home = Platform.environment['HOME'] ?? '';
   return ([home, ...macParts]).join('/');
+}
+
+class WindowChrome {
+  WindowChrome._();
+
+  static const _channel = MethodChannel('vibesbox_sync/window');
+
+  static Future<void> setAlwaysOnTop(bool on) async {
+    try {
+      await _channel.invokeMethod<bool>('setAlwaysOnTop', on);
+    } on PlatformException {
+      return;
+    }
+  }
 }

@@ -81,7 +81,7 @@ bool isRekordboxDragPath(String? loc) {
   if (loc == null || loc.isEmpty) return false;
   if (loc.startsWith('/')) return true;
   if (RegExp(r'^[A-Za-z]:[\\/]').hasMatch(loc)) return true;
-  return loc.toLowerCase().startsWith('tidal:tracks:');
+  return false;
 }
 
 /// Datei oder Tidal-URI aus den Pfadformaten der DJ-Programme.
@@ -119,11 +119,24 @@ class LibraryMatch {
 
 /// Findet in der lokalen Rekordbox-Bibliothek den passenden Titel.
 /// Bei mehreren Treffern gewinnt immer der mit den meisten Plays.
+/// Treffer laufen über Titel-Wörter, nicht über die ganze Sammlung.
 class LibraryIndex {
   LibraryIndex(List<LibraryTrack> tracks)
-      : _tracks = List<LibraryTrack>.unmodifiable(tracks);
+      : _tracks = List<LibraryTrack>.unmodifiable(tracks) {
+    for (final track in _tracks) {
+      final title = track.identityTitle;
+      if (title.length < 2) continue;
+      (_exact[title] ??= []).add(track);
+      for (final token in _indexTokens(title)) {
+        (_byToken[token] ??= []).add(track);
+      }
+    }
+  }
 
   final List<LibraryTrack> _tracks;
+  final Map<String, List<LibraryTrack>> _exact = {};
+  final Map<String, List<LibraryTrack>> _byToken = {};
+  final Map<String, LibraryMatch?> _cache = {};
 
   bool get isEmpty => _tracks.isEmpty;
   int get length => _tracks.length;
@@ -137,12 +150,44 @@ class LibraryIndex {
     final qId = identityTitleOf(title);
     final qArtist = identityArtistOf(artist);
     if (qId.length < 2) return null;
+    final cacheKey = '$qId|$qArtist';
+    if (_cache.containsKey(cacheKey)) return _cache[cacheKey];
+    final found = _scoreCandidates(qId, qArtist);
+    if (_cache.length > 5000) _cache.clear();
+    _cache[cacheKey] = found;
+    return found;
+  }
+
+  static List<String> _indexTokens(String title) {
+    final out = <String>[];
+    for (final part in title.split(' ')) {
+      if (part.length >= 4) out.add(part);
+    }
+    return out;
+  }
+
+  LibraryMatch? _scoreCandidates(String qId, String qArtist) {
+    final candidates = <LibraryTrack>{};
+    final exact = _exact[qId];
+    if (exact != null) candidates.addAll(exact);
+    final tokens = _indexTokens(qId);
+    if (tokens.isNotEmpty) {
+      tokens.sort((a, b) {
+        final la = _byToken[a]?.length ?? 1 << 30;
+        final lb = _byToken[b]?.length ?? 1 << 30;
+        return la.compareTo(lb);
+      });
+      final rare = _byToken[tokens.first];
+      if (rare != null && rare.length <= 4000) {
+        candidates.addAll(rare);
+      }
+    }
 
     LibraryTrack? best;
     var bestPlays = -1;
     var bestScore = -1.0;
 
-    for (final track in _tracks) {
+    for (final track in candidates) {
       if (track.identityTitle.length < 2) continue;
       final titleSim = _workSimilarity(qId, track.identityTitle);
       if (titleSim < 0.82) continue;
@@ -180,6 +225,12 @@ bool isSameWork({
     identityArtistOf(artistB),
   );
   if (titleSim >= 0.88 && artistSim >= 0.55) return true;
+  final swapTitle = _workSimilarity(ta, identityTitleOf(artistB));
+  final swapArtist = _artistSimilarity(
+    identityArtistOf(artistA),
+    identityTitleOf(titleB),
+  );
+  if (swapTitle >= 0.88 && swapArtist >= 0.55) return true;
   if (titleSim >= 0.94 && ta.replaceAll(' ', '').length >= 10) return true;
   final shorter = ta.length <= tb.length ? ta : tb;
   final longer = ta.length <= tb.length ? tb : ta;

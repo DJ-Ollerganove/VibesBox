@@ -5,7 +5,7 @@ import 'tool_rest.dart';
 
 /// Sichtbare Version. Die Zahl hinter + in der pubspec ist nur die interne
 /// Build-Nummer für Mac und Windows und wird hier nicht angezeigt.
-const kSyncToolVersion = '1.0.1';
+const kSyncToolVersion = '1.0.2';
 
 const kPrivacyUrl = 'https://vibesbox.app/datenschutz.html';
 const kImprintUrl = 'https://vibesbox.app/impressum.html';

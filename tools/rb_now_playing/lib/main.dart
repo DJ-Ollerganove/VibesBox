@@ -9,7 +9,6 @@ import 'camelot.dart';
 import 'dj_library_prefs.dart';
 import 'dj_library_source.dart';
 import 'dj_source_factory.dart';
-import 'drag_spy.dart';
 import 'library_drag.dart';
 import 'library_match.dart';
 import 'library_store.dart';
@@ -157,7 +156,7 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
   String? _error;
   String? _seenIdentity;
   DateTime? _seenAt;
-  int _mainTab = 0;
+  int _mainTab = 1;
   String _wishTab = 'offen';
   String _openWishMarkFp = '';
   int _suggestGen = 0;
@@ -315,6 +314,13 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     return age >= _idleAfter;
   }
 
+  String _deckKey(LiveSnapshot? snap) {
+    if (snap == null || snap.idle) return '';
+    final track = snap.nowPlaying;
+    if (track == null) return '';
+    return '${track.identity}|${track.bpm}|${track.musicalKey}';
+  }
+
   void _refresh() {
     try {
       final snapshot = _liveReader.read();
@@ -322,11 +328,12 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
           _shouldTreatAsIdle(snapshot.history.nowPlaying)
               ? snapshot.asIdle()
               : snapshot;
+      final sameDeck = _deckKey(_snapshot) == _deckKey(effective);
+      _snapshot = effective;
       if (!mounted) return;
-      setState(() {
-        _snapshot = effective;
-        _error = null;
-      });
+      if (!sameDeck || _error != null) {
+        setState(() => _error = null);
+      }
       if (_wishboard.sendRecognition) {
         unawaited(widget.session.pushLive(effective));
       } else {
@@ -732,10 +739,37 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     unawaited(_fetchSuggestions(now, gen, skipShown: skip));
   }
 
+  /// Titel, die in den letzten 12 Stunden in der DJ-History standen.
+  List<Map<String, String>> _recentHistorySkip() {
+    final history = _snapshot?.history;
+    if (history == null) return const [];
+    final cutoff = DateTime.now().subtract(const Duration(hours: 12));
+    final out = <Map<String, String>>[];
+    final seen = <String>{};
+    void add(HistoryTrack track) {
+      final at = track.playedAt;
+      if (at == null || at.isBefore(cutoff)) return;
+      final title = track.title.trim();
+      final artist = track.artist.trim();
+      if (title.isEmpty || artist.isEmpty) return;
+      if (!seen.add('${title.toLowerCase()}|${artist.toLowerCase()}')) return;
+      if (out.length >= 80) return;
+      out.add({'title': title, 'artist': artist});
+    }
+
+    for (final track in history.recent) {
+      add(track);
+    }
+    for (final track in history.tracks) {
+      add(track);
+    }
+    return out;
+  }
+
   List<Map<String, dynamic>> _playedSkip([
     List<Map<String, dynamic>> extra = const [],
   ]) {
-    final out = <Map<String, dynamic>>[...extra];
+    final out = <Map<String, dynamic>>[...extra, ..._recentHistorySkip()];
     for (final row in _wishboard.playedTracks) {
       out.add(row);
     }
@@ -791,12 +825,15 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     void add(String title, String artist) {
       final t = title.trim();
       final a = artist.trim();
-      if (t.isEmpty || a.isEmpty || out.length >= 20) return;
+      if (t.isEmpty || a.isEmpty || out.length >= 80) return;
       if (!seen.add('$t|$a'.toLowerCase())) return;
       out.add({'title': t, 'artist': a});
     }
 
-    // Gezeigte Titel zuerst, sonst füllt die Party-History die 20 Plätze
+    for (final row in _recentHistorySkip()) {
+      add(row['title'] ?? '', row['artist'] ?? '');
+    }
+    // Gezeigte Titel zuerst, sonst füllt die Party-History die Plätze
     // und die Auffüllrunde bekommt dieselben Songs noch einmal.
     for (final item in shown) {
       add((item['title'] ?? '').toString(), (item['artist'] ?? '').toString());
@@ -1238,10 +1275,6 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                             tabColor: _tabColor,
                           ),
                   ),
-                  if (_wishboard.djAdmin) ...[
-                    const SizedBox(height: 6),
-                    const DragSpyBanner(),
-                  ],
                   const SizedBox(height: 6),
                   Text(
                     widget.session.isConnected
@@ -1333,7 +1366,6 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
           session: widget.session,
           wishboard: _wishboard,
           library: _library,
-          tidal: _tidal,
           djPrefs: _djPrefs,
         ),
       ),
@@ -1615,6 +1647,9 @@ class _WishListViewState extends State<_WishListView> {
               final row = slice[index];
               final global = start + index;
               return LibraryMatchChrome(
+                key: ValueKey(
+                  '${row.items.map((item) => item.id).join(',')}|${row.location ?? ''}',
+                ),
                 matched: row.inLibrary,
                 filePath: row.location,
                 title: row.title,

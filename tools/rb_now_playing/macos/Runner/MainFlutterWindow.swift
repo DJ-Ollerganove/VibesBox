@@ -5,8 +5,8 @@ import FlutterMacOS
 class MainFlutterWindow: NSWindow {
   private let fileDrag = RekordboxFileDragController()
   private let tidal = TidalSessionController()
-  private let dragSpy = DragSpy()
   private let libraryPath = LibraryPathPicker()
+  private var windowChannel: FlutterMethodChannel?
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
@@ -17,8 +17,21 @@ class MainFlutterWindow: NSWindow {
     RegisterGeneratedPlugins(registry: flutterViewController)
     fileDrag.attach(to: flutterViewController)
     tidal.attach(to: flutterViewController)
-    dragSpy.attach(to: flutterViewController)
     libraryPath.attach(to: flutterViewController)
+    let chrome = FlutterMethodChannel(
+      name: "vibesbox_sync/window",
+      binaryMessenger: flutterViewController.engine.binaryMessenger
+    )
+    chrome.setMethodCallHandler { [weak self] call, result in
+      guard call.method == "setAlwaysOnTop" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      let on = (call.arguments as? Bool) ?? false
+      self?.level = on ? .floating : .normal
+      result(true)
+    }
+    windowChannel = chrome
 
     super.awakeFromNib()
 

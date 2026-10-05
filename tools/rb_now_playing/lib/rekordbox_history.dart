@@ -36,12 +36,15 @@ class HistorySnapshot {
     required this.dbPath,
     required this.historyName,
     required this.tracks,
+    this.recent = const [],
     required this.readAt,
   });
 
   final String dbPath;
   final String? historyName;
   final List<HistoryTrack> tracks;
+  /// Gespielte Titel der letzten 12 Stunden, auch aus älteren Playlists.
+  final List<HistoryTrack> recent;
   final DateTime readAt;
 
   HistoryTrack? get nowPlaying => tracks.isEmpty ? null : tracks.first;
@@ -117,6 +120,46 @@ ORDER BY sh.TrackNo DESC
 LIMIT 50
 ''');
 
+    final session = _mapHistoryRows(rows);
+    List<HistoryTrack> recent = const [];
+    try {
+      final since = DateTime.now().subtract(const Duration(hours: 12));
+      final recentRows = db.select('''
+SELECT
+  sh.TrackNo AS trackNo,
+  sh.created_at AS playedAt,
+  h.Name AS historyName,
+  c.Title AS title,
+  a.Name AS artist,
+  c.BPM AS bpm,
+  k.ScaleName AS musicalKey,
+  c.Length AS lengthSec
+FROM djmdSongHistory sh
+JOIN djmdHistory h ON h.ID = sh.HistoryID
+LEFT JOIN djmdContent c ON c.ID = sh.ContentID
+LEFT JOIN djmdArtist a ON a.ID = c.ArtistID
+LEFT JOIN djmdKey k ON k.ID = c.KeyID
+WHERE IFNULL(h.Attribute, 0) = 0
+  AND IFNULL(h.rb_local_deleted, 0) = 0
+  AND sh.created_at >= ?
+ORDER BY sh.created_at DESC
+LIMIT 120
+''', [_rekordboxStamp(since)]);
+      recent = _mapHistoryRows(recentRows).$1;
+    } catch (_) {
+      recent = const [];
+    }
+
+    return HistorySnapshot(
+      dbPath: _dbPath!,
+      historyName: session.$2,
+      tracks: session.$1,
+      recent: recent,
+      readAt: DateTime.now(),
+    );
+  }
+
+  (List<HistoryTrack>, String?) _mapHistoryRows(ResultSet rows) {
     final tracks = <HistoryTrack>[];
     String? historyName;
     for (final row in rows) {
@@ -134,13 +177,7 @@ LIMIT 50
         ),
       );
     }
-
-    return HistorySnapshot(
-      dbPath: _dbPath!,
-      historyName: historyName,
-      tracks: tracks,
-      readAt: DateTime.now(),
-    );
+    return (tracks, historyName);
   }
 
   List<LibraryTrack> readLibrary() {
@@ -369,6 +406,12 @@ Duration? _asLength(Object? value) {
   final seconds = _asInt(value);
   if (seconds == null || seconds <= 0) return null;
   return Duration(seconds: seconds);
+}
+
+String _rekordboxStamp(DateTime local) {
+  String two(int n) => n.toString().padLeft(2, '0');
+  final t = local.toLocal();
+  return '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}:${two(t.second)}';
 }
 
 DateTime? _parseRekordboxTime(String? raw) {

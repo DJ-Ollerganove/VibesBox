@@ -133,18 +133,19 @@ class WishRow {
 class Wishboard extends ChangeNotifier {
   Wishboard(this._session);
 
-  static const _pollEvery = Duration(seconds: 8);
   static const _partyCheckEvery = Duration(minutes: 3);
   static const _partyWaitEvery = Duration(seconds: 20);
   static const _heavyEvery = Duration(minutes: 2);
 
   final ToolSession _session;
-  Timer? _timer;
+  Timer? _listenRetry;
   Timer? _partyTimer;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _wishSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _userSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _partyDocSub;
   String? _listenPartyId;
+  bool _skipWishPrime = true;
+  bool _reconcileOnListen = false;
   bool _busy = false;
   String? partyId;
   String? partyName;
@@ -154,6 +155,7 @@ class Wishboard extends ChangeNotifier {
   List<SetlistItem> setlist = const [];
   DateTime? _lastHeavyAt;
   String _fingerprint = '';
+  final Map<String, List<WishRow>> _rowCache = {};
   String recFingerprint = '';
   bool recEnabled = true;
   bool sendRecognition = false;
@@ -194,6 +196,11 @@ class Wishboard extends ChangeNotifier {
     LibraryIndex? library,
     TidalLookupStore? tidal,
   }) {
+    final cacheKey = '$tab|$_fingerprint|'
+        '${openWishOrder.join('|').hashCode}|'
+        '${identityHashCode(library)}|${tidal?.revision ?? 0}';
+    final cached = _rowCache[cacheKey];
+    if (cached != null) return cached;
     final filtered = wishes.where((w) => w.matchesTab(tab)).toList();
     final grouped = <String, WishRow>{};
     for (final wish in filtered) {
@@ -248,20 +255,23 @@ class Wishboard extends ChangeNotifier {
       }
     }
     final rows = grouped.values.toList();
-    if (tab != 'offen' || openWishOrder.isEmpty) return rows;
-    int rank(WishRow row) {
-      final ids = row.items.map((item) => item.id).toSet();
-      for (var i = 0; i < openWishOrder.length; i++) {
-        final key = openWishOrder[i];
-        if (ids.contains(key)) return i;
+    if (tab == 'offen' && openWishOrder.isNotEmpty) {
+      int rank(WishRow row) {
+        final ids = row.items.map((item) => item.id).toSet();
+        for (var i = 0; i < openWishOrder.length; i++) {
+          final key = openWishOrder[i];
+          if (ids.contains(key)) return i;
+        }
+        return openWishOrder.length + 1;
       }
-      return openWishOrder.length + 1;
+      rows.sort((a, b) {
+        final byOrder = rank(a).compareTo(rank(b));
+        if (byOrder != 0) return byOrder;
+        return b.createdAtMillis.compareTo(a.createdAtMillis);
+      });
     }
-    rows.sort((a, b) {
-      final byOrder = rank(a).compareTo(rank(b));
-      if (byOrder != 0) return byOrder;
-      return b.createdAtMillis.compareTo(a.createdAtMillis);
-    });
+    if (_rowCache.length > 8) _rowCache.clear();
+    _rowCache[cacheKey] = rows;
     return rows;
   }
 
@@ -314,8 +324,15 @@ class Wishboard extends ChangeNotifier {
     }
   }
 
-  Future<void> refresh() async {
+  Future<void> refresh({bool full = false}) async {
     if (!_session.isConnected || _busy) return;
+    final already =
+        !full &&
+        _catalogParty != null &&
+        _catalogParty == partyId &&
+        _wishSub != null &&
+        _listenPartyId == partyId;
+    if (already) return;
     _busy = true;
     if (_fingerprint.isEmpty &&
         wishes.isEmpty &&
@@ -594,7 +611,8 @@ class Wishboard extends ChangeNotifier {
         notifyListeners();
         return;
       }
-      await refresh();
+      _catalogParty = null;
+      await refresh(full: true);
     } catch (_) {}
   }
 
@@ -611,11 +629,11 @@ class Wishboard extends ChangeNotifier {
     }
     final owner = _session.ownerUid;
     if (user == null || owner == null || owner.isEmpty) {
-      _timer ??= Timer.periodic(_pollEvery, (_) => unawaited(refresh()));
+      _scheduleListenRetry(id);
       return;
     }
-    _timer?.cancel();
-    _timer = null;
+    _listenRetry?.cancel();
+    _listenRetry = null;
     _listenPartyId = id;
     await _partyDocSub?.cancel();
     _partyDocSub = FirebaseFirestore.instance
@@ -641,19 +659,18 @@ class Wishboard extends ChangeNotifier {
       notifyListeners();
     }, onError: (_) {});
     await _wishSub?.cancel();
-    _wishSub = FirebaseFirestore.instance
+    final wishesRef = FirebaseFirestore.instance
         .collection('parties')
         .doc(id)
-        .collection('wishes')
-        .orderBy('createdAt', descending: true)
-        .limit(400)
-        .snapshots()
-        .listen(_applyWishSnap, onError: (_) {
-      _wishSub?.cancel();
-      _wishSub = null;
-      _listenPartyId = null;
-      _timer ??= Timer.periodic(_pollEvery, (_) => unawaited(refresh()));
-    });
+        .collection('wishes');
+    _skipWishPrime = !_reconcileOnListen &&
+        wishes.isNotEmpty &&
+        _catalogParty == id;
+    _reconcileOnListen = false;
+    _wishSub = wishesRef.snapshots().listen(
+      _applyWishSnap,
+      onError: (_) => _scheduleListenRetry(id),
+    );
     if (_userSub != null) return;
     _userSub = FirebaseFirestore.instance
         .collection('users')
@@ -662,39 +679,97 @@ class Wishboard extends ChangeNotifier {
         .listen(_applyUserSnap, onError: (_) {});
   }
 
+  void _scheduleListenRetry(String id) {
+    _wishSub?.cancel();
+    _wishSub = null;
+    if (_listenPartyId == id) _listenPartyId = null;
+    _reconcileOnListen = true;
+    _listenRetry?.cancel();
+    _listenRetry = Timer(const Duration(seconds: 20), () {
+      final current = partyId;
+      if (current != null && current.isNotEmpty) {
+        unawaited(_ensureLive(current));
+      }
+    });
+  }
+
+  /// Listener liefert bei jedem Ereignis nur die geänderten Dokumente.
+  /// Der erste Schub ist derselbe Stand wie der einmalige Abruf und wird
+  /// nicht noch einmal in die Liste geschrieben.
   void _applyWishSnap(QuerySnapshot<Map<String, dynamic>> snap) {
-    final next = <WishItem>[];
-    for (final doc in snap.docs) {
-      final data = doc.data();
-      final created = data['createdAt'];
-      final millis = created is Timestamp ? created.millisecondsSinceEpoch : 0;
-      next.add(WishItem(
-        id: doc.id,
-        title: '${data['title'] ?? data['song'] ?? ''}'.trim(),
-        artist: '${data['artist'] ?? ''}'.trim(),
-        status: '${data['status'] ?? 'pending'}',
-        isPreWish: data['is_pre_wish'] == true,
-        preWishPublished: data['pre_wish_published'] == true,
-        name: '${data['name'] ?? data['display_name'] ?? ''}'.trim(),
-        greeting: '${data['greeting'] ?? data['gruss'] ?? data['message'] ?? ''}'.trim(),
-        greetingTranslation: '${data['greeting_translation'] ?? ''}'.trim(),
-        greetingTranslationLang: '${data['greeting_translation_lang'] ?? ''}'.trim(),
-        clientId: '${data['client_id'] ?? data['device_id'] ?? ''}'.trim(),
-        userId: '${data['user_id'] ?? ''}'.trim(),
-        isFavorite: data['is_favorite'] == true,
-        createdAtMillis: millis,
-      ));
+    if (_skipWishPrime) {
+      _skipWishPrime = false;
+      return;
     }
-    final liveIds = next.map((w) => w.id).toSet();
-    final merged = [
-      ...next,
-      ...wishes.where((w) => w.id.isNotEmpty && !liveIds.contains(w.id)),
-    ];
-    final fp = _wishFingerprint(partyId ?? '', merged, setlist);
-    if (fp == _fingerprint) return;
-    _fingerprint = fp;
-    wishes = merged;
+    if (snap.docChanges.isEmpty) return;
+    var next = wishes;
+    var changed = false;
+    for (final change in snap.docChanges) {
+      final id = change.doc.id;
+      if (change.type == DocumentChangeType.removed) {
+        final kept = next.where((w) => w.id != id).toList();
+        if (kept.length != next.length) {
+          next = kept;
+          changed = true;
+        }
+        continue;
+      }
+      final item = _wishFromDoc(change.doc);
+      final index = next.indexWhere((w) => w.id == id);
+      if (index >= 0) {
+        if (_wishSame(next[index], item)) continue;
+        final copy = [...next];
+        copy[index] = item;
+        next = copy;
+        changed = true;
+      } else {
+        next = [item, ...next];
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    wishes = next;
+    _fingerprint = _wishFingerprint(partyId ?? '', wishes, setlist);
     notifyListeners();
+  }
+
+  WishItem _wishFromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
+    final data = doc.data() ?? const <String, dynamic>{};
+    final created = data['createdAt'];
+    final millis = created is Timestamp ? created.millisecondsSinceEpoch : 0;
+    return WishItem(
+      id: doc.id,
+      title: '${data['title'] ?? data['song'] ?? ''}'.trim(),
+      artist: '${data['artist'] ?? ''}'.trim(),
+      status: '${data['status'] ?? 'pending'}',
+      isPreWish: data['is_pre_wish'] == true,
+      preWishPublished: data['pre_wish_published'] == true,
+      name: '${data['name'] ?? data['display_name'] ?? ''}'.trim(),
+      greeting: '${data['greeting'] ?? data['gruss'] ?? data['message'] ?? ''}'.trim(),
+      greetingTranslation: '${data['greeting_translation'] ?? ''}'.trim(),
+      greetingTranslationLang: '${data['greeting_translation_lang'] ?? ''}'.trim(),
+      clientId: '${data['client_id'] ?? data['device_id'] ?? ''}'.trim(),
+      userId: '${data['user_id'] ?? ''}'.trim(),
+      isFavorite: data['is_favorite'] == true,
+      createdAtMillis: millis,
+    );
+  }
+
+  bool _wishSame(WishItem a, WishItem b) {
+    return a.id == b.id &&
+        a.title == b.title &&
+        a.artist == b.artist &&
+        a.status == b.status &&
+        a.isPreWish == b.isPreWish &&
+        a.preWishPublished == b.preWishPublished &&
+        a.name == b.name &&
+        a.greeting == b.greeting &&
+        a.greetingTranslation == b.greetingTranslation &&
+        a.greetingTranslationLang == b.greetingTranslationLang &&
+        a.clientId == b.clientId &&
+        a.userId == b.userId &&
+        a.isFavorite == b.isFavorite &&
+        a.createdAtMillis == b.createdAtMillis;
   }
 
   void _applyUserSnap(DocumentSnapshot<Map<String, dynamic>> snap) {
@@ -742,8 +817,8 @@ class Wishboard extends ChangeNotifier {
   }
 
   void _stopLive() {
-    _timer?.cancel();
-    _timer = null;
+    _listenRetry?.cancel();
+    _listenRetry = null;
     _partyTimer?.cancel();
     _partyTimer = null;
     _wishSub?.cancel();

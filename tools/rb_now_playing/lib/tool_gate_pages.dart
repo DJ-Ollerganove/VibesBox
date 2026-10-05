@@ -337,21 +337,21 @@ class ToolLegalFooter extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SizedBox(height: 28),
-        const Divider(color: Color(0xFF2A2A36)),
-        const SizedBox(height: 12),
+        const SizedBox(height: 14),
+        const Divider(color: Color(0xFF2A2A36), height: 12),
+        const SizedBox(height: 6),
         Text(
           toolI18n.text('settingsLegal'),
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 4),
         _link(toolI18n.text('gatePrivacy'), kPrivacyUrl),
         _link(toolI18n.text('gateImprint'), kImprintUrl),
         _link(toolI18n.text('gateTerms'), kTermsUrl),
-        const SizedBox(height: 12),
+        const SizedBox(height: 6),
         Text(
           '${toolI18n.text('settingsVersion')} $kSyncToolVersion',
-          style: const TextStyle(color: Colors.white54, fontSize: 12),
+          style: const TextStyle(color: Colors.white54, fontSize: 10),
         ),
       ],
     );
@@ -368,7 +368,7 @@ class ToolLegalFooter extends StatelessWidget {
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           foregroundColor: const Color(0xFFFF8800),
         ),
-        child: Text(label),
+          child: Text(label, style: const TextStyle(fontSize: 11)),
       ),
     );
   }

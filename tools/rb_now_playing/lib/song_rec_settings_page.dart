@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'dj_library_prefs.dart';
 import 'dj_source_factory.dart';
 import 'library_store.dart';
-import 'tidal_lookup.dart';
 import 'tool_gate_pages.dart';
 import 'tool_i18n.dart';
 import 'tool_session.dart';
@@ -17,14 +16,12 @@ class SongRecSettingsPage extends StatefulWidget {
     required this.session,
     required this.wishboard,
     required this.library,
-    required this.tidal,
     required this.djPrefs,
   });
 
   final ToolSession session;
   final Wishboard wishboard;
   final LibraryStore library;
-  final TidalLookupStore tidal;
   final DjLibraryPrefs djPrefs;
 
   @override
@@ -114,7 +111,6 @@ class _SongRecSettingsPageState extends State<SongRecSettingsPage> {
         widget.session,
         widget.wishboard,
         widget.library,
-        widget.tidal,
         widget.djPrefs,
       ]),
       builder: (context, _) {
@@ -126,9 +122,10 @@ class _SongRecSettingsPageState extends State<SongRecSettingsPage> {
             foregroundColor: Colors.white,
             elevation: 0,
             titleSpacing: 0,
+            toolbarHeight: 40,
             title: Text(
               toolI18n.text('settings'),
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
             ),
             actions: [
               if (_saving)
@@ -145,84 +142,38 @@ class _SongRecSettingsPageState extends State<SongRecSettingsPage> {
             ],
           ),
           body: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+            padding: const EdgeInsets.fromLTRB(12, 2, 12, 16),
             children: [
-              _DjLibrarySection(
-                prefs: widget.djPrefs,
-                library: widget.library,
-                error: _error ?? widget.library.error,
-                onBrowse: _browsePath,
-                onImport: _importLibrary,
-                formatImported: _formatImported,
-              ),
-              const SizedBox(height: 18),
-              const Divider(color: Color(0xFF2A2A36)),
-              const SizedBox(height: 12),
-              const Text(
-                'Tidal',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                toolI18n.text('tidalHelp'),
-                style: const TextStyle(color: Colors.white54, fontSize: 12, height: 1.35),
-              ),
-              const SizedBox(height: 12),
-              FilledButton.icon(
-                onPressed: widget.tidal.loggingIn
-                    ? null
-                    : () => unawaited(
-                          widget.tidal.loggedIn
-                              ? widget.tidal.logout()
-                              : widget.tidal.login(),
-                        ),
-                style: FilledButton.styleFrom(
-                  backgroundColor: widget.tidal.loggedIn
-                      ? const Color(0xFF2A2A36)
-                      : const Color(0xFF00E5FF),
-                  foregroundColor: widget.tidal.loggedIn
-                      ? Colors.white
-                      : Colors.black,
-                ),
-                icon: widget.tidal.loggingIn
-                    ? const SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Icon(
-                        widget.tidal.loggedIn
-                            ? Icons.logout
-                            : Icons.login,
-                        size: 18,
-                      ),
-                label: Text(
-                  widget.tidal.loggingIn
-                      ? toolI18n.text('tidalWindow')
-                      : widget.tidal.loggedIn
-                          ? toolI18n.text('tidalLogout')
-                          : toolI18n.text('tidalLogin'),
+              _GroupFrame(
+                child: _checkRow(
+                  label: toolI18n.text('alwaysOnTop'),
+                  value: widget.djPrefs.alwaysOnTop,
+                  onChanged: (value) =>
+                      unawaited(widget.djPrefs.setAlwaysOnTop(value)),
                 ),
               ),
               const SizedBox(height: 8),
-              Text(
-                widget.tidal.loggedIn
-                    ? toolI18n.text('tidalIn')
-                    : toolI18n.text('tidalOut'),
-                style: const TextStyle(color: Colors.white70, fontSize: 12),
-              ),
-              const SizedBox(height: 18),
-              const Divider(color: Color(0xFF2A2A36)),
-              const SizedBox(height: 12),
-              Text(
-                toolI18n.text('songRec'),
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+              _GroupFrame(
+                child: _DjLibrarySection(
+                  prefs: widget.djPrefs,
+                  library: widget.library,
+                  error: _error ?? widget.library.error,
+                  onBrowse: _browsePath,
+                  onImport: _importLibrary,
+                  formatImported: _formatImported,
+                ),
               ),
               const SizedBox(height: 8),
+              _GroupFrame(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+              _SectionTitle(toolI18n.text('songRec')),
+              const SizedBox(height: 4),
               if (!connected)
                 Text(
                   toolI18n.text('connectFirst'),
-                  style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.35),
+                  style: _hintStyle,
                 )
               else if (widget.wishboard.recFingerprint.isEmpty)
                 const Padding(
@@ -238,7 +189,7 @@ class _SongRecSettingsPageState extends State<SongRecSettingsPage> {
               else ...[
                 Text(
                   toolI18n.text('recBody'),
-                  style: const TextStyle(color: Colors.white54, fontSize: 12, height: 1.35),
+                  style: _hintStyle,
                 ),
                 if (_error != null) ...[
                   const SizedBox(height: 10),
@@ -247,33 +198,16 @@ class _SongRecSettingsPageState extends State<SongRecSettingsPage> {
                     style: const TextStyle(color: Color(0xFFFF8A80), fontSize: 12),
                   ),
                 ],
-                const SizedBox(height: 14),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        toolI18n.text('suggestions'),
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                    Switch(
-                      value: enabled,
-                      activeThumbColor: const Color(0xFFFF8800),
-                      activeTrackColor: const Color(0x6AFF8800),
-                      onChanged: (v) => _apply(enabled: v),
-                    ),
-                  ],
+                const SizedBox(height: 6),
+                _switchRow(
+                  label: toolI18n.text('suggestions'),
+                  value: enabled,
+                  onChanged: (v) => _apply(enabled: v),
                 ),
                 if (enabled) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    toolI18n.text('scope'),
-                    style: const TextStyle(color: Colors.white70, fontSize: 12),
-                  ),
                   const SizedBox(height: 6),
+                  Text(toolI18n.text('scope'), style: _labelStyle),
+                  const SizedBox(height: 4),
                   _ChipRow(
                     value: widget.wishboard.recScope,
                     options: [
@@ -283,12 +217,9 @@ class _SongRecSettingsPageState extends State<SongRecSettingsPage> {
                     ],
                     onSelected: (v) => _apply(scope: v),
                   ),
-                  const SizedBox(height: 14),
-                  Text(
-                    toolI18n.text('familiarity'),
-                    style: const TextStyle(color: Colors.white70, fontSize: 12),
-                  ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 8),
+                  Text(toolI18n.text('familiarity'), style: _labelStyle),
+                  const SizedBox(height: 4),
                   _ChipRow(
                     value: widget.wishboard.recFamiliarity,
                     options: [
@@ -297,58 +228,30 @@ class _SongRecSettingsPageState extends State<SongRecSettingsPage> {
                     ],
                     onSelected: (v) => _apply(familiarity: v),
                   ),
-                  const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              toolI18n.text('sameArtist'),
-                              style: const TextStyle(
-                                color: Colors.white70,
-                                fontSize: 12,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              toolI18n.text('sameArtistHint'),
-                              style: const TextStyle(
-                                color: Colors.white54,
-                                fontSize: 11,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Switch(
-                        value: widget.wishboard.recAllowSameArtist,
-                        activeThumbColor: const Color(0xFFFF8800),
-                        activeTrackColor: const Color(0x6AFF8800),
-                        onChanged: (v) => _apply(allowSameArtist: v),
-                      ),
-                    ],
+                  const SizedBox(height: 6),
+                  _switchRow(
+                    label: toolI18n.text('sameArtist'),
+                    hint: toolI18n.text('sameArtistHint'),
+                    value: widget.wishboard.recAllowSameArtist,
+                    onChanged: (v) => _apply(allowSameArtist: v),
                   ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 4),
                   Row(
                     children: [
                       Expanded(
                         child: Text(
                           toolI18n.text('countLabel'),
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 12,
-                          ),
+                          style: _labelStyle,
                         ),
                       ),
                       DropdownButton<int>(
                         value: widget.wishboard.recCount,
+                        isDense: true,
                         dropdownColor: const Color(0xFF1D1D28),
                         underline: const SizedBox.shrink(),
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 13,
+                          fontSize: 12,
                           fontWeight: FontWeight.w600,
                         ),
                         items: [
@@ -368,10 +271,13 @@ class _SongRecSettingsPageState extends State<SongRecSettingsPage> {
                   const SizedBox(height: 4),
                   Text(
                     toolI18n.text('countHint'),
-                    style: const TextStyle(color: Colors.white54, fontSize: 11),
+                    style: _hintStyle,
                   ),
                 ],
               ],
+                  ],
+                ),
+              ),
               const ToolLegalFooter(),
             ],
           ),
@@ -410,19 +316,13 @@ class _DjLibrarySection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          toolI18n.text('djSoftware'),
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
-        ),
+        _SectionTitle(toolI18n.text('djSoftware')),
+        const SizedBox(height: 2),
+        Text(toolI18n.text('whichSystem'), style: _hintStyle),
         const SizedBox(height: 6),
-        Text(
-          toolI18n.text('whichSystem'),
-          style: const TextStyle(color: Colors.white54, fontSize: 12, height: 1.35),
-        ),
-        const SizedBox(height: 10),
         Container(
           width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 8),
           decoration: BoxDecoration(
             color: const Color(0xFF1D1D28),
             borderRadius: BorderRadius.circular(8),
@@ -432,14 +332,15 @@ class _DjLibrarySection extends StatelessWidget {
             child: DropdownButton<DjSoftware>(
               value: software,
               isExpanded: true,
+              isDense: true,
               hint: Text(
                 toolI18n.text('pleaseChoose'),
-                style: const TextStyle(color: Colors.white54, fontSize: 13),
+                style: const TextStyle(color: Colors.white54, fontSize: 12),
               ),
               dropdownColor: const Color(0xFF1D1D28),
               style: const TextStyle(
                 color: Colors.white,
-                fontSize: 13,
+                fontSize: 12,
                 fontWeight: FontWeight.w600,
               ),
               items: [
@@ -457,53 +358,28 @@ class _DjLibrarySection extends StatelessWidget {
           ),
         ),
         if (software != null) ...[
-          const SizedBox(height: 18),
-          Text(
-            toolI18n.text('readQ', {'name': software.label}),
-            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
-          ),
           const SizedBox(height: 6),
-          Text(
-            toolI18n.text('readHint'),
-            style: const TextStyle(color: Colors.white54, fontSize: 12, height: 1.35),
-          ),
-          const SizedBox(height: 10),
-          _ChipRow(
-            value: prefs.readLibrary == true
-                ? 'yes'
-                : prefs.readLibrary == false
-                    ? 'no'
-                    : '',
-            options: [
-              ('yes', _yesNo(true)),
-              ('no', _yesNo(false)),
-            ],
-            onSelected: (v) {
-              unawaited(_onReadChoice(v == 'yes'));
-            },
+          _switchRow(
+            label: toolI18n.text('readQ', {'name': software.label}),
+            hint: toolI18n.text('readHint'),
+            value: prefs.readLibrary == true,
+            onChanged: (v) => unawaited(_onReadChoice(v)),
           ),
         ],
         if (software != null && prefs.readLibrary == true) ...[
-          const SizedBox(height: 18),
-          Text(
-            toolI18n.text('libraryPath'),
-            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 10),
+          Text(toolI18n.text('libraryPath'), style: _labelStyle),
+          const SizedBox(height: 2),
           Text(
             prefs.isCustomPath(software)
                 ? toolI18n.text('customPath', {'name': software.label})
                 : toolI18n.text('defaultPath', {'name': software.label}),
-            style: const TextStyle(
-              color: Colors.white54,
-              fontSize: 12,
-              height: 1.35,
-            ),
+            style: _hintStyle,
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 6),
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
             decoration: BoxDecoration(
               color: const Color(0xFF1D1D28),
               borderRadius: BorderRadius.circular(8),
@@ -513,89 +389,73 @@ class _DjLibrarySection extends StatelessWidget {
               prefs.resolvedPath(software),
               style: const TextStyle(
                 color: Colors.white70,
-                fontSize: 12,
-                height: 1.35,
+                fontSize: 10,
+                height: 1.25,
               ),
             ),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 6),
           Row(
             children: [
               FilledButton.icon(
                 onPressed: () => unawaited(onBrowse()),
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF2A2A36),
-                  foregroundColor: Colors.white,
+                style: _tinyButtonStyle(
+                  background: const Color(0xFF2A2A36),
+                  foreground: Colors.white,
                 ),
-                icon: const Icon(Icons.folder_open, size: 18),
+                icon: const Icon(Icons.folder_open, size: 14),
                 label: Text(toolI18n.text('browse')),
               ),
               if (prefs.isCustomPath(software)) ...[
                 const SizedBox(width: 8),
                 TextButton(
                   onPressed: () => unawaited(prefs.clearCustomPath(software)),
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    foregroundColor: Colors.white70,
+                    textStyle: const TextStyle(fontSize: 11),
+                  ),
                   child: Text(toolI18n.text('defaultPathBtn')),
                 ),
               ],
             ],
           ),
-          const SizedBox(height: 18),
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      toolI18n.text('autoUpdate'),
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      toolI18n.text('autoHint'),
-                      style: const TextStyle(
-                        color: Colors.white54,
-                        fontSize: 11,
-                        height: 1.35,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Switch(
-                value: prefs.autoUpdate,
-                activeThumbColor: const Color(0xFFFF8800),
-                activeTrackColor: const Color(0x6AFF8800),
-                onChanged: (v) => unawaited(prefs.setAutoUpdate(v)),
-              ),
-            ],
+          _switchRow(
+            label: toolI18n.text('autoUpdate'),
+            value: prefs.autoUpdate,
+            dense: true,
+            onChanged: (v) => unawaited(prefs.setAutoUpdate(v)),
           ),
-          const SizedBox(height: 12),
-          FilledButton.icon(
-            onPressed: library.importing ? null : () => unawaited(onImport()),
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFFFF8800),
-              foregroundColor: Colors.black,
-            ),
-            icon: library.importing
-                ? const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.library_music, size: 18),
-            label: Text(
-              library.importing
-                  ? toolI18n.text('reading')
-                  : library.hasLibrary
-                      ? toolI18n.text('updateNow')
-                      : toolI18n.text('importLib'),
+          const SizedBox(height: 2),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: library.importing ? null : () => unawaited(onImport()),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.black,
+                backgroundColor: const Color(0xFFFF8800),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                textStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600),
+              ),
+              child: library.importing
+                  ? const SizedBox(
+                      width: 10,
+                      height: 10,
+                      child: CircularProgressIndicator(strokeWidth: 1.4),
+                    )
+                  : Text(
+                      library.hasLibrary
+                          ? toolI18n.text('updateNow')
+                          : toolI18n.text('importLib'),
+                    ),
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 4),
           Text(
             library.hasLibrary
                 ? '${toolI18n.text('libStats', {
@@ -607,7 +467,7 @@ class _DjLibrarySection extends StatelessWidget {
                 : prefs.autoUpdate
                     ? toolI18n.text('noLibAuto', {'name': software.label})
                     : toolI18n.text('noLibManual', {'name': software.label}),
-            style: const TextStyle(color: Colors.white70, fontSize: 12),
+            style: _hintStyle,
           ),
           if (library.hasLibrary) ...[
             const SizedBox(height: 4),
@@ -625,7 +485,7 @@ class _DjLibrarySection extends StatelessWidget {
                 ),
                 child: Text(
                   toolI18n.text('deleteLink', {'name': software.label}),
-                  style: const TextStyle(fontSize: 12),
+                  style: const TextStyle(fontSize: 11),
                 ),
               ),
             ),
@@ -696,53 +556,146 @@ class _DjLibrarySection extends StatelessWidget {
   }
 }
 
-String _yesNo(bool yes) {
-  const yesMap = {
-    'de': 'Ja',
-    'en': 'Yes',
-    'es': 'Sí',
-    'fr': 'Oui',
-    'it': 'Sì',
-    'pt': 'Sim',
-    'nl': 'Ja',
-    'pl': 'Tak',
-    'cs': 'Ano',
-    'tr': 'Evet',
-    'ru': 'Да',
-    'uk': 'Так',
-    'el': 'Ναι',
-    'ar': 'نعم',
-    'hi': 'हाँ',
-    'ja': 'はい',
-    'zh': '是',
-    'th': 'ใช่',
-    'vi': 'Có',
-    'sq': 'Po',
-  };
-  const noMap = {
-    'de': 'Nein',
-    'en': 'No',
-    'es': 'No',
-    'fr': 'Non',
-    'it': 'No',
-    'pt': 'Não',
-    'nl': 'Nee',
-    'pl': 'Nie',
-    'cs': 'Ne',
-    'tr': 'Hayır',
-    'ru': 'Нет',
-    'uk': 'Ні',
-    'el': 'Όχι',
-    'ar': 'لا',
-    'hi': 'नहीं',
-    'ja': 'いいえ',
-    'zh': '否',
-    'th': 'ไม่',
-    'vi': 'Không',
-    'sq': 'Jo',
-  };
-  final map = yes ? yesMap : noMap;
-  return map[toolI18n.code] ?? map['de']!;
+const _hintStyle = TextStyle(
+  color: Colors.white54,
+  fontSize: 10,
+  height: 1.25,
+);
+
+const _labelStyle = TextStyle(
+  color: Colors.white70,
+  fontSize: 11,
+  fontWeight: FontWeight.w600,
+);
+
+class _GroupFrame extends StatelessWidget {
+  const _GroupFrame({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFFF8800), width: 1),
+      ),
+      child: child,
+    );
+  }
+}
+
+class _SectionTitle extends StatelessWidget {
+  const _SectionTitle(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+    );
+  }
+}
+
+ButtonStyle _tinyButtonStyle({
+  required Color background,
+  required Color foreground,
+}) {
+  return FilledButton.styleFrom(
+    backgroundColor: background,
+    foregroundColor: foreground,
+    visualDensity: VisualDensity.compact,
+    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+    textStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+  );
+}
+
+Widget _checkRow({
+  required String label,
+  required bool value,
+  required ValueChanged<bool> onChanged,
+}) {
+  return InkWell(
+    onTap: () => onChanged(!value),
+    child: Row(
+      children: [
+        SizedBox(
+          width: 28,
+          height: 28,
+          child: Checkbox(
+            value: value,
+            activeColor: const Color(0xFFFF8800),
+            checkColor: Colors.black,
+            side: const BorderSide(color: Colors.white54),
+            visualDensity: VisualDensity.compact,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            onChanged: (next) {
+              if (next == null) return;
+              onChanged(next);
+            },
+          ),
+        ),
+        const SizedBox(width: 4),
+        Expanded(
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+Widget _switchRow({
+  required String label,
+  String? hint,
+  required bool value,
+  required ValueChanged<bool> onChanged,
+  bool dense = false,
+}) {
+  return Row(
+    children: [
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              style: dense
+                  ? const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      height: 1.1,
+                    )
+                  : _labelStyle,
+            ),
+            if (hint != null && hint.isNotEmpty) ...[
+              const SizedBox(height: 1),
+              Text(hint, style: _hintStyle),
+            ],
+          ],
+        ),
+      ),
+      Transform.scale(
+        scale: dense ? 0.55 : 0.72,
+        alignment: Alignment.centerRight,
+        child: Switch(
+          value: value,
+          activeThumbColor: const Color(0xFFFF8800),
+          activeTrackColor: const Color(0x6AFF8800),
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          onChanged: onChanged,
+        ),
+      ),
+    ],
+  );
 }
 
 class _ChipRow extends StatelessWidget {
@@ -759,31 +712,41 @@ class _ChipRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Wrap(
-      spacing: 6,
-      runSpacing: 6,
+      spacing: 4,
+      runSpacing: 4,
       children: [
         for (final option in options)
-          ChoiceChip(
-            label: Text(option.$2),
-            selected: value == option.$1,
-            onSelected: (_) {
+          GestureDetector(
+            onTap: () {
               if (value == option.$1) return;
               onSelected(option.$1);
             },
-            selectedColor: const Color(0xFFFF8800),
-            backgroundColor: const Color(0xFF1D1D28),
-            labelStyle: TextStyle(
-              color: value == option.$1 ? Colors.black : Colors.white,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: value == option.$1
+                    ? const Color(0xFFFF8800)
+                    : const Color(0xFF1D1D28),
+                borderRadius: BorderRadius.circular(3),
+                border: Border.all(
+                  color: value == option.$1
+                      ? const Color(0xFFFF8800)
+                      : Colors.white24,
+                  width: 0.6,
+                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                child: Text(
+                  option.$2,
+                  style: TextStyle(
+                    color: value == option.$1 ? Colors.black : Colors.white,
+                    fontSize: 10,
+                    height: 1.15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
             ),
-            side: BorderSide(
-              color: value == option.$1
-                  ? const Color(0xFFFF8800)
-                  : Colors.white24,
-            ),
-            visualDensity: VisualDensity.compact,
-            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
       ],
     );

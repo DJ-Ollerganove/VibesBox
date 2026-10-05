@@ -226,7 +226,7 @@ void main() {
     expect(mixBpmWindow('similar'), 12);
   });
 
-  test('Tidal-Bibliothekspfad ist ziehbar', () {
+  test('Tidal-Bibliothekspfad ist nicht ziehbar', () {
     final track = LibraryTrack(
       id: 't1',
       title: 'Africa',
@@ -234,10 +234,10 @@ void main() {
       location: 'tidal:tracks:80333251',
     );
     expect(track.isTidal, isTrue);
-    expect(track.canDragToRekordbox, isTrue);
+    expect(track.canDragToRekordbox, isFalse);
     expect(isRekordboxDragPath('/tmp/song.mp3'), isTrue);
     expect(isRekordboxDragPath(r'C:\Music\song.mp3'), isTrue);
-    expect(isRekordboxDragPath('tidal:tracks:1'), isTrue);
+    expect(isRekordboxDragPath('tidal:tracks:1'), isFalse);
     expect(isRekordboxDragPath('https://tidal.com/track/1'), isFalse);
     expect(toDragLocation('streaming://tidal/123'), 'tidal:tracks:123');
     expect(toDragLocation('https://tidal.com/browse/track/99'), 'tidal:tracks:99');
@@ -285,7 +285,7 @@ void main() {
     expect(compareSyncVersions('1.0.1', '1.0.2') < 0, isTrue);
     expect(compareSyncVersions('1.0.1+1', '1.0.1'), 0);
     expect(compareSyncVersions('1.0.2', '1.0.1') > 0, isTrue);
-    expect(kSyncToolVersion, '1.0.1');
+    expect(kSyncToolVersion, '1.0.2');
     expect(formatToolDevice('macos', 'Version 26.6.2 (Build 25G83)'), 'macOS 26.6.2');
     expect(formatToolDevice('windows', '10.0.22631'), 'Windows 11');
     expect(formatToolDevice('windows', '10.0.19045'), 'Windows 10');

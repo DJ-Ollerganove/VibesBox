@@ -1,6 +1,7 @@
 #include "flutter_window.h"
 
 #include <optional>
+#include <variant>
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -26,6 +27,32 @@ bool FlutterWindow::OnCreate() {
   }
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
+
+  window_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(), "vibesbox_sync/window",
+          &flutter::StandardMethodCodec::GetInstance());
+  window_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+                 result) {
+        if (call.method_name() != "setAlwaysOnTop") {
+          result->NotImplemented();
+          return;
+        }
+        bool on = false;
+        if (const auto* args = call.arguments()) {
+          if (const auto* flag = std::get_if<bool>(args)) {
+            on = *flag;
+          }
+        }
+        HWND hwnd = GetHandle();
+        if (hwnd != nullptr) {
+          ::SetWindowPos(hwnd, on ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+        result->Success(flutter::EncodableValue(true));
+      });
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();

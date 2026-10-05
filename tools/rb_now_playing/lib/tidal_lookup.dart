@@ -52,6 +52,13 @@ class TidalLookupStore extends ChangeNotifier {
   Timer? _persistTimer;
   var loggedIn = false;
   var loggingIn = false;
+  int revision = 0;
+
+  @override
+  void notifyListeners() {
+    revision++;
+    super.notifyListeners();
+  }
 
   TidalLookupStatus? statusOf(String title, String artist) =>
       _status[_key(title, artist)];
@@ -76,7 +83,7 @@ class TidalLookupStore extends ChangeNotifier {
       ...item,
       'location': hit.location,
       'isTidal': true,
-      'canDrag': allowDeckDrag,
+      'canDrag': false,
     };
   }
 
