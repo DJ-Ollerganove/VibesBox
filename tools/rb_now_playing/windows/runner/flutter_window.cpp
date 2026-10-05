@@ -53,13 +53,23 @@ bool FlutterWindow::OnCreate() {
           result->Success(flutter::EncodableValue(true));
           return;
         }
-        if (method == "ensureDjWatchAutostart" || method == "setLaunchWithDj") {
-          // Immer an – setLaunchWithDj bleibt für ältere Builds kompatibel.
+        if (method == "setLaunchWithDj") {
+          bool on = false;
+          if (const auto* args = call.arguments()) {
+            if (const auto* flag = std::get_if<bool>(args)) {
+              on = *flag;
+            }
+          }
+          result->Success(flutter::EncodableValue(SetDjWatchAutostart(on)));
+          return;
+        }
+        if (method == "ensureDjWatchAutostart") {
           result->Success(flutter::EncodableValue(EnsureDjWatchAutostart()));
           return;
         }
         if (method == "isLaunchWithDj") {
-          result->Success(flutter::EncodableValue(true));
+          result->Success(
+              flutter::EncodableValue(IsDjWatchAutostartEnabled()));
           return;
         }
         result->NotImplemented();

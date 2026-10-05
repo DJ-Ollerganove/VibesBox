@@ -11,10 +11,14 @@ int RunDjWatchdog();
 // Verhindert doppelte UI-Instanzen. true = diese Instanz darf weiterlaufen.
 bool AcquireUiSingleInstance();
 
-// Immer: HKCU-Run setzen (idempotent) und Watcher starten falls nötig.
+// HKCU Run-Eintrag setzen/entfernen und Watcher sofort starten.
+// Bei disabled: Run-Key entfernen → Watcher beendet sich selbst.
+bool SetDjWatchAutostart(bool enabled);
+
+// Convenience: Run-Key setzen + Watcher starten (idempotent).
 bool EnsureDjWatchAutostart();
 
-// Run-Eintrag entfernen (Deinstallation). Watcher beendet sich, wenn EXE fehlt.
+// Run-Eintrag entfernen (z. B. Deinstallation).
 bool ClearDjWatchAutostart();
 
 // True wenn der Run-Eintrag vorhanden ist.

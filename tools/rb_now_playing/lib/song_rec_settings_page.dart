@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 
@@ -153,6 +154,15 @@ class _SongRecSettingsPageState extends State<SongRecSettingsPage> {
                       onChanged: (value) =>
                           unawaited(widget.djPrefs.setAlwaysOnTop(value)),
                     ),
+                    if (Platform.isWindows) ...[
+                      const Divider(height: 1),
+                      _checkRow(
+                        label: toolI18n.text('launchWithDj'),
+                        value: widget.djPrefs.launchWithDj,
+                        onChanged: (value) =>
+                            unawaited(widget.djPrefs.setLaunchWithDj(value)),
+                      ),
+                    ],
                   ],
                 ),
               ),

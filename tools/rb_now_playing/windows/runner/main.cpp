@@ -49,8 +49,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     return EXIT_SUCCESS;
   }
 
-  // DJ-Watchdog immer aktiv (kein Einstellungs-Haken).
-  EnsureDjWatchAutostart();
+  // DJ-Watchdog: Registrierung über Einstellungen (Default an) beim UI-Load.
+  // Kein erzwungenes Enable hier – sonst überschreibt es einen bewussten Aus-Haken.
 
   // Attach to console when present (e.g., 'flutter run') or create a
   // new console when running with a debugger.

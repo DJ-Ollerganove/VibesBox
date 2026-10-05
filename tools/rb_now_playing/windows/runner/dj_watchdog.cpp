@@ -254,21 +254,27 @@ bool IsDjWatchAutostartEnabled() {
   return rc == ERROR_SUCCESS && type == REG_SZ;
 }
 
-bool EnsureDjWatchAutostart() {
-  const bool ok = WriteRunKey();
-  LaunchWatchdogDetached();
-  return ok;
-}
-
-bool ClearDjWatchAutostart() {
+bool SetDjWatchAutostart(bool enabled) {
+  if (enabled) {
+    const bool ok = WriteRunKey();
+    if (ok) {
+      LaunchWatchdogDetached();
+    }
+    return ok;
+  }
   HKEY key = OpenRunKey(true);
   if (!key) {
     return false;
   }
   ::RegDeleteValueW(key, kRunValueName);
   ::RegCloseKey(key);
+  // Laufender Watcher prüft periodisch den Run-Key und beendet sich.
   return true;
 }
+
+bool EnsureDjWatchAutostart() { return SetDjWatchAutostart(true); }
+
+bool ClearDjWatchAutostart() { return SetDjWatchAutostart(false); }
 
 int RunDjWatchdog() {
   HANDLE mutex = ::CreateMutexW(nullptr, TRUE, kWatchMutex);
@@ -280,15 +286,15 @@ int RunDjWatchdog() {
     return EXIT_SUCCESS;
   }
 
-  // Immer beobachten, solange die App installiert ist.
-  // Run-Key ggf. nachziehen (z. B. nach manueller Löschung).
-  // Bei Deinstallation verschwindet die EXE → sauber beenden.
+  // Beobachten solange Run-Key gesetzt und EXE vorhanden.
+  // Run-Key entfernt (Einstellung aus) → sauber beenden.
+  // EXE fehlt (Deinstallation) → ebenfalls beenden.
   for (;;) {
     if (!ExeStillInstalled()) {
       break;
     }
     if (!IsDjWatchAutostartEnabled()) {
-      WriteRunKey();
+      break;
     }
     if (ProcessListContainsDj() && !IsUiRunning()) {
       LaunchUi();

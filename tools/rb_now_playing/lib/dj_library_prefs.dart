@@ -158,6 +158,9 @@ class DjLibraryPrefs extends ChangeNotifier {
   bool? readLibrary;
   bool autoUpdate = false;
   bool alwaysOnTop = false;
+  /// Windows: Sync starten, wenn eine integrierte DJ-Software startet.
+  /// Standard: an (neue Installationen / fehlender Prefs-Key).
+  bool launchWithDj = true;
   final Map<DjSoftware, String> _customPaths = {};
 
   bool get wantsRead => software != null && readLibrary == true;
@@ -183,16 +186,17 @@ class DjLibraryPrefs extends ChangeNotifier {
           software = DjSoftware.rekordbox;
           readLibrary = true;
           autoUpdate = true;
-          await save();
         }
+        // Frische Installation / fehlende Prefs: launchWithDj bleibt Default true.
+        await save();
         notifyListeners();
-        await _ensureWindowsDjWatch();
+        await _syncWindowsDjWatch();
         return;
       }
       final data = jsonDecode(await file.readAsString());
       if (data is! Map) {
         notifyListeners();
-        await _ensureWindowsDjWatch();
+        await _syncWindowsDjWatch();
         return;
       }
       software = DjSoftware.tryParse(data['software']?.toString());
@@ -200,6 +204,8 @@ class DjLibraryPrefs extends ChangeNotifier {
       readLibrary = read is bool ? read : null;
       autoUpdate = data['autoUpdate'] == true;
       alwaysOnTop = data['alwaysOnTop'] == true;
+      // Fehlender Key = an (Default), nur explizites false schaltet ab.
+      launchWithDj = data['launchWithDj'] != false;
       _customPaths.clear();
       void take(DjSoftware key, String jsonKey) {
         final v = data[jsonKey]?.toString().trim();
@@ -213,22 +219,25 @@ class DjLibraryPrefs extends ChangeNotifier {
       take(DjSoftware.mixxx, 'pathMixxx');
       take(DjSoftware.engineDj, 'pathEngineDj');
       take(DjSoftware.djayPro, 'pathDjayPro');
+      // Prefs-Key ggf. nachziehen (fehlend → true).
+      if (!data.containsKey('launchWithDj')) {
+        await save();
+      }
       notifyListeners();
       if (alwaysOnTop) {
         await WindowChrome.setAlwaysOnTop(true);
       }
-      await _ensureWindowsDjWatch();
+      await _syncWindowsDjWatch();
     } catch (_) {
       notifyListeners();
-      await _ensureWindowsDjWatch();
+      await _syncWindowsDjWatch();
     }
   }
 
-  Future<void> _ensureWindowsDjWatch() async {
-    // Windows: DJ-Watchdog immer an (nativ auch in main.cpp). Kein Mac-Autostart.
-    if (Platform.isWindows) {
-      await WindowChrome.ensureDjWatchAutostart();
-    }
+  /// Windows: Prefs steuern HKCU-Run + Watcher (idempotent bei an).
+  Future<void> _syncWindowsDjWatch() async {
+    if (!Platform.isWindows) return;
+    await WindowChrome.setLaunchWithDj(launchWithDj);
   }
 
   Future<void> setAlwaysOnTop(bool value) async {
@@ -237,6 +246,16 @@ class DjLibraryPrefs extends ChangeNotifier {
     await save();
     notifyListeners();
     await WindowChrome.setAlwaysOnTop(value);
+  }
+
+  Future<void> setLaunchWithDj(bool value) async {
+    if (launchWithDj == value) return;
+    launchWithDj = value;
+    await save();
+    notifyListeners();
+    if (Platform.isWindows) {
+      await WindowChrome.setLaunchWithDj(value);
+    }
   }
 
   Future<void> setSoftware(DjSoftware? value) async {
@@ -304,6 +323,7 @@ class DjLibraryPrefs extends ChangeNotifier {
         'readLibrary': readLibrary,
         'autoUpdate': autoUpdate,
         'alwaysOnTop': alwaysOnTop,
+        'launchWithDj': launchWithDj,
         'pathRekordbox': _customPaths[DjSoftware.rekordbox],
         'pathSerato': _customPaths[DjSoftware.serato],
         'pathVirtualDj': _customPaths[DjSoftware.virtualDj],
@@ -421,23 +441,26 @@ class WindowChrome {
     }
   }
 
-  /// Windows: HKCU-Run + Watcher immer aktiv (idempotent).
-  static Future<bool> ensureDjWatchAutostart() async {
+  /// Windows: HKCU-Run + Watcher setzen/entfernen. Andere Plattformen: no-op.
+  static Future<bool> setLaunchWithDj(bool on) async {
     if (!Platform.isWindows) return false;
     try {
-      return await _channel.invokeMethod<bool>('ensureDjWatchAutostart') ??
-          false;
+      return await _channel.invokeMethod<bool>('setLaunchWithDj', on) ?? false;
     } on PlatformException {
-      try {
-        return await _channel.invokeMethod<bool>('setLaunchWithDj', true) ??
-            false;
-      } on PlatformException {
-        return false;
-      } on MissingPluginException {
-        return false;
-      }
+      return false;
     } on MissingPluginException {
       return false;
+    }
+  }
+
+  static Future<bool?> isLaunchWithDj() async {
+    if (!Platform.isWindows) return null;
+    try {
+      return await _channel.invokeMethod<bool>('isLaunchWithDj');
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
     }
   }
 }
