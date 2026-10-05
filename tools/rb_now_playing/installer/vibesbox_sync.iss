@@ -7,7 +7,7 @@
 #define MyAppPublisher "VibesBox"
 #define MyAppURL "https://vibesbox.app"
 #ifndef MyAppVersion
-  #define MyAppVersion "1.0.3"
+  #define MyAppVersion "1.0.2"
 #endif
 
 [Setup]

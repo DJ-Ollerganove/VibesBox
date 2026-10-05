@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param(
   [string]$SetupExe = "",
-  [string]$Version = "1.0.3",
+  [string]$Version = "1.0.2",
   [string]$MacVersion = "1.0.2"
 )
 
