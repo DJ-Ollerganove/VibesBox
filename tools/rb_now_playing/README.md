@@ -62,8 +62,12 @@ git pull
 .\scripts\deploy_sync_windows.ps1
 ```
 
-Kopiert nach `public\sync\VibesBox-Sync-<version>-windows.exe` und deployt Hosting.  
-Seite: https://vibesbox.app/sync/
+Kopiert immer nach `public\sync\VibesBox-Sync-windows.exe` (fester Name) und deployt Hosting.  
+Die Sync-Seite und `/download/vibesbox-sync-windows` muessen nicht von Hand angepasst werden;  
+nur `version.json` bekommt die neue Versionsnummer aus der pubspec.
+
+Seite: https://vibesbox.app/sync/  
+Download: https://vibesbox.app/download/vibesbox-sync-windows
 
 ### Nur Flutter bauen (ohne Setup)
 
