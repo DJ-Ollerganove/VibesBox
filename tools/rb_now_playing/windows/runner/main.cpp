@@ -1,10 +1,38 @@
 #include <flutter/dart_project.h>
 #include <flutter/flutter_view_controller.h>
+#include <shlobj.h>
 #include <windows.h>
 
 #include "flutter_window.h"
 #include "resource.h"
 #include "utils.h"
+
+namespace {
+
+void ApplyAppIcon(HWND hwnd) {
+  if (!hwnd) {
+    return;
+  }
+  HINSTANCE module = GetModuleHandle(nullptr);
+  // Explizite Groessen: Taskleiste nutzt SMALL, Alt-Tab nutzt BIG.
+  HICON big = reinterpret_cast<HICON>(LoadImage(
+      module, MAKEINTRESOURCE(IDI_APP_ICON), IMAGE_ICON,
+      GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON),
+      LR_SHARED));
+  HICON small_icon = reinterpret_cast<HICON>(LoadImage(
+      module, MAKEINTRESOURCE(IDI_APP_ICON), IMAGE_ICON,
+      GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON),
+      LR_SHARED));
+  if (big) {
+    SendMessage(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(big));
+  }
+  if (small_icon) {
+    SendMessage(hwnd, WM_SETICON, ICON_SMALL,
+                reinterpret_cast<LPARAM>(small_icon));
+  }
+}
+
+}  // namespace
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command) {
@@ -17,6 +45,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // Initialize COM, so that it is available for use in the library and/or
   // plugins.
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+
+  // Eigene Taskleisten-Gruppe mit unserem Icon (nicht generisches Datei-Icon).
+  SetCurrentProcessExplicitAppUserModelID(L"com.vibesbox.sync");
 
   flutter::DartProject project(L"data");
 
@@ -34,13 +65,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   }
   // App-Icon explizit setzen (Taskbar + Titelleiste).
   if (HWND hwnd = window.GetHandle()) {
-    HICON icon = reinterpret_cast<HICON>(LoadImage(
-        GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_APP_ICON), IMAGE_ICON,
-        0, 0, LR_DEFAULTSIZE | LR_SHARED));
-    if (icon) {
-      SendMessage(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(icon));
-      SendMessage(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(icon));
-    }
+    ApplyAppIcon(hwnd);
     // Fenstergroesse nach Create nochmal erzwingen (Client ~360x640).
     RECT rc = {0, 0, 360, 640};
     AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
