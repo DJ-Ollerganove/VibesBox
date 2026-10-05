@@ -12,6 +12,32 @@ class ToolRestClient {
 
   final String _apiKey = DefaultFirebaseOptions.windows.apiKey;
 
+  /// Callable ohne Auth — Cloud Functions Flutter-Plugin fehlt unter Windows.
+  Future<Map<String, dynamic>> redeemRbToolCode(String code) async {
+    final uri = Uri.parse(
+      'https://$_region-$_projectId.cloudfunctions.net/redeemRbToolCode',
+    );
+    final decoded = await _postJson(uri, {
+      'data': {'code': code},
+    });
+    final data = decoded['result'] is Map
+        ? Map<String, dynamic>.from(decoded['result'] as Map)
+        : decoded['data'] is Map
+            ? Map<String, dynamic>.from(decoded['data'] as Map)
+            : decoded;
+    final customToken = (data['customToken'] ?? '').toString();
+    final sessionId = (data['sessionId'] ?? '').toString();
+    final ownerUid = (data['ownerUid'] ?? '').toString();
+    if (customToken.isEmpty || sessionId.isEmpty || ownerUid.isEmpty) {
+      throw StateError('Server-Antwort unvollständig.');
+    }
+    return {
+      'customToken': customToken,
+      'sessionId': sessionId,
+      'ownerUid': ownerUid,
+    };
+  }
+
   Future<Map<String, dynamic>> signInWithCustomToken(String customToken) async {
     final uri = Uri.parse(
       'https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=$_apiKey',

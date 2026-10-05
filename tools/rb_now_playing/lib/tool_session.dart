@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 
@@ -19,10 +18,19 @@ String formatToolDevice(String os, String version) {
     return number == null || number.isEmpty ? 'macOS' : 'macOS $number';
   }
   if (os == 'windows') {
-    final match = RegExp(r'(\d+)\.(\d+)\.(\d+)').firstMatch(version);
-    final build = int.tryParse(match?.group(3) ?? '') ?? 0;
+    // Dart liefert oft: "Windows 10 Pro" 10.0 (Build 22631)
+    // manchmal auch: 10.0.22631
+    final buildMatch = RegExp(r'[Bb]uild\s+(\d+)').firstMatch(version);
+    final triple = RegExp(r'(\d+)\.(\d+)\.(\d+)').firstMatch(version);
+    final build = int.tryParse(
+          buildMatch?.group(1) ?? triple?.group(3) ?? '',
+        ) ??
+        0;
     if (build >= 22000) return 'Windows 11';
     if (build > 0) return 'Windows 10';
+    final lower = version.toLowerCase();
+    if (lower.contains('windows 11')) return 'Windows 11';
+    if (lower.contains('windows 10')) return 'Windows 10';
     return 'Windows';
   }
   return os;
@@ -62,12 +70,10 @@ class ToolSession extends ChangeNotifier {
     'sq': 'Fut 10 shifra.',
   };
 
-  static const _region = 'us-central1';
-
-  final _functions = FirebaseFunctions.instanceFor(region: _region);
   final _rest = ToolRestClient();
   String? _sessionId;
   String? _ownerUid;
+  String? _ownerLabel;
   String? _idToken;
   String? _refreshToken;
   int _expiryMs = 0;
@@ -87,6 +93,12 @@ class ToolSession extends ChangeNotifier {
   ToolRestClient get rest => _rest;
   String? get ownerUid => _ownerUid;
 
+  /// Anzeigename oder E-Mail des verbundenen DJ-Kontos.
+  String? get ownerLabel {
+    final label = (_ownerLabel ?? '').trim();
+    return label.isEmpty ? null : label;
+  }
+
   Future<String?> freshIdTokenOrNull() async {
     if (!isConnected) return null;
     try {
@@ -105,16 +117,19 @@ class ToolSession extends ChangeNotifier {
     if (stored == null) return;
     _sessionId = stored['sessionId'];
     _ownerUid = stored['ownerUid'];
+    _ownerLabel = (stored['ownerLabel'] ?? '').toString();
     _idToken = stored['idToken'];
     _refreshToken = stored['refreshToken'];
     _expiryMs = stored['expiryMs'] ?? 0;
     try {
       await _ensureFreshToken();
       notifyListeners();
+      unawaited(_refreshOwnerLabel());
     } catch (_) {
       await _clearStore();
       _sessionId = null;
       _ownerUid = null;
+      _ownerLabel = null;
       _idToken = null;
       _refreshToken = null;
       _expiryMs = 0;
@@ -132,14 +147,16 @@ class ToolSession extends ChangeNotifier {
     _error = null;
     notifyListeners();
     try {
-      final raw = await _functions.httpsCallable('redeemRbToolCode').call({
-        'code': code,
-      });
-      final data = Map<String, dynamic>.from(raw.data as Map);
+      // REST statt cloud_functions-Plugin (kein Windows-Host-API).
+      final data = await _rest.redeemRbToolCode(code);
       final customToken = (data['customToken'] ?? '').toString();
       _sessionId = (data['sessionId'] ?? '').toString();
       _ownerUid = (data['ownerUid'] ?? '').toString();
-      if (customToken.isEmpty || _sessionId == null || _ownerUid == null) {
+      if (customToken.isEmpty ||
+          _sessionId == null ||
+          _sessionId!.isEmpty ||
+          _ownerUid == null ||
+          _ownerUid!.isEmpty) {
         throw StateError('Server-Antwort unvollständig.');
       }
       final tokens = await _rest.signInWithCustomToken(customToken);
@@ -149,15 +166,11 @@ class ToolSession extends ChangeNotifier {
       _idToken = tokens['idToken'] as String;
       _refreshToken = tokens['refreshToken'] as String;
       _expiryMs = tokens['expiryMs'] as int;
+      await _refreshOwnerLabel();
       await _writeStore();
       _busy = false;
       notifyListeners();
       return true;
-    } on FirebaseFunctionsException catch (e) {
-      _busy = false;
-      _error = e.message ?? 'Verbindung fehlgeschlagen.';
-      notifyListeners();
-      return false;
     } catch (e) {
       _busy = false;
       _error = e.toString().replaceFirst('Bad state: ', '');
@@ -224,6 +237,7 @@ class ToolSession extends ChangeNotifier {
     await _clearStore();
     _sessionId = null;
     _ownerUid = null;
+    _ownerLabel = null;
     _idToken = null;
     _refreshToken = null;
     _expiryMs = 0;
@@ -231,6 +245,35 @@ class ToolSession extends ChangeNotifier {
     _queuedFingerprint = null;
     _lastNowPlaying = null;
     notifyListeners();
+  }
+
+  Future<void> _refreshOwnerLabel() async {
+    final uid = _ownerUid;
+    final token = _idToken;
+    if (uid == null || uid.isEmpty || token == null || token.isEmpty) return;
+    try {
+      final doc = await _rest.getDocument(
+        idToken: token,
+        collection: 'users',
+        docId: uid,
+      );
+      if (doc == null) return;
+      final name = (doc['djName'] ??
+              doc['dj_name'] ??
+              doc['displayName'] ??
+              doc['display_name'] ??
+              doc['name'] ??
+              doc['username'] ??
+              '')
+          .toString()
+          .trim();
+      final email = (doc['email'] ?? '').toString().trim();
+      final next = name.isNotEmpty ? name : email;
+      if (next.isEmpty || next == _ownerLabel) return;
+      _ownerLabel = next;
+      await _writeStore();
+      notifyListeners();
+    } catch (_) {}
   }
 
   /// Verbunden bleiben, ohne den laufenden Song an die Musikerkennung zu schicken.
@@ -554,8 +597,19 @@ class ToolSession extends ChangeNotifier {
   }
 
   File _storeFile() {
-    final home = Platform.environment['HOME'] ?? Directory.systemTemp.path;
-    final dir = Directory('$home/Library/Application Support/VibesBoxRbTool');
+    final home = Platform.environment['HOME'] ??
+        Platform.environment['USERPROFILE'] ??
+        Directory.systemTemp.path;
+    final Directory dir;
+    if (Platform.isWindows) {
+      final appData =
+          Platform.environment['APPDATA'] ?? '$home\\AppData\\Roaming';
+      dir = Directory('$appData\\VibesBoxRbTool');
+    } else if (Platform.isMacOS) {
+      dir = Directory('$home/Library/Application Support/VibesBoxRbTool');
+    } else {
+      dir = Directory('$home/.vibesbox_rb_tool');
+    }
     if (!dir.existsSync()) {
       dir.createSync(recursive: true);
     }
@@ -580,6 +634,7 @@ class ToolSession extends ChangeNotifier {
       jsonEncode({
         'sessionId': _sessionId,
         'ownerUid': _ownerUid,
+        'ownerLabel': _ownerLabel,
         'idToken': _idToken,
         'refreshToken': _refreshToken,
         'expiryMs': _expiryMs,

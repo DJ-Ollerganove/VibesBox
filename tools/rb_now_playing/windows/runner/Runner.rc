@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.vibesbox" "\0"
-            VALUE "FileDescription", "rb_now_playing" "\0"
+            VALUE "CompanyName", "VibesBox" "\0"
+            VALUE "FileDescription", "VibesBox Sync" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "rb_now_playing" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.vibesbox. All rights reserved." "\0"
-            VALUE "OriginalFilename", "rb_now_playing.exe" "\0"
-            VALUE "ProductName", "rb_now_playing" "\0"
+            VALUE "InternalName", "VibesBoxSync" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 VibesBox. All rights reserved." "\0"
+            VALUE "OriginalFilename", "VibesBoxSync.exe" "\0"
+            VALUE "ProductName", "VibesBox Sync" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

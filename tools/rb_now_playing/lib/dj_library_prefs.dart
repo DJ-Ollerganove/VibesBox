@@ -6,34 +6,53 @@ import 'package:flutter/services.dart';
 
 import 'rekordbox_history.dart';
 
+/// Reihenfolge = Anzeige alphabetisch nach [label].
 enum DjSoftware {
+  djayPro,
+  engineDj,
+  mixxx,
   rekordbox,
   serato,
-  virtualDj,
   traktor,
-  mixxx,
-  engineDj;
+  virtualDj;
 
   String get id => switch (this) {
+        DjSoftware.djayPro => 'djaypro',
+        DjSoftware.engineDj => 'enginedj',
+        DjSoftware.mixxx => 'mixxx',
         DjSoftware.rekordbox => 'rekordbox',
         DjSoftware.serato => 'serato',
-        DjSoftware.virtualDj => 'virtualdj',
         DjSoftware.traktor => 'traktor',
-        DjSoftware.mixxx => 'mixxx',
-        DjSoftware.engineDj => 'enginedj',
+        DjSoftware.virtualDj => 'virtualdj',
       };
 
   String get label => switch (this) {
+        DjSoftware.djayPro => 'DJAY Pro',
+        DjSoftware.engineDj => 'Engine DJ',
+        DjSoftware.mixxx => 'Mixxx',
         DjSoftware.rekordbox => 'Rekordbox',
         DjSoftware.serato => 'Serato DJ Pro',
-        DjSoftware.virtualDj => 'Virtual DJ',
         DjSoftware.traktor => 'Traktor Pro',
-        DjSoftware.mixxx => 'Mixxx',
-        DjSoftware.engineDj => 'Engine DJ',
+        DjSoftware.virtualDj => 'Virtual DJ',
       };
 
   static DjSoftware? tryParse(String? raw) {
     switch (raw?.trim().toLowerCase()) {
+      case 'djay':
+      case 'djay pro':
+      case 'djaypro':
+      case 'djay pro ai':
+      case 'algoriddim':
+      case 'algoriddim djay':
+      case 'algoriddim djay pro':
+        return DjSoftware.djayPro;
+      case 'enginedj':
+      case 'engine':
+      case 'engine dj':
+      case 'engine prime':
+        return DjSoftware.engineDj;
+      case 'mixxx':
+        return DjSoftware.mixxx;
       case 'rekordbox':
         return DjSoftware.rekordbox;
       case 'serato':
@@ -41,22 +60,15 @@ enum DjSoftware {
       case 'serato dj pro':
       case 'seratodj':
         return DjSoftware.serato;
-      case 'virtualdj':
-      case 'virtual_dj':
-      case 'virtual dj':
-        return DjSoftware.virtualDj;
       case 'traktor':
       case 'traktor pro':
       case 'traktorpro':
       case 'traktordj':
         return DjSoftware.traktor;
-      case 'mixxx':
-        return DjSoftware.mixxx;
-      case 'enginedj':
-      case 'engine':
-      case 'engine dj':
-      case 'engine prime':
-        return DjSoftware.engineDj;
+      case 'virtualdj':
+      case 'virtual_dj':
+      case 'virtual dj':
+        return DjSoftware.virtualDj;
       default:
         return null;
     }
@@ -121,6 +133,21 @@ String defaultLibraryPath(DjSoftware software) {
         const ['Music', 'Engine Library', 'Database2', 'm.db'],
         winParts: const ['Music', 'Engine Library', 'Database2', 'm.db'],
       );
+    case DjSoftware.djayPro:
+      return _joinHome(
+        const [
+          'Music',
+          'djay',
+          'djay Media Library.djayMediaLibrary',
+          'MediaLibrary.db',
+        ],
+        winParts: const [
+          'Music',
+          'djay',
+          'djay Media Library',
+          'MediaLibrary.db',
+        ],
+      );
   }
 }
 
@@ -183,6 +210,7 @@ class DjLibraryPrefs extends ChangeNotifier {
       take(DjSoftware.traktor, 'pathTraktor');
       take(DjSoftware.mixxx, 'pathMixxx');
       take(DjSoftware.engineDj, 'pathEngineDj');
+      take(DjSoftware.djayPro, 'pathDjayPro');
       notifyListeners();
       if (alwaysOnTop) {
         await WindowChrome.setAlwaysOnTop(true);
@@ -244,7 +272,8 @@ class DjLibraryPrefs extends ChangeNotifier {
     try {
       final picked = await _channel.invokeMethod<String>('pick', {
         'start': start,
-        'folders': forSoftware == DjSoftware.serato,
+        'folders': forSoftware == DjSoftware.serato ||
+            forSoftware == DjSoftware.djayPro,
       });
       final path = picked?.trim();
       if (path == null || path.isEmpty) return null;
@@ -270,6 +299,7 @@ class DjLibraryPrefs extends ChangeNotifier {
         'pathTraktor': _customPaths[DjSoftware.traktor],
         'pathMixxx': _customPaths[DjSoftware.mixxx],
         'pathEngineDj': _customPaths[DjSoftware.engineDj],
+        'pathDjayPro': _customPaths[DjSoftware.djayPro],
       }),
     );
   }
@@ -322,6 +352,17 @@ String resolvePickedPath(DjSoftware software, String picked) {
         '$picked/m.db',
         '$picked/Database2/m.db',
         '$picked/Engine Library/Database2/m.db',
+      ]) {
+        if (File(nested).existsSync()) return nested;
+      }
+      return picked;
+    case DjSoftware.djayPro:
+      for (final nested in [
+        '$picked/MediaLibrary.db',
+        '$picked/djay Media Library/MediaLibrary.db',
+        '$picked/djay Media Library.djayMediaLibrary/MediaLibrary.db',
+        '$picked/djay/djay Media Library/MediaLibrary.db',
+        '$picked/djay/djay Media Library.djayMediaLibrary/MediaLibrary.db',
       ]) {
         if (File(nested).existsSync()) return nested;
       }
