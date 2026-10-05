@@ -13,6 +13,9 @@
   - Flutter (siehe $FlutterBat unten)
   - Visual Studio 2022 mit "Desktop development with C++"
   - Inno Setup 6 oder 7: https://jrsoftware.org/isdl.php
+
+  WICHTIG: Diese Datei nur ASCII (kein UTF-8-Sonderzeichen), sonst ParserError
+  unter Windows PowerShell 5.1 bei falscher Codepage.
 #>
 
 [CmdletBinding()]
@@ -31,7 +34,7 @@ function Write-Step([string]$msg) {
   Write-Host "==> $msg" -ForegroundColor Cyan
 }
 
-# Eine Versionsquelle: pubspec.yaml – direkt hier lesen (nicht aus Script-Output raten)
+# Eine Versionsquelle: pubspec.yaml - direkt hier lesen
 Write-Step "Version aus pubspec lesen"
 $pubspecPath = Join-Path $ToolRoot 'pubspec.yaml'
 $pubspec = Get-Content -Raw -Encoding UTF8 $pubspecPath
@@ -44,20 +47,19 @@ if ($AppVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
 }
 Write-Host "pubspec.yaml version -> $AppVersion"
 
-# tool_version.dart + iss-Default mitschreiben (Hosting optional nur beim Deploy)
+# tool_version.dart + iss-Default mitschreiben
 $null = & (Join-Path $ToolRoot 'scripts\sync_version_from_pubspec.ps1')
-# Nochmal aus pubspec bestaetigen (Sync-Script darf die Wahrheit nicht aendern)
 $pubspec = Get-Content -Raw -Encoding UTF8 $pubspecPath
 if ($pubspec -notmatch '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)' -or $Matches[1] -ne $AppVersion) {
   throw "Version nach Sync inkonsistent (erwartet $AppVersion)."
 }
 Write-Host "VibesBox Sync Version: $AppVersion" -ForegroundColor Green
 
-# Quelle muss die Windows-Fixes enthalten (sonst baut man die alte EXE weiter).
+# Quelle muss die Windows-Fixes enthalten
 $sessionSrc = Get-Content -Raw -Encoding UTF8 (Join-Path $ToolRoot 'lib\tool_session.dart')
 $mainCpp = Get-Content -Raw -Encoding UTF8 (Join-Path $ToolRoot 'windows\runner\main.cpp')
 if ($sessionSrc -notlike '*redeemRbToolCode(code)*' -or $sessionSrc -like '*FirebaseFunctions*') {
-  throw "Quellcode ohne Windows-REST-Login. Bitte zuerst: git pull (Branch cursor/djay-pro-library-b710)."
+  throw "Quellcode ohne Windows-REST-Login. Bitte zuerst: git pull (Branch cursor/windows-sync-installer-b710)."
 }
 if ($mainCpp -notlike '*Size size(360, 640)*') {
   throw "Quellcode ohne Hochkant-Fenster. Bitte zuerst: git pull."
@@ -83,7 +85,6 @@ Installiere Flutter oder uebergib den Pfad:
   }
 
   # LNK1104: Linker kann VibesBoxSync.exe nicht ueberschreiben, solange sie laeuft
-  # oder vom Explorer/Antivirus gesperrt ist.
   Write-Step "Laufende VibesBoxSync-Prozesse beenden (sonst LNK1104)"
   Get-Process -Name 'VibesBoxSync', 'rb_now_playing' -ErrorAction SilentlyContinue |
     Stop-Process -Force
@@ -184,15 +185,15 @@ if (-not (Test-Path $AppIcon)) { throw "App-Icon fehlt: $AppIcon" }
 if (-not (Test-Path $SetupIcon)) { throw "Setup-Icon fehlt: $SetupIcon" }
 $setupIconInfo = Get-Item $SetupIcon
 if ($setupIconInfo.Length -lt 10000) {
-  throw "Setup-Icon zu klein ($($setupIconInfo.Length) Bytes) – vermutlich kein VibesBox-Logo: $SetupIcon"
+  throw ("Setup-Icon zu klein ({0} Bytes) - vermutlich kein VibesBox-Logo: {1}" -f $setupIconInfo.Length, $SetupIcon)
 }
-Write-Host ("Setup-Icon: {0} ({1:N0} Bytes)" -f $SetupIcon, $setupIconInfo.Length)
+Write-Host ("Setup-Icon: {0} ({1} Bytes)" -f $SetupIcon, $setupIconInfo.Length)
 
 $ExpectedSetupName = "VibesBoxSync-Setup-$AppVersion.exe"
 $SetupExe = Join-Path $DistDir $ExpectedSetupName
 
 # Version + Icon-Pfad FEST in die .iss schreiben
-Write-Step "Inno-.iss auf Version $AppVersion + Setup-Icon festnageln"
+Write-Step ("Inno-.iss auf Version {0} + Setup-Icon festnageln" -f $AppVersion)
 $issText = [System.IO.File]::ReadAllText($IssPath)
 $issText = [regex]::Replace(
   $issText,
@@ -204,42 +205,42 @@ $issText = [regex]::Replace(
   'OutputBaseFilename=VibesBoxSync-Setup-[^\r\n]+',
   "OutputBaseFilename=VibesBoxSync-Setup-$AppVersion"
 )
-# Absoluter Icon-Pfad in Anführungszeichen (Inno braucht das zuverlässig)
+# Absoluter Icon-Pfad in Anfuehrungszeichen
 $setupIconForIss = $SetupIcon
 $issText = [regex]::Replace(
   $issText,
   '(?m)^SetupIconFile=.*$',
-  "SetupIconFile=`"$setupIconForIss`""
+  ("SetupIconFile=`"{0}`"" -f $setupIconForIss)
 )
-if ($issText -notlike "*#define MyAppVersion `"$AppVersion`"*") {
-  throw "Konnte MyAppVersion in vibesbox_sync.iss nicht auf $AppVersion setzen."
+if ($issText -notlike ("*#define MyAppVersion `"{0}`"*" -f $AppVersion)) {
+  throw ("Konnte MyAppVersion in vibesbox_sync.iss nicht auf {0} setzen." -f $AppVersion)
 }
-if ($issText -notlike "*OutputBaseFilename=VibesBoxSync-Setup-$AppVersion*") {
-  throw "Konnte OutputBaseFilename in vibesbox_sync.iss nicht auf $AppVersion setzen."
+if ($issText -notlike ("*OutputBaseFilename=VibesBoxSync-Setup-{0}*" -f $AppVersion)) {
+  throw ("Konnte OutputBaseFilename in vibesbox_sync.iss nicht auf {0} setzen." -f $AppVersion)
 }
-if ($issText -notmatch '(?m)^SetupIconFile=.+vibesbox_sync\.ico\s*$') {
+if ($issText -notmatch '(?m)^SetupIconFile=.+vibesbox_sync\.ico"?\s*$') {
   throw "Konnte SetupIconFile in vibesbox_sync.iss nicht setzen."
 }
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
 [System.IO.File]::WriteAllText($IssPath, $issText, $utf8NoBom)
-Write-Host "OK: OutputBaseFilename=VibesBoxSync-Setup-$AppVersion"
-Write-Host "OK: SetupIconFile=$setupIconForIss"
+Write-Host ("OK: OutputBaseFilename=VibesBoxSync-Setup-{0}" -f $AppVersion)
+Write-Host ("OK: SetupIconFile={0}" -f $setupIconForIss)
 
-# Komplette dist\VibesBoxSync-Setup-*.exe weg, dann neu bauen
+# Alte Setup-Dateien entfernen, dann neu bauen
 Get-ChildItem -Path $DistDir -Filter 'VibesBoxSync-Setup-*.exe' -ErrorAction SilentlyContinue |
   ForEach-Object {
-    Write-Host "Entferne alte Setup-Datei: $($_.Name)" -ForegroundColor Yellow
+    Write-Host ("Entferne alte Setup-Datei: {0}" -f $_.Name) -ForegroundColor Yellow
     Remove-Item -Force $_.FullName
   }
 
-Write-Step "Inno Setup: $Iscc"
-Write-Host "Erwartete Ausgabe: $SetupExe"
+Write-Step ("Inno Setup: {0}" -f $Iscc)
+Write-Host ("Erwartete Ausgabe: {0}" -f $SetupExe)
 & $Iscc $IssPath
-if ($LASTEXITCODE -ne 0) { throw "Inno Setup fehlgeschlagen (Exit $LASTEXITCODE)" }
+if ($LASTEXITCODE -ne 0) { throw ("Inno Setup fehlgeschlagen (Exit {0})" -f $LASTEXITCODE) }
 
 $found = @(Get-ChildItem -Path $DistDir -Filter 'VibesBoxSync-Setup-*.exe' -ErrorAction SilentlyContinue)
 Write-Host "Setup-Dateien in dist\:"
-$found | ForEach-Object { Write-Host "  - $($_.Name)" }
+$found | ForEach-Object { Write-Host ("  - {0}" -f $_.Name) }
 
 if (-not (Test-Path $SetupExe)) {
   $names = ($found | ForEach-Object { $_.Name }) -join ', '
@@ -255,13 +256,13 @@ pubspec.yaml version muss $AppVersion sein. Bitte:
 }
 
 if ($found.Count -ne 1 -or $found[0].Name -ne $ExpectedSetupName) {
-  throw "Unerwartete Setup-Dateien in dist\. Nur $ExpectedSetupName ist erlaubt."
+  throw ("Unerwartete Setup-Dateien in dist\. Nur {0} ist erlaubt." -f $ExpectedSetupName)
 }
 
 Write-Host ""
 Write-Host "Fertig." -ForegroundColor Green
-Write-Host "Installer: $SetupExe"
-Write-Host "Portable:  $ZipPath"
+Write-Host ("Installer: {0}" -f $SetupExe)
+Write-Host ("Portable:  {0}" -f $ZipPath)
 Write-Host ""
 Write-Host "Danach ggf. auf die Website:"
 Write-Host "  ..\..\scripts\deploy_sync_windows.ps1"
