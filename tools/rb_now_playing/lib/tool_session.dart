@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 
@@ -62,9 +61,6 @@ class ToolSession extends ChangeNotifier {
     'sq': 'Fut 10 shifra.',
   };
 
-  static const _region = 'us-central1';
-
-  final _functions = FirebaseFunctions.instanceFor(region: _region);
   final _rest = ToolRestClient();
   String? _sessionId;
   String? _ownerUid;
@@ -132,14 +128,16 @@ class ToolSession extends ChangeNotifier {
     _error = null;
     notifyListeners();
     try {
-      final raw = await _functions.httpsCallable('redeemRbToolCode').call({
-        'code': code,
-      });
-      final data = Map<String, dynamic>.from(raw.data as Map);
+      // REST statt cloud_functions-Plugin (kein Windows-Host-API).
+      final data = await _rest.redeemRbToolCode(code);
       final customToken = (data['customToken'] ?? '').toString();
       _sessionId = (data['sessionId'] ?? '').toString();
       _ownerUid = (data['ownerUid'] ?? '').toString();
-      if (customToken.isEmpty || _sessionId == null || _ownerUid == null) {
+      if (customToken.isEmpty ||
+          _sessionId == null ||
+          _sessionId!.isEmpty ||
+          _ownerUid == null ||
+          _ownerUid!.isEmpty) {
         throw StateError('Server-Antwort unvollständig.');
       }
       final tokens = await _rest.signInWithCustomToken(customToken);
@@ -153,11 +151,6 @@ class ToolSession extends ChangeNotifier {
       _busy = false;
       notifyListeners();
       return true;
-    } on FirebaseFunctionsException catch (e) {
-      _busy = false;
-      _error = e.message ?? 'Verbindung fehlgeschlagen.';
-      notifyListeners();
-      return false;
     } catch (e) {
       _busy = false;
       _error = e.toString().replaceFirst('Bad state: ', '');
@@ -554,8 +547,19 @@ class ToolSession extends ChangeNotifier {
   }
 
   File _storeFile() {
-    final home = Platform.environment['HOME'] ?? Directory.systemTemp.path;
-    final dir = Directory('$home/Library/Application Support/VibesBoxRbTool');
+    final home = Platform.environment['HOME'] ??
+        Platform.environment['USERPROFILE'] ??
+        Directory.systemTemp.path;
+    final Directory dir;
+    if (Platform.isWindows) {
+      final appData =
+          Platform.environment['APPDATA'] ?? '$home\\AppData\\Roaming';
+      dir = Directory('$appData\\VibesBoxRbTool');
+    } else if (Platform.isMacOS) {
+      dir = Directory('$home/Library/Application Support/VibesBoxRbTool');
+    } else {
+      dir = Directory('$home/.vibesbox_rb_tool');
+    }
     if (!dir.existsSync()) {
       dir.createSync(recursive: true);
     }
