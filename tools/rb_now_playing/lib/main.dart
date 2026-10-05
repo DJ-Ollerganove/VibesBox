@@ -1278,12 +1278,19 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                   const SizedBox(height: 6),
                   Text(
                     widget.session.isConnected
-                        ? (_wishboard.partyName == null
-                            ? toolI18n.text('connectedNoParty')
-                            : toolI18n.text(
-                                'connectedParty',
-                                {'name': _wishboard.partyName!},
-                              ))
+                        ? ([
+                            if (widget.session.ownerLabel != null)
+                              toolI18n.text(
+                                'connectedAs',
+                                {'name': widget.session.ownerLabel!},
+                              ),
+                            _wishboard.partyName == null
+                                ? toolI18n.text('connectedNoParty')
+                                : toolI18n.text(
+                                    'connectedParty',
+                                    {'name': _wishboard.partyName!},
+                                  ),
+                          ].join('\n'))
                         : toolI18n.text('localHint'),
                     style: const TextStyle(color: Colors.white38, fontSize: 11),
                   ),
@@ -2828,7 +2835,26 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
             connected ? toolI18n.text('connected') : toolI18n.text('connectTitle'),
           ),
           content: connected
-              ? Text(toolI18n.text('stayConnected'))
+              ? Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (widget.session.ownerLabel != null) ...[
+                      Text(
+                        toolI18n.text(
+                          'connectedAs',
+                          {'name': widget.session.ownerLabel!},
+                        ),
+                        style: const TextStyle(
+                          color: Color(0xFF22E7FF),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                    Text(toolI18n.text('stayConnected')),
+                  ],
+                )
               : Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [

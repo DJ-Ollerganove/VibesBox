@@ -18,10 +18,19 @@ String formatToolDevice(String os, String version) {
     return number == null || number.isEmpty ? 'macOS' : 'macOS $number';
   }
   if (os == 'windows') {
-    final match = RegExp(r'(\d+)\.(\d+)\.(\d+)').firstMatch(version);
-    final build = int.tryParse(match?.group(3) ?? '') ?? 0;
+    // Dart liefert oft: "Windows 10 Pro" 10.0 (Build 22631)
+    // manchmal auch: 10.0.22631
+    final buildMatch = RegExp(r'[Bb]uild\s+(\d+)').firstMatch(version);
+    final triple = RegExp(r'(\d+)\.(\d+)\.(\d+)').firstMatch(version);
+    final build = int.tryParse(
+          buildMatch?.group(1) ?? triple?.group(3) ?? '',
+        ) ??
+        0;
     if (build >= 22000) return 'Windows 11';
     if (build > 0) return 'Windows 10';
+    final lower = version.toLowerCase();
+    if (lower.contains('windows 11')) return 'Windows 11';
+    if (lower.contains('windows 10')) return 'Windows 10';
     return 'Windows';
   }
   return os;
@@ -64,6 +73,7 @@ class ToolSession extends ChangeNotifier {
   final _rest = ToolRestClient();
   String? _sessionId;
   String? _ownerUid;
+  String? _ownerLabel;
   String? _idToken;
   String? _refreshToken;
   int _expiryMs = 0;
@@ -83,6 +93,12 @@ class ToolSession extends ChangeNotifier {
   ToolRestClient get rest => _rest;
   String? get ownerUid => _ownerUid;
 
+  /// Anzeigename oder E-Mail des verbundenen DJ-Kontos.
+  String? get ownerLabel {
+    final label = (_ownerLabel ?? '').trim();
+    return label.isEmpty ? null : label;
+  }
+
   Future<String?> freshIdTokenOrNull() async {
     if (!isConnected) return null;
     try {
@@ -101,16 +117,19 @@ class ToolSession extends ChangeNotifier {
     if (stored == null) return;
     _sessionId = stored['sessionId'];
     _ownerUid = stored['ownerUid'];
+    _ownerLabel = (stored['ownerLabel'] ?? '').toString();
     _idToken = stored['idToken'];
     _refreshToken = stored['refreshToken'];
     _expiryMs = stored['expiryMs'] ?? 0;
     try {
       await _ensureFreshToken();
       notifyListeners();
+      unawaited(_refreshOwnerLabel());
     } catch (_) {
       await _clearStore();
       _sessionId = null;
       _ownerUid = null;
+      _ownerLabel = null;
       _idToken = null;
       _refreshToken = null;
       _expiryMs = 0;
@@ -147,6 +166,7 @@ class ToolSession extends ChangeNotifier {
       _idToken = tokens['idToken'] as String;
       _refreshToken = tokens['refreshToken'] as String;
       _expiryMs = tokens['expiryMs'] as int;
+      await _refreshOwnerLabel();
       await _writeStore();
       _busy = false;
       notifyListeners();
@@ -217,6 +237,7 @@ class ToolSession extends ChangeNotifier {
     await _clearStore();
     _sessionId = null;
     _ownerUid = null;
+    _ownerLabel = null;
     _idToken = null;
     _refreshToken = null;
     _expiryMs = 0;
@@ -224,6 +245,33 @@ class ToolSession extends ChangeNotifier {
     _queuedFingerprint = null;
     _lastNowPlaying = null;
     notifyListeners();
+  }
+
+  Future<void> _refreshOwnerLabel() async {
+    final uid = _ownerUid;
+    final token = _idToken;
+    if (uid == null || uid.isEmpty || token == null || token.isEmpty) return;
+    try {
+      final doc = await _rest.getDocument(
+        idToken: token,
+        collection: 'users',
+        docId: uid,
+      );
+      if (doc == null) return;
+      final name = (doc['displayName'] ??
+              doc['display_name'] ??
+              doc['name'] ??
+              doc['username'] ??
+              '')
+          .toString()
+          .trim();
+      final email = (doc['email'] ?? '').toString().trim();
+      final next = name.isNotEmpty ? name : email;
+      if (next.isEmpty || next == _ownerLabel) return;
+      _ownerLabel = next;
+      await _writeStore();
+      notifyListeners();
+    } catch (_) {}
   }
 
   /// Verbunden bleiben, ohne den laufenden Song an die Musikerkennung zu schicken.
@@ -584,6 +632,7 @@ class ToolSession extends ChangeNotifier {
       jsonEncode({
         'sessionId': _sessionId,
         'ownerUid': _ownerUid,
+        'ownerLabel': _ownerLabel,
         'idToken': _idToken,
         'refreshToken': _refreshToken,
         'expiryMs': _expiryMs,

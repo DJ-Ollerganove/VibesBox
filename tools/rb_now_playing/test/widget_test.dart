@@ -289,6 +289,14 @@ void main() {
     expect(formatToolDevice('macos', 'Version 26.6.2 (Build 25G83)'), 'macOS 26.6.2');
     expect(formatToolDevice('windows', '10.0.22631'), 'Windows 11');
     expect(formatToolDevice('windows', '10.0.19045'), 'Windows 10');
+    expect(
+      formatToolDevice('windows', '"Windows 10 Pro" 10.0 (Build 22631)'),
+      'Windows 11',
+    );
+    expect(
+      formatToolDevice('windows', '"Windows 10 Pro" 10.0 (Build 19045)'),
+      'Windows 10',
+    );
   });
 
   test('legt Bibliothekscache je DJ-Software an', () {
