@@ -1278,19 +1278,17 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                   const SizedBox(height: 6),
                   Text(
                     widget.session.isConnected
-                        ? ([
-                            if (widget.session.ownerLabel != null)
-                              toolI18n.text(
+                        ? (widget.session.ownerLabel != null
+                            ? toolI18n.text(
                                 'connectedAs',
                                 {'name': widget.session.ownerLabel!},
-                              ),
-                            _wishboard.partyName == null
+                              )
+                            : (_wishboard.partyName == null
                                 ? toolI18n.text('connectedNoParty')
                                 : toolI18n.text(
                                     'connectedParty',
                                     {'name': _wishboard.partyName!},
-                                  ),
-                          ].join('\n'))
+                                  )))
                         : toolI18n.text('localHint'),
                     style: const TextStyle(color: Colors.white38, fontSize: 11),
                   ),
