@@ -5,7 +5,6 @@
 #include <shellapi.h>
 
 #include <algorithm>
-#include <cctype>
 #include <string>
 #include <vector>
 
@@ -30,6 +29,16 @@ std::wstring ExePath() {
     return L"";
   }
   return std::wstring(buf, n);
+}
+
+bool ExeStillInstalled() {
+  const std::wstring exe = ExePath();
+  if (exe.empty()) {
+    return false;
+  }
+  const DWORD attrs = ::GetFileAttributesW(exe.c_str());
+  return attrs != INVALID_FILE_ATTRIBUTES &&
+         (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
 bool HasArg(const std::wstring& needle) {
@@ -162,6 +171,26 @@ std::wstring RunCommandLine() {
   return L"\"" + exe + L"\" --dj-watch";
 }
 
+bool WriteRunKey() {
+  HKEY key = OpenRunKey(true);
+  if (!key) {
+    return false;
+  }
+  const std::wstring cmd = RunCommandLine();
+  if (cmd.empty()) {
+    ::RegCloseKey(key);
+    return false;
+  }
+  const bool ok =
+      ::RegSetValueExW(
+          key, kRunValueName, 0, REG_SZ,
+          reinterpret_cast<const BYTE*>(cmd.c_str()),
+          static_cast<DWORD>((cmd.size() + 1) * sizeof(wchar_t))) ==
+      ERROR_SUCCESS;
+  ::RegCloseKey(key);
+  return ok;
+}
+
 void LaunchWatchdogDetached() {
   if (MutexAlreadyExists(kWatchMutex)) {
     return;
@@ -225,33 +254,19 @@ bool IsDjWatchAutostartEnabled() {
   return rc == ERROR_SUCCESS && type == REG_SZ;
 }
 
-bool SetDjWatchAutostart(bool enabled) {
+bool EnsureDjWatchAutostart() {
+  const bool ok = WriteRunKey();
+  LaunchWatchdogDetached();
+  return ok;
+}
+
+bool ClearDjWatchAutostart() {
   HKEY key = OpenRunKey(true);
   if (!key) {
     return false;
   }
-  bool ok = false;
-  if (enabled) {
-    const std::wstring cmd = RunCommandLine();
-    if (!cmd.empty()) {
-      ok = ::RegSetValueExW(
-               key, kRunValueName, 0, REG_SZ,
-               reinterpret_cast<const BYTE*>(cmd.c_str()),
-               static_cast<DWORD>((cmd.size() + 1) * sizeof(wchar_t))) ==
-           ERROR_SUCCESS;
-    }
-    ::RegCloseKey(key);
-    if (ok) {
-      LaunchWatchdogDetached();
-    }
-    return ok;
-  }
   ::RegDeleteValueW(key, kRunValueName);
   ::RegCloseKey(key);
-  // Laufenden Watcher beenden: zweiten Prozess mit --dj-watch-stop
-  // ist unnötig – wir posten an den Watch-Mutex-Inhaber via Taskkill nur
-  // auf denselben EXE-Namen mit CommandLine-Flag wäre fragil.
-  // Stattdessen: Watcher prüft periodisch den Run-Key und beendet sich.
   return true;
 }
 
@@ -265,10 +280,15 @@ int RunDjWatchdog() {
     return EXIT_SUCCESS;
   }
 
-  // Verstecktes Message-Fenster nicht nötig – Polling-Loop.
+  // Immer beobachten, solange die App installiert ist.
+  // Run-Key ggf. nachziehen (z. B. nach manueller Löschung).
+  // Bei Deinstallation verschwindet die EXE → sauber beenden.
   for (;;) {
-    if (!IsDjWatchAutostartEnabled()) {
+    if (!ExeStillInstalled()) {
       break;
+    }
+    if (!IsDjWatchAutostartEnabled()) {
+      WriteRunKey();
     }
     if (ProcessListContainsDj() && !IsUiRunning()) {
       LaunchUi();

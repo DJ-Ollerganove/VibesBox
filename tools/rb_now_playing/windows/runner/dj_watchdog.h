@@ -1,8 +1,6 @@
 #ifndef RUNNER_DJ_WATCHDOG_H_
 #define RUNNER_DJ_WATCHDOG_H_
 
-#include <string>
-
 // True wenn argv --dj-watch / -dj-watch enthält.
 bool HasDjWatchArgument();
 
@@ -13,10 +11,13 @@ int RunDjWatchdog();
 // Verhindert doppelte UI-Instanzen. true = diese Instanz darf weiterlaufen.
 bool AcquireUiSingleInstance();
 
-// HKCU Run-Eintrag setzen/entfernen und Watcher sofort starten/stoppen.
-bool SetDjWatchAutostart(bool enabled);
+// Immer: HKCU-Run setzen (idempotent) und Watcher starten falls nötig.
+bool EnsureDjWatchAutostart();
 
-// Aktuellen Zustand des Run-Eintrags.
+// Run-Eintrag entfernen (Deinstallation). Watcher beendet sich, wenn EXE fehlt.
+bool ClearDjWatchAutostart();
+
+// True wenn der Run-Eintrag vorhanden ist.
 bool IsDjWatchAutostartEnabled();
 
 #endif  // RUNNER_DJ_WATCHDOG_H_
