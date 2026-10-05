@@ -18,6 +18,7 @@ class HistoryTrack {
     required this.bpm,
     required this.musicalKey,
     required this.length,
+    this.location,
   });
 
   final int trackNo;
@@ -28,6 +29,8 @@ class HistoryTrack {
   final double? bpm;
   final String? musicalKey;
   final Duration? length;
+  /// Lokaler Dateipfad oder Streaming-URI (wenn bekannt).
+  final String? location;
 
   String get identity => '$trackNo|$title|$artist|${playedAt?.toUtc().toIso8601String()}';
 }
@@ -111,7 +114,8 @@ SELECT
   a.Name AS artist,
   c.BPM AS bpm,
   k.ScaleName AS musicalKey,
-  c.Length AS lengthSec
+  c.Length AS lengthSec,
+  c.FolderPath AS location
 FROM djmdSongHistory sh
 JOIN djmdHistory h ON h.ID = sh.HistoryID
 LEFT JOIN djmdContent c ON c.ID = sh.ContentID
@@ -143,7 +147,8 @@ SELECT
   a.Name AS artist,
   c.BPM AS bpm,
   k.ScaleName AS musicalKey,
-  c.Length AS lengthSec
+  c.Length AS lengthSec,
+  c.FolderPath AS location
 FROM djmdSongHistory sh
 JOIN djmdHistory h ON h.ID = sh.HistoryID
 LEFT JOIN djmdContent c ON c.ID = sh.ContentID
@@ -184,6 +189,7 @@ LIMIT 120
           bpm: _asBpm(row['bpm']),
           musicalKey: _asString(row['musicalKey']),
           length: _asLength(row['lengthSec']),
+          location: _asString(row['location']),
         ),
       );
     }

@@ -337,6 +337,8 @@ class ToolSession extends ChangeNotifier {
                 'key': now.musicalKey,
                 'camelot': camelotFromScaleName(now.musicalKey),
                 if (now.length != null) 'durationSec': now.length!.inSeconds,
+                if (now.location != null && now.location!.trim().isNotEmpty)
+                  'location': now.location,
                 'suggestions': kept,
                 if (sameSong && previous['suggestionsFor'] != null)
                   'suggestionsFor': previous['suggestionsFor'],
