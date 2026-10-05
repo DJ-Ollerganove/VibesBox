@@ -398,4 +398,28 @@ class WindowChrome {
       return;
     }
   }
+
+  /// Windows frameless: Fenster ziehen (entspricht macOS movableByWindowBackground).
+  static Future<void> startDrag() async {
+    if (!Platform.isWindows) return;
+    try {
+      await _channel.invokeMethod<bool>('startDrag');
+    } on PlatformException {
+      return;
+    } on MissingPluginException {
+      return;
+    }
+  }
+
+  /// Windows frameless: Schließen ohne native Caption-Buttons.
+  static Future<void> close() async {
+    if (!Platform.isWindows) return;
+    try {
+      await _channel.invokeMethod<bool>('close');
+    } on PlatformException {
+      return;
+    } on MissingPluginException {
+      return;
+    }
+  }
 }
