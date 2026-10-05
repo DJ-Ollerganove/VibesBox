@@ -182,12 +182,17 @@ $AppIcon = Join-Path $ToolRoot 'windows\runner\resources\app_icon.ico'
 $SetupIcon = Join-Path $ToolRoot 'installer\vibesbox_sync.ico'
 if (-not (Test-Path $AppIcon)) { throw "App-Icon fehlt: $AppIcon" }
 if (-not (Test-Path $SetupIcon)) { throw "Setup-Icon fehlt: $SetupIcon" }
+$setupIconInfo = Get-Item $SetupIcon
+if ($setupIconInfo.Length -lt 10000) {
+  throw "Setup-Icon zu klein ($($setupIconInfo.Length) Bytes) – vermutlich kein VibesBox-Logo: $SetupIcon"
+}
+Write-Host ("Setup-Icon: {0} ({1:N0} Bytes)" -f $SetupIcon, $setupIconInfo.Length)
 
 $ExpectedSetupName = "VibesBoxSync-Setup-$AppVersion.exe"
 $SetupExe = Join-Path $DistDir $ExpectedSetupName
 
-# Version FEST in die .iss schreiben (literaler Dateiname, kein /D, kein Macro)
-Write-Step "Inno-.iss auf Version $AppVersion festnageln"
+# Version + Icon-Pfad FEST in die .iss schreiben
+Write-Step "Inno-.iss auf Version $AppVersion + Setup-Icon festnageln"
 $issText = [System.IO.File]::ReadAllText($IssPath)
 $issText = [regex]::Replace(
   $issText,
@@ -199,15 +204,26 @@ $issText = [regex]::Replace(
   'OutputBaseFilename=VibesBoxSync-Setup-[^\r\n]+',
   "OutputBaseFilename=VibesBoxSync-Setup-$AppVersion"
 )
+# Absoluter Icon-Pfad – relative SetupIconFile wird von Inno manchmal ignoriert
+$setupIconForIss = $SetupIcon -replace '\\', '/'
+$issText = [regex]::Replace(
+  $issText,
+  '(?m)^SetupIconFile=.*$',
+  "SetupIconFile=$setupIconForIss"
+)
 if ($issText -notlike "*#define MyAppVersion `"$AppVersion`"*") {
   throw "Konnte MyAppVersion in vibesbox_sync.iss nicht auf $AppVersion setzen."
 }
 if ($issText -notlike "*OutputBaseFilename=VibesBoxSync-Setup-$AppVersion*") {
   throw "Konnte OutputBaseFilename in vibesbox_sync.iss nicht auf $AppVersion setzen."
 }
+if ($issText -notmatch '(?m)^SetupIconFile=.+vibesbox_sync\.ico\s*$') {
+  throw "Konnte SetupIconFile in vibesbox_sync.iss nicht setzen."
+}
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
 [System.IO.File]::WriteAllText($IssPath, $issText, $utf8NoBom)
 Write-Host "OK: OutputBaseFilename=VibesBoxSync-Setup-$AppVersion"
+Write-Host "OK: SetupIconFile=$setupIconForIss"
 
 # Komplette dist\VibesBoxSync-Setup-*.exe weg, dann neu bauen
 Get-ChildItem -Path $DistDir -Filter 'VibesBoxSync-Setup-*.exe' -ErrorAction SilentlyContinue |
