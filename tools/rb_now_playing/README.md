@@ -11,7 +11,7 @@ Auf einem **Windows-PC** (Flutter Windows-Build läuft nicht auf dem Mac).
 1. **Flutter** (wie im Projekt üblich), z. B.  
    `%USERPROFILE%\Downloads\flutter_windows_3.38.4-stable\flutter\bin\flutter.bat`
 2. **Visual Studio 2022** mit Workload **„Desktop development with C++“**
-3. **Inno Setup 6** (für die Setup-`.exe`): https://jrsoftware.org/isdl.php  
+3. **Inno Setup 6 oder 7** (für die Setup-`.exe`): https://jrsoftware.org/isdl.php  
    Ohne Inno Setup erzeugt das Skript trotzdem ein **ZIP** (portable).
 
 ### Build (ein Befehl)

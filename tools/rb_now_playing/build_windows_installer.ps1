@@ -12,7 +12,7 @@
   Voraussetzungen auf dem Windows-PC:
   - Flutter (siehe $FlutterBat unten)
   - Visual Studio 2022 mit "Desktop development with C++"
-  - Inno Setup 6: https://jrsoftware.org/isdl.php
+  - Inno Setup 6 oder 7: https://jrsoftware.org/isdl.php
 #>
 
 [CmdletBinding()]
@@ -92,17 +92,29 @@ if ($ZipOnly) {
   exit 0
 }
 
-# Inno Setup Compiler suchen
-$isccCandidates = @(
-  "${env:LocalAppData}\Programs\Inno Setup 6\ISCC.exe",
-  "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-  "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
-)
-$Iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+# Inno Setup Compiler suchen (7 bevorzugt, sonst 6; auch per Get-Command)
+function Find-Iscc {
+  $candidates = @(
+    "${env:LocalAppData}\Programs\Inno Setup 7\ISCC.exe",
+    "$env:ProgramFiles\Inno Setup 7\ISCC.exe",
+    "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe",
+    "${env:LocalAppData}\Programs\Inno Setup 6\ISCC.exe",
+    "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+    "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+  )
+  foreach ($p in $candidates) {
+    if (Test-Path $p) { return $p }
+  }
+  $cmd = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+  if ($cmd -and $cmd.Source) { return $cmd.Source }
+  return $null
+}
+
+$Iscc = Find-Iscc
 if (-not $Iscc) {
   Write-Host ""
-  Write-Host "Inno Setup 6 (ISCC.exe) nicht gefunden." -ForegroundColor Yellow
-  Write-Host "Download: https://jrsoftware.org/isdl.php"
+  Write-Host "Inno Setup (ISCC.exe) nicht gefunden." -ForegroundColor Yellow
+  Write-Host "Download (Inno Setup 7): https://jrsoftware.org/isdl.php"
   Write-Host "Danach Skript erneut starten, oder vorerst das ZIP nutzen:"
   Write-Host "  $ZipPath"
   exit 2

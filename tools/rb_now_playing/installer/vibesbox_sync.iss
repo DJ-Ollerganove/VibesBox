@@ -1,4 +1,4 @@
-; VibesBox Sync – Windows Installer (Inno Setup 6)
+; VibesBox Sync – Windows Installer (Inno Setup 6/7)
 ; Wird von build_windows_installer.ps1 aufgerufen.
 ; Voraussetzung: Flutter Release-Build unter ..\build\windows\x64\runner\Release\
 
