@@ -38,4 +38,4 @@ Write-Host "==> Starte NEUE EXE:" -ForegroundColor Green
 Write-Host $exe
 Start-Process -FilePath $exe
 Write-Host ""
-Write-Host "Optional installieren: dist\VibesBoxSync-Setup-1.0.2.exe"
+Write-Host "Optional: Setup aus dist\VibesBoxSync-Setup-<version>.exe installieren"
