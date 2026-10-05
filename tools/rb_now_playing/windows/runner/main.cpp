@@ -27,9 +27,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   FlutterWindow window(project);
   Win32Window::Point origin(40, 40);
-  // Hochkant wie macOS (Content ~315x500), nicht Querformat.
+  // Hochkant wie macOS — Titel zeigt Build-Stamp (alte EXE hat das nicht).
   Win32Window::Size size(360, 640);
-  if (!window.Create(L"VibesBox Sync", origin, size)) {
+  if (!window.Create(L"VibesBox Sync WIN-REST-360", origin, size)) {
     return EXIT_FAILURE;
   }
   // App-Icon explizit setzen (Taskbar + Titelleiste).
@@ -41,6 +41,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
       SendMessage(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(icon));
       SendMessage(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(icon));
     }
+    // Fenstergroesse nach Create nochmal erzwingen (Client ~360x640).
+    RECT rc = {0, 0, 360, 640};
+    AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
+    SetWindowPos(hwnd, nullptr, 40, 40, rc.right - rc.left, rc.bottom - rc.top,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
   }
   window.SetQuitOnClose(true);
 
