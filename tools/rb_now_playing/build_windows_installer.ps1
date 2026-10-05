@@ -55,9 +55,19 @@ Installiere Flutter oder uebergib den Pfad:
 "@
   }
 
+  Write-Step "flutter --version"
+  & $FlutterBat --version
+
   Write-Step "flutter pub get"
   & $FlutterBat pub get
-  if ($LASTEXITCODE -ne 0) { throw "flutter pub get fehlgeschlagen (Exit $LASTEXITCODE)" }
+  if ($LASTEXITCODE -ne 0) {
+    throw @"
+flutter pub get fehlgeschlagen (Exit $LASTEXITCODE).
+
+Typische Ursache: Dart-SDK zu alt fuer pubspec (Flutter 3.38 = Dart 3.10).
+Bitte die komplette Flutter-Ausgabe oberhalb mitkopieren.
+"@
+  }
 
   Write-Step "flutter build windows --release"
   & $FlutterBat build windows --release
