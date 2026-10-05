@@ -86,8 +86,8 @@
       </svg>
       <div>
         Für Windows-OS:
-        <a class="download" href="/sync/VibesBox-Sync-1.0.3-windows.exe">Download</a>
-        <span class="ver">Version 1.0.3</span>
+        <a class="download" href="/download/vibesbox-sync-windows">Download</a>
+        <span class="ver" id="win-ver">Version …</span>
       </div>
     </div>
     <div class="row">
@@ -96,10 +96,24 @@
       </svg>
       <div>
         Für Mac-OS:
-        <a class="download" href="/sync/VibesBox-Sync-1.0.2-mac.pkg">Download</a>
-        <span class="ver">Version 1.0.2</span>
+        <a class="download" href="/download/vibesbox-sync-mac">Download</a>
+        <span class="ver" id="mac-ver">Version …</span>
       </div>
     </div>
   </main>
+  <script>
+    // Feste Download-URLs; Version kommt aus version.json (Deploy schreibt sie).
+    fetch('/sync/version.json?_=' + Date.now(), { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (v) {
+        if (v.windows) {
+          document.getElementById('win-ver').textContent = 'Version ' + v.windows;
+        }
+        if (v.mac) {
+          document.getElementById('mac-ver').textContent = 'Version ' + v.mac;
+        }
+      })
+      .catch(function () { /* Label bleibt Platzhalter */ });
+  </script>
 </body>
 </html>
