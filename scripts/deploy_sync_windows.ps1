@@ -20,9 +20,12 @@ $ToolRoot = Join-Path $RepoRoot 'tools\rb_now_playing'
 Set-Location $RepoRoot
 
 Write-Host "==> Version aus pubspec + Hosting-Links syncen" -ForegroundColor Cyan
-$Version = & (Join-Path $ToolRoot 'scripts\sync_version_from_pubspec.ps1') -UpdateHosting
-$Version = "$Version".Trim()
-if (-not $Version) { throw "Keine Version aus pubspec." }
+$Version = & (Join-Path $ToolRoot 'scripts\sync_version_from_pubspec.ps1') -UpdateHosting |
+  Select-Object -Last 1
+$Version = ("{0}" -f $Version).Trim()
+if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
+  throw ("Keine gueltige Version aus pubspec (bekommen: '{0}')." -f $Version)
+}
 
 if (-not $SetupExe) {
   $SetupExe = Join-Path $ToolRoot "dist\VibesBoxSync-Setup-$Version.exe"

@@ -2,6 +2,9 @@
 <#
 .SYNOPSIS
   Eine Versionsquelle: pubspec.yaml -> Tool-Runtime, Installer-Default, optional Hosting.
+
+.NOTES
+  Nur ASCII in diesem Skript (Windows PowerShell 5.1 / Codepage).
 #>
 
 [CmdletBinding()]
@@ -12,6 +15,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ToolRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $RepoRoot = Resolve-Path (Join-Path $ToolRoot '..\..')
+$utf8NoBom = New-Object System.Text.UTF8Encoding $false
 
 $pubspecPath = Join-Path $ToolRoot 'pubspec.yaml'
 $pubspec = Get-Content -Raw -Encoding UTF8 $pubspecPath
@@ -19,7 +23,7 @@ if ($pubspec -notmatch '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)') {
   throw "Konnte version in pubspec.yaml nicht lesen."
 }
 $Version = $Matches[1]
-Write-Host "Sync-Tool Version aus pubspec: $Version"
+Write-Host ("Sync-Tool Version aus pubspec: {0}" -f $Version)
 
 $versionDart = @"
 // GENERATED from pubspec.yaml - nicht von Hand pflegen.
@@ -28,51 +32,68 @@ $versionDart = @"
 const kSyncToolVersion = '$Version';
 "@
 $versionDartPath = Join-Path $ToolRoot 'lib\tool_version.dart'
-$utf8NoBom = New-Object System.Text.UTF8Encoding $false
 [System.IO.File]::WriteAllText($versionDartPath, $versionDart.Replace("`r`n", "`n"), $utf8NoBom)
 Write-Host "OK: lib/tool_version.dart"
 
 $issPath = Join-Path $ToolRoot 'installer\vibesbox_sync.iss'
 $iss = [System.IO.File]::ReadAllText($issPath)
-$iss2 = [regex]::Replace($iss, '#define MyAppVersion\s+"[^"]+"', "#define MyAppVersion `"$Version`"")
-$iss2 = [regex]::Replace($iss2, 'OutputBaseFilename=VibesBoxSync-Setup-[^\r\n]+', "OutputBaseFilename=VibesBoxSync-Setup-$Version")
-if ($iss2 -notlike "*#define MyAppVersion `"$Version`"*") {
+$iss2 = [regex]::Replace($iss, '#define MyAppVersion\s+"[^"]+"', ("#define MyAppVersion `"{0}`"" -f $Version))
+$iss2 = [regex]::Replace($iss2, 'OutputBaseFilename=VibesBoxSync-Setup-[^\r\n]+', ("OutputBaseFilename=VibesBoxSync-Setup-{0}" -f $Version))
+if ($iss2 -notlike ("*#define MyAppVersion `"{0}`"*" -f $Version)) {
   throw "Konnte MyAppVersion in vibesbox_sync.iss nicht setzen."
 }
-if ($iss2 -notlike "*OutputBaseFilename=VibesBoxSync-Setup-$Version*") {
+if ($iss2 -notlike ("*OutputBaseFilename=VibesBoxSync-Setup-{0}*" -f $Version)) {
   throw "Konnte OutputBaseFilename in vibesbox_sync.iss nicht setzen."
 }
 [System.IO.File]::WriteAllText($issPath, $iss2, $utf8NoBom)
-Write-Host "OK: installer/vibesbox_sync.iss -> VibesBoxSync-Setup-$Version.exe"
+Write-Host ("OK: installer/vibesbox_sync.iss -> VibesBoxSync-Setup-{0}.exe" -f $Version)
 
 if ($UpdateHosting) {
   $winFile = "VibesBox-Sync-$Version-windows.exe"
   $htmlPath = Join-Path $RepoRoot 'public\sync\index.html'
   $html = [System.IO.File]::ReadAllText($htmlPath)
-  $html2 = [regex]::Replace(
-    $html,
-    'Für Windows-OS:\s*<a class="download" href="/sync/VibesBox-Sync-[^"]+-windows\.exe">Download</a>\s*<span class="ver">Version [^<]+</span>',
-    "Für Windows-OS:`n        <a class=`"download`" href=`"/sync/$winFile`">Download</a>`n        <span class=`"ver`">Version $Version</span>"
-  )
-  if ($html2 -eq $html) {
-    throw "Konnte Windows-Link in public/sync/index.html nicht aktualisieren."
+
+  # ASCII-only patterns (no umlauts). Idempotent if already current.
+  $hrefPattern = 'href="/sync/VibesBox-Sync-[0-9]+\.[0-9]+\.[0-9]+-windows\.exe"'
+  if ($html -notmatch $hrefPattern) {
+    throw "Windows-Download-Link in public/sync/index.html nicht gefunden."
   }
-  [System.IO.File]::WriteAllText($htmlPath, $html2, $utf8NoBom)
-  Write-Host "OK: public/sync/index.html -> $winFile"
+  $html2 = [regex]::Replace($html, $hrefPattern, ('href="/sync/{0}"' -f $winFile), 1)
+  $html2 = [regex]::Replace(
+    $html2,
+    '(href="/sync/VibesBox-Sync-[^"]+-windows\.exe">Download</a>\s*<span class="ver">Version )[^<]+(</span>)',
+    ('$1{0}$2' -f $Version),
+    1
+  )
+
+  if ($html2 -notlike ('*/sync/{0}*' -f $winFile)) {
+    throw ("Windows-Link in public/sync/index.html zeigt nicht auf {0}." -f $winFile)
+  }
+  if ($html2 -ne $html) {
+    [System.IO.File]::WriteAllText($htmlPath, $html2, $utf8NoBom)
+    Write-Host ("OK: public/sync/index.html -> {0}" -f $winFile)
+  } else {
+    Write-Host ("OK: public/sync/index.html bereits {0}" -f $winFile)
+  }
 
   $firebasePath = Join-Path $RepoRoot 'firebase.json'
   $firebase = [System.IO.File]::ReadAllText($firebasePath)
-  $firebase2 = [regex]::Replace(
-    $firebase,
-    '"/download/vibesbox-sync-windows",\s*"destination":\s*"/sync/VibesBox-Sync-[^"]+-windows\.exe"',
-    "`"/download/vibesbox-sync-windows`", `"destination`": `"/sync/$winFile`""
-  )
-  if ($firebase2 -eq $firebase) {
-    throw "Konnte firebase.json Windows-Rewrite nicht aktualisieren."
+  $firebasePattern = '"/download/vibesbox-sync-windows",\s*"destination":\s*"/sync/VibesBox-Sync-[^"]+-windows\.exe"'
+  $firebaseReplacement = ('"/download/vibesbox-sync-windows", "destination": "/sync/{0}"' -f $winFile)
+
+  if ($firebase -like ('*/sync/{0}*' -f $winFile)) {
+    Write-Host ("OK: firebase.json bereits {0}" -f $winFile)
+  } elseif ($firebase -match $firebasePattern) {
+    $firebase2 = [regex]::Replace($firebase, $firebasePattern, $firebaseReplacement, 1)
+    if ($firebase2 -notlike ('*/sync/{0}*' -f $winFile)) {
+      throw ("firebase.json zeigt nicht auf {0}." -f $winFile)
+    }
+    [System.IO.File]::WriteAllText($firebasePath, $firebase2, $utf8NoBom)
+    Write-Host ("OK: firebase.json -> {0}" -f $winFile)
+  } else {
+    throw "firebase.json Windows-Rewrite nicht gefunden."
   }
-  [System.IO.File]::WriteAllText($firebasePath, $firebase2, $utf8NoBom)
-  Write-Host "OK: firebase.json -> $winFile"
 }
 
-Write-Host "Version sync fertig: $Version"
+Write-Host ("Version sync fertig: {0}" -f $Version)
 Write-Output $Version
