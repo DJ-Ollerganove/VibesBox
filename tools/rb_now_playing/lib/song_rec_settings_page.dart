@@ -154,13 +154,20 @@ class _SongRecSettingsPageState extends State<SongRecSettingsPage> {
                       onChanged: (value) =>
                           unawaited(widget.djPrefs.setAlwaysOnTop(value)),
                     ),
-                    if (Platform.isWindows) ...[
+                    if (Platform.isWindows || Platform.isMacOS) ...[
                       const Divider(height: 1),
                       _checkRow(
                         label: toolI18n.text('launchWithDj'),
                         value: widget.djPrefs.launchWithDj,
                         onChanged: (value) =>
                             unawaited(widget.djPrefs.setLaunchWithDj(value)),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                        child: Text(
+                          toolI18n.text('launchWithDjHint'),
+                          style: _hintStyle,
+                        ),
                       ),
                     ],
                   ],

@@ -158,7 +158,7 @@ class DjLibraryPrefs extends ChangeNotifier {
   bool? readLibrary;
   bool autoUpdate = false;
   bool alwaysOnTop = false;
-  /// Windows: Sync starten, wenn eine integrierte DJ-Software startet.
+  /// Sync starten, wenn eine integrierte DJ-Software startet (Win/Mac).
   bool launchWithDj = false;
   final Map<DjSoftware, String> _customPaths = {};
 
@@ -218,8 +218,8 @@ class DjLibraryPrefs extends ChangeNotifier {
       if (alwaysOnTop) {
         await WindowChrome.setAlwaysOnTop(true);
       }
-      // Windows-Run-Key ist die Wahrheit für den Watcher; Prefs angleichen.
-      if (Platform.isWindows) {
+      // OS-Autostart (Run-Key / LaunchAgent) ist maßgeblich; Prefs angleichen.
+      if (Platform.isWindows || Platform.isMacOS) {
         final native = await WindowChrome.isLaunchWithDj();
         if (native != null && native != launchWithDj) {
           launchWithDj = native;
@@ -247,7 +247,7 @@ class DjLibraryPrefs extends ChangeNotifier {
     launchWithDj = value;
     await save();
     notifyListeners();
-    if (Platform.isWindows) {
+    if (Platform.isWindows || Platform.isMacOS) {
       await WindowChrome.setLaunchWithDj(value);
     }
   }
@@ -435,21 +435,25 @@ class WindowChrome {
     }
   }
 
-  /// Windows: HKCU-Run + Watcher. Andere Plattformen: no-op / null.
+  /// Windows: HKCU-Run + Watcher. macOS: LaunchAgent + Watcher.
   static Future<bool> setLaunchWithDj(bool on) async {
-    if (!Platform.isWindows) return false;
+    if (!Platform.isWindows && !Platform.isMacOS) return false;
     try {
       return await _channel.invokeMethod<bool>('setLaunchWithDj', on) ?? false;
     } on PlatformException {
+      return false;
+    } on MissingPluginException {
       return false;
     }
   }
 
   static Future<bool?> isLaunchWithDj() async {
-    if (!Platform.isWindows) return null;
+    if (!Platform.isWindows && !Platform.isMacOS) return null;
     try {
       return await _channel.invokeMethod<bool>('isLaunchWithDj');
     } on PlatformException {
+      return null;
+    } on MissingPluginException {
       return null;
     }
   }

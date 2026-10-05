@@ -7,7 +7,7 @@
 #define MyAppExeName "VibesBoxSync.exe"
 #define MyAppPublisher "VibesBox"
 #define MyAppURL "https://vibesbox.app"
-#define MyAppVersion "1.0.3"
+#define MyAppVersion "1.0.4"
 
 [Setup]
 AppId={{A7C3E9B1-4D2F-4F8A-9C11-6E2B8D0F4A71}
@@ -21,7 +21,7 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=..\dist
-OutputBaseFilename=VibesBoxSync-Setup-1.0.3
+OutputBaseFilename=VibesBoxSync-Setup-1.0.4
 SetupIconFile=vibesbox_sync.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2
