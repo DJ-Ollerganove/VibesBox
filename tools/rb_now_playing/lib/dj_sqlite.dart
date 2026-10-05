@@ -18,10 +18,9 @@ Database openSqliteReadonly(String path, String copyName) {
 }
 
 String copySqliteForRead(String path, String copyName) {
-  final home = Platform.environment['HOME'] ?? Directory.systemTemp.path;
-  final dir = Directory('$home/Library/Application Support/VibesBoxRbTool');
+  final dir = toolSupportDir();
   if (!dir.existsSync()) dir.createSync(recursive: true);
-  final copy = File('${dir.path}/$copyName');
+  final copy = File('${dir.path}${Platform.pathSeparator}$copyName');
   File(path).copySync(copy.path);
   for (final extra in const ['-wal', '-shm']) {
     final src = File('$path$extra');
@@ -33,6 +32,22 @@ String copySqliteForRead(String path, String copyName) {
     }
   }
   return copy.path;
+}
+
+/// Gemeinsamer App-Support-Ordner (Windows: %APPDATA%\\VibesBoxRbTool).
+Directory toolSupportDir() {
+  final home = Platform.environment['HOME'] ??
+      Platform.environment['USERPROFILE'] ??
+      Directory.systemTemp.path;
+  if (Platform.isWindows) {
+    final appData =
+        Platform.environment['APPDATA'] ?? '$home\\AppData\\Roaming';
+    return Directory('$appData\\VibesBoxRbTool');
+  }
+  if (Platform.isMacOS) {
+    return Directory('$home/Library/Application Support/VibesBoxRbTool');
+  }
+  return Directory('$home/.vibesbox_rb_tool');
 }
 
 bool sqliteHasTable(Database db, String name) {
