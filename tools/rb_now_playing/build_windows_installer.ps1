@@ -43,7 +43,7 @@ Write-Host "VibesBox Sync Version: $AppVersion"
 $sessionSrc = Get-Content -Raw -Encoding UTF8 (Join-Path $ToolRoot 'lib\tool_session.dart')
 $mainCpp = Get-Content -Raw -Encoding UTF8 (Join-Path $ToolRoot 'windows\runner\main.cpp')
 if ($sessionSrc -notlike '*redeemRbToolCode(code)*' -or $sessionSrc -like '*FirebaseFunctions*') {
-  throw "Quellcode ohne Windows-REST-Login. Bitte zuerst: git pull (Branch cursor/windows-sync-installer-b710)."
+  throw "Quellcode ohne Windows-REST-Login. Bitte zuerst: git pull (Branch cursor/djay-pro-library-b710)."
 }
 if ($mainCpp -notlike '*Size size(360, 640)*') {
   throw "Quellcode ohne Hochkant-Fenster. Bitte zuerst: git pull."
@@ -66,6 +66,32 @@ Flutter nicht gefunden:
 Installiere Flutter oder uebergib den Pfad:
   .\build_windows_installer.ps1 -FlutterBat 'C:\Pfad\zu\flutter\bin\flutter.bat'
 "@
+  }
+
+  # LNK1104: Linker kann VibesBoxSync.exe nicht ueberschreiben, solange sie laeuft
+  # oder vom Explorer/Antivirus gesperrt ist.
+  Write-Step "Laufende VibesBoxSync-Prozesse beenden (sonst LNK1104)"
+  Get-Process -Name 'VibesBoxSync', 'rb_now_playing' -ErrorAction SilentlyContinue |
+    Stop-Process -Force
+  Start-Sleep -Seconds 1
+  if (Test-Path $ExePath) {
+    try {
+      $fs = [System.IO.File]::Open(
+        $ExePath,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::ReadWrite,
+        [System.IO.FileShare]::None
+      )
+      $fs.Close()
+    } catch {
+      throw @"
+VibesBoxSync.exe ist noch gesperrt:
+  $ExePath
+
+Bitte VibesBox Sync schliessen (auch aus dem Infobereich), dann erneut:
+  .\build_windows_installer.ps1
+"@
+    }
   }
 
   Write-Step "flutter --version"
