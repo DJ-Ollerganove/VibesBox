@@ -145,6 +145,8 @@ File? _latestHistoryPlaylist(String xmlPath) {
       if (entity is! File) continue;
       final lower = entity.path.toLowerCase();
       if (!lower.endsWith('.m3u') && !lower.endsWith('.m3u8')) continue;
+      // Leere Playlists überspringen.
+      if (entity.lengthSync() < 32) continue;
       final m = entity.lastModifiedSync();
       if (bestTime == null || m.isAfter(bestTime!)) {
         best = entity;
@@ -153,12 +155,22 @@ File? _latestHistoryPlaylist(String xmlPath) {
     }
   }
 
-  consider(Directory('${root.path}/History'));
-  consider(Directory('${root.path}/Tracklisting'));
+  consider(Directory('${root.path}${Platform.pathSeparator}History'));
+  consider(Directory('${root.path}${Platform.pathSeparator}Tracklisting'));
   final home = Platform.environment['HOME'];
   if (home != null) {
     consider(Directory('$home/Documents/VirtualDJ/History'));
     consider(Directory('$home/Documents/VirtualDJ/Tracklisting'));
+  }
+  final user = Platform.environment['USERPROFILE'];
+  if (user != null) {
+    consider(Directory('$user\\Documents\\VirtualDJ\\History'));
+    consider(Directory('$user\\Documents\\VirtualDJ\\Tracklisting'));
+  }
+  final appData = Platform.environment['APPDATA'];
+  if (appData != null) {
+    consider(Directory('$appData\\VirtualDJ\\History'));
+    consider(Directory('$appData\\VirtualDJ\\Tracklisting'));
   }
   return best;
 }

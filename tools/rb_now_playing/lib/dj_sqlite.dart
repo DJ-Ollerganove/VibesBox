@@ -2,18 +2,52 @@ import 'dart:io';
 
 import 'package:sqlite3/sqlite3.dart';
 
+/// Readonly SQLite with copy-on-lock and automatic copy refresh per poll.
+class ReadonlySqlite {
+  Database? _db;
+  String? _sourcePath;
+  String? _copyName;
+  bool openedViaCopy = false;
+
+  Database ensure(String path, String copyName) {
+    if (_db != null && _sourcePath == path && !openedViaCopy) {
+      return _db!;
+    }
+    // Kopie oder anderer Pfad: neu öffnen (Kopie sonst veraltet).
+    close();
+    _sourcePath = path;
+    _copyName = copyName;
+    try {
+      _db = openSqliteDirect(path);
+      openedViaCopy = false;
+    } catch (_) {
+      final copy = copySqliteForRead(path, copyName);
+      _db = openSqliteDirect(copy);
+      openedViaCopy = true;
+    }
+    return _db!;
+  }
+
+  void close() {
+    _db?.close();
+    _db = null;
+    openedViaCopy = false;
+  }
+}
+
+Database openSqliteDirect(String path) {
+  final db = sqlite3.open(path, mode: OpenMode.readOnly);
+  db.execute('PRAGMA query_only = ON');
+  db.select('SELECT count(*) FROM sqlite_master');
+  return db;
+}
+
 Database openSqliteReadonly(String path, String copyName) {
   try {
-    final db = sqlite3.open(path, mode: OpenMode.readOnly);
-    db.execute('PRAGMA query_only = ON');
-    db.select('SELECT count(*) FROM sqlite_master');
-    return db;
+    return openSqliteDirect(path);
   } catch (_) {
     final copy = copySqliteForRead(path, copyName);
-    final db = sqlite3.open(copy, mode: OpenMode.readOnly);
-    db.execute('PRAGMA query_only = ON');
-    db.select('SELECT count(*) FROM sqlite_master');
-    return db;
+    return openSqliteDirect(copy);
   }
 }
 
@@ -86,6 +120,7 @@ String sqliteTable(Database db, List<String> names) {
 bool sqliteHasColumn(Database db, String table, String column) {
   final rows = db.select('PRAGMA table_info("$table")');
   return rows.any(
-    (row) => (row['name']?.toString() ?? '').toLowerCase() == column.toLowerCase(),
+    (row) =>
+        (row['name']?.toString() ?? '').toLowerCase() == column.toLowerCase(),
   );
 }

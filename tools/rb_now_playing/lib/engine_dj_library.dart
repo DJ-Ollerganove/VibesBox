@@ -12,8 +12,9 @@ class EngineDjLibrarySource implements DjLibrarySource {
   EngineDjLibrarySource(this.overridePath);
 
   final String? overridePath;
-  Database? _db;
+  final _sqlite = ReadonlySqlite();
   String? _dbPath;
+  String? _hmAttachedFrom;
 
   @override
   String get label => 'Engine DJ';
@@ -22,33 +23,39 @@ class EngineDjLibrarySource implements DjLibrarySource {
   HistorySnapshot readHistory() {
     final db = _ensure();
     final track = sqliteTable(db, const ['Track', 'track']);
-    if (sqliteHasTable(db, 'HistorylistEntity')) {
-      final rows = db.select('''
-SELECT e.startTime AS playedAt, t.title, t.artist, t.bpm, t.key AS musicalKey, t.length
-FROM HistorylistEntity e
-JOIN "$track" t ON t.id = e.trackId
-ORDER BY e.startTime DESC
-LIMIT 80
-''');
-      return HistorySnapshot(
-        dbPath: _dbPath ?? '',
-        historyName: 'HistorylistEntity',
-        tracks: _historyRows(rows),
-        readAt: DateTime.now(),
-      );
-    }
-    if (sqliteHasTable(db, 'hist.HistorylistEntity')) {
-      final rows = db.select('''
+    // Zuerst Quellen mit Einträgen prüfen (leere Haupttabelle nicht bevorzugen).
+    for (final candidate in [
+      (
+        table: 'hist.HistorylistEntity',
+        name: 'hm.HistorylistEntity',
+        sql: '''
 SELECT e.startTime AS playedAt, t.title, t.artist, t.bpm, t.key AS musicalKey, t.length
 FROM hist.HistorylistEntity e
 JOIN "$track" t ON t.id = e.trackId
 ORDER BY e.startTime DESC
 LIMIT 80
-''');
+''',
+      ),
+      (
+        table: 'HistorylistEntity',
+        name: 'HistorylistEntity',
+        sql: '''
+SELECT e.startTime AS playedAt, t.title, t.artist, t.bpm, t.key AS musicalKey, t.length
+FROM HistorylistEntity e
+JOIN "$track" t ON t.id = e.trackId
+ORDER BY e.startTime DESC
+LIMIT 80
+''',
+      ),
+    ]) {
+      if (!sqliteHasTable(db, candidate.table)) continue;
+      final rows = db.select(candidate.sql);
+      final tracks = _historyRows(rows);
+      if (tracks.isEmpty) continue;
       return HistorySnapshot(
         dbPath: _dbPath ?? '',
-        historyName: 'hm.HistorylistEntity',
-        tracks: _historyRows(rows),
+        historyName: candidate.name,
+        tracks: tracks,
         readAt: DateTime.now(),
       );
     }
@@ -130,9 +137,9 @@ LIMIT 80
 
   @override
   void close() {
-    _db?.close();
-    _db = null;
+    _sqlite.close();
     _dbPath = null;
+    _hmAttachedFrom = null;
   }
 
   Database _ensure() {
@@ -140,22 +147,26 @@ LIMIT 80
     if (path == null || !File(path).existsSync()) {
       throw StateError(toolI18n.text('errEngine'));
     }
-    if (path != _dbPath) {
-      close();
-      _dbPath = path;
-    }
-    if (_db != null) return _db!;
-    final db = openSqliteReadonly(path, 'engine_m_copy.sqlite');
+    final wasCopy = _sqlite.openedViaCopy;
+    final db = _sqlite.ensure(path, 'engine_m_copy.sqlite');
+    _dbPath = path;
     final hm = File('${File(path).parent.path}${Platform.pathSeparator}hm.db');
-    if (hm.existsSync()) {
+    final needAttach = hm.existsSync() &&
+        (_hmAttachedFrom != hm.path || wasCopy || _sqlite.openedViaCopy);
+    if (needAttach) {
+      try {
+        db.execute('DETACH DATABASE hist');
+      } catch (_) {}
       try {
         final copy = copySqliteForRead(hm.path, 'engine_h_copy.sqlite');
         db.execute(
           "ATTACH DATABASE '${copy.replaceAll("'", "''")}' AS hist",
         );
-      } catch (_) {}
+        _hmAttachedFrom = hm.path;
+      } catch (_) {
+        _hmAttachedFrom = null;
+      }
     }
-    _db = db;
     return db;
   }
 

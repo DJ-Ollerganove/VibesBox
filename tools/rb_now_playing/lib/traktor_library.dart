@@ -134,12 +134,20 @@ File? locateTraktorHistory(String collectionPath) {
   final historyDir = Directory('${File(collectionPath).parent.path}${Platform.pathSeparator}History');
   File? best;
   DateTime? bestTime;
+  int bestSize = 0;
   void consider(File file) {
     if (!file.existsSync()) return;
+    final size = file.lengthSync();
+    // Leere / fast leere History-NMLs überspringen.
+    if (size < 400) return;
     final m = file.lastModifiedSync();
-    if (bestTime == null || m.isAfter(bestTime!)) {
+    final newer = bestTime == null || m.isAfter(bestTime!);
+    final sameTimeRicher =
+        bestTime != null && m == bestTime && size > bestSize;
+    if (newer || sameTimeRicher) {
       best = file;
       bestTime = m;
+      bestSize = size;
     }
   }
 
