@@ -45,8 +45,8 @@ $mainCpp = Get-Content -Raw -Encoding UTF8 (Join-Path $ToolRoot 'windows\runner\
 if ($sessionSrc -notlike '*redeemRbToolCode(code)*' -or $sessionSrc -like '*FirebaseFunctions*') {
   throw "Quellcode ohne Windows-REST-Login. Bitte zuerst: git pull (Branch cursor/windows-sync-installer-b710)."
 }
-if ($mainCpp -notlike '*Size size(360, 640)*' -or $mainCpp -notlike '*WIN-REST-360*') {
-  throw "Quellcode ohne Hochkant-Fenster/WIN-REST-360. Bitte zuerst: git pull."
+if ($mainCpp -notlike '*Size size(360, 640)*') {
+  throw "Quellcode ohne Hochkant-Fenster. Bitte zuerst: git pull."
 }
 if ($pubspec -match '(?m)^\s*cloud_functions:') {
   throw "pubspec.yaml enthaelt noch cloud_functions. Bitte zuerst: git pull."

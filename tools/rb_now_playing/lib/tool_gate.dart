@@ -7,9 +7,6 @@ import 'tool_rest.dart';
 /// Build-Nummer für Mac und Windows und wird hier nicht angezeigt.
 const kSyncToolVersion = '1.0.2';
 
-/// Nur zur Erkennung, ob wirklich der neue Windows-Build läuft.
-const kSyncToolWindowsBuildStamp = 'WIN-REST-360';
-
 const kPrivacyUrl = 'https://vibesbox.app/datenschutz.html';
 const kImprintUrl = 'https://vibesbox.app/impressum.html';
 const kTermsUrl = 'https://vibesbox.app/agb.html';

@@ -209,16 +209,6 @@ class _ToolConnectPageState extends State<ToolConnectPage> {
                         widget.session.busy ? '…' : toolI18n.text('connectBtn'),
                       ),
                     ),
-                    const SizedBox(height: 14),
-                    Text(
-                      'Build $kSyncToolVersion · $kSyncToolWindowsBuildStamp',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: Color(0xFF22E7FF),
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
                   ],
                 ),
               ),
