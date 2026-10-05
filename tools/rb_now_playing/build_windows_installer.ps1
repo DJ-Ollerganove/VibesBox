@@ -32,12 +32,25 @@ function Write-Step([string]$msg) {
 }
 
 # Version aus pubspec.yaml (z. B. 1.0.2+2 -> 1.0.2)
-$pubspec = Get-Content -Raw (Join-Path $ToolRoot 'pubspec.yaml')
+$pubspec = Get-Content -Raw -Encoding UTF8 (Join-Path $ToolRoot 'pubspec.yaml')
 if ($pubspec -notmatch '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)') {
   throw "Konnte version in pubspec.yaml nicht lesen."
 }
 $AppVersion = $Matches[1]
 Write-Host "VibesBox Sync Version: $AppVersion"
+
+# Quelle muss die Windows-Fixes enthalten (sonst baut man die alte EXE weiter).
+$sessionSrc = Get-Content -Raw -Encoding UTF8 (Join-Path $ToolRoot 'lib\tool_session.dart')
+$mainCpp = Get-Content -Raw -Encoding UTF8 (Join-Path $ToolRoot 'windows\runner\main.cpp')
+if ($sessionSrc -notlike '*redeemRbToolCode(code)*' -or $sessionSrc -like '*FirebaseFunctions*') {
+  throw "Quellcode ohne Windows-REST-Login. Bitte zuerst: git pull (Branch cursor/windows-sync-installer-b710)."
+}
+if ($mainCpp -notlike '*Size size(360, 640)*') {
+  throw "Quellcode ohne Hochkant-Fenster. Bitte zuerst: git pull."
+}
+if ($pubspec -match '(?m)^\s*cloud_functions:') {
+  throw "pubspec.yaml enthaelt noch cloud_functions. Bitte zuerst: git pull."
+}
 
 $ReleaseDir = Join-Path $ToolRoot 'build\windows\x64\runner\Release'
 $ExePath = Join-Path $ReleaseDir 'VibesBoxSync.exe'
@@ -57,6 +70,10 @@ Installiere Flutter oder uebergib den Pfad:
 
   Write-Step "flutter --version"
   & $FlutterBat --version
+
+  Write-Step "flutter clean (damit alte Windows-EXE wirklich neu gebaut wird)"
+  & $FlutterBat clean
+  if ($LASTEXITCODE -ne 0) { throw "flutter clean fehlgeschlagen (Exit $LASTEXITCODE)" }
 
   Write-Step "flutter pub get"
   & $FlutterBat pub get
