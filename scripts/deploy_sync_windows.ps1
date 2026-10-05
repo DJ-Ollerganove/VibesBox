@@ -4,13 +4,15 @@
   Kopiert den VibesBox-Sync Windows-Installer nach public/sync und deployt Firebase Hosting.
 
 .NOTES
-  Die .exe liegt absichtlich nicht im Git (.gitignore). Deploy muss lokal laufen.
+  Die .exe/.pkg liegen absichtlich nicht im Git (.gitignore).
+  Vor dem Deploy wird die Live-Mac-.pkg geholt, damit sie nicht geloescht wird.
 #>
 
 [CmdletBinding()]
 param(
   [string]$SetupExe = "",
-  [string]$Version = "1.0.2"
+  [string]$Version = "1.0.2",
+  [string]$MacVersion = "1.0.2"
 )
 
 $ErrorActionPreference = 'Stop'
@@ -28,18 +30,38 @@ Installer nicht gefunden:
 
 Zuerst bauen:
   cd tools\rb_now_playing
-  .\build_windows_installer.ps1 -SkipFlutterBuild
+  .\build_windows_installer.ps1
 "@
 }
 
 $DestDir = Join-Path $RepoRoot 'public\sync'
 New-Item -ItemType Directory -Force -Path $DestDir | Out-Null
+
+# Mac-PKG von Live sichern (sonst wuerde firebase deploy sie vom Hosting loeschen)
+$MacName = "VibesBox-Sync-$MacVersion-mac.pkg"
+$MacPath = Join-Path $DestDir $MacName
+if (-not (Test-Path $MacPath)) {
+  $MacUrl = "https://vibesbox.app/sync/$MacName"
+  Write-Host "==> Lade bestehende Mac-PKG von Live: $MacUrl" -ForegroundColor Cyan
+  Invoke-WebRequest -Uri $MacUrl -OutFile $MacPath -UseBasicParsing
+  Write-Host "OK: $MacPath ($([math]::Round((Get-Item $MacPath).Length / 1MB, 1)) MB)"
+} else {
+  Write-Host "Mac-PKG bereits lokal: $MacPath"
+}
+
 $DestName = "VibesBox-Sync-$Version-windows.exe"
 $DestPath = Join-Path $DestDir $DestName
 
-Write-Host "==> Kopiere Installer nach public\sync\$DestName" -ForegroundColor Cyan
+Write-Host "==> Kopiere Windows-Installer nach public\sync\$DestName" -ForegroundColor Cyan
 Copy-Item -Force $SetupExe $DestPath
 Write-Host "OK: $DestPath ($([math]::Round((Get-Item $DestPath).Length / 1MB, 1)) MB)"
+
+# Sicherstellen, dass die Sync-Seite den Windows-Link hat (Branch-Stand)
+$SyncHtml = Join-Path $DestDir 'index.html'
+$html = Get-Content -Raw $SyncHtml
+if ($html -notmatch [regex]::Escape("/sync/$DestName")) {
+  throw "public/sync/index.html verlinkt nicht auf $DestName – bitte zuerst: git pull (Branch mit Windows-Link)."
+}
 
 $firebase = Get-Command firebase -ErrorAction SilentlyContinue
 if (-not $firebase) {
@@ -56,7 +78,7 @@ Write-Host "==> firebase deploy --only hosting" -ForegroundColor Cyan
 if ($LASTEXITCODE -ne 0) { throw "firebase deploy fehlgeschlagen (Exit $LASTEXITCODE)" }
 
 Write-Host ""
-Write-Host "Fertig. Downloads:" -ForegroundColor Green
+Write-Host "Fertig. Pruefen:" -ForegroundColor Green
 Write-Host "  https://vibesbox.app/sync/"
 Write-Host "  https://vibesbox.app/download/vibesbox-sync-windows"
 Write-Host "  https://vibesbox.app/sync/$DestName"
