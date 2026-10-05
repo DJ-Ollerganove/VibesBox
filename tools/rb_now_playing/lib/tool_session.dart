@@ -258,7 +258,9 @@ class ToolSession extends ChangeNotifier {
         docId: uid,
       );
       if (doc == null) return;
-      final name = (doc['displayName'] ??
+      final name = (doc['djName'] ??
+              doc['dj_name'] ??
+              doc['displayName'] ??
               doc['display_name'] ??
               doc['name'] ??
               doc['username'] ??

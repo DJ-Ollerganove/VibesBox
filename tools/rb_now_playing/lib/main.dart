@@ -2837,19 +2837,19 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (widget.session.ownerLabel != null) ...[
-                      Text(
-                        toolI18n.text(
-                          'connectedAs',
-                          {'name': widget.session.ownerLabel!},
-                        ),
-                        style: const TextStyle(
-                          color: Color(0xFF22E7FF),
-                          fontWeight: FontWeight.w600,
-                        ),
+                    Text(
+                      widget.session.ownerLabel != null
+                          ? toolI18n.text(
+                              'connectedAs',
+                              {'name': widget.session.ownerLabel!},
+                            )
+                          : toolI18n.text('connected'),
+                      style: const TextStyle(
+                        color: Color(0xFF22E7FF),
+                        fontWeight: FontWeight.w600,
                       ),
-                      const SizedBox(height: 8),
-                    ],
+                    ),
+                    const SizedBox(height: 8),
                     Text(toolI18n.text('stayConnected')),
                   ],
                 )
