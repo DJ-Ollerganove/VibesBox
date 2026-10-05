@@ -27,6 +27,13 @@ if ($session -like '*FirebaseFunctions*' -or $session -notlike '*redeemRbToolCod
 if ($main -notlike '*Size size(360, 640)*') {
   throw 'main.cpp ohne Hochkant-Fenster. Falscher Stand.'
 }
+if ($main -like '*SetCurrentProcessExplicitAppUserModelID*') {
+  throw 'main.cpp setzt noch AppUserModelID (Datei-Icon in Taskbar). Falscher Stand.'
+}
+$win32 = Get-Content -Raw -Encoding UTF8 '.\windows\runner\win32_window.cpp'
+if ($win32 -notlike '*RegisterClassEx*') {
+  throw 'win32_window.cpp ohne RegisterClassEx. Falscher Stand.'
+}
 Write-Host "Quellcode OK." -ForegroundColor Green
 
 & (Join-Path $ToolRoot 'build_windows_installer.ps1')

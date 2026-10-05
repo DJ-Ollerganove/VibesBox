@@ -1,6 +1,5 @@
 #include <flutter/dart_project.h>
 #include <flutter/flutter_view_controller.h>
-#include <shlobj.h>
 #include <windows.h>
 
 #include "flutter_window.h"
@@ -9,25 +8,30 @@
 
 namespace {
 
+#ifndef ICON_SMALL2
+#define ICON_SMALL2 2
+#endif
+
 void ApplyAppIcon(HWND hwnd) {
   if (!hwnd) {
     return;
   }
   HINSTANCE module = GetModuleHandle(nullptr);
-  // Explizite Groessen: Taskleiste nutzt SMALL, Alt-Tab nutzt BIG.
+  // Ohne AppUserModelID nutzt die Taskleiste diese Fenster-Icons.
   HICON big = reinterpret_cast<HICON>(LoadImage(
       module, MAKEINTRESOURCE(IDI_APP_ICON), IMAGE_ICON,
-      GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON),
-      LR_SHARED));
+      GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0));
   HICON small_icon = reinterpret_cast<HICON>(LoadImage(
       module, MAKEINTRESOURCE(IDI_APP_ICON), IMAGE_ICON,
-      GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON),
-      LR_SHARED));
+      GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0));
   if (big) {
     SendMessage(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(big));
   }
   if (small_icon) {
     SendMessage(hwnd, WM_SETICON, ICON_SMALL,
+                reinterpret_cast<LPARAM>(small_icon));
+    // Taskleisten-Button (Win10/11) nutzt oft ICON_SMALL2.
+    SendMessage(hwnd, WM_SETICON, ICON_SMALL2,
                 reinterpret_cast<LPARAM>(small_icon));
   }
 }
@@ -45,9 +49,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // Initialize COM, so that it is available for use in the library and/or
   // plugins.
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-
-  // Eigene Taskleisten-Gruppe mit unserem Icon (nicht generisches Datei-Icon).
-  SetCurrentProcessExplicitAppUserModelID(L"com.vibesbox.sync");
 
   flutter::DartProject project(L"data");
 

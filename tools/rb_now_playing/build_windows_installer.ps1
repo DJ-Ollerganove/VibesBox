@@ -64,6 +64,16 @@ if ($sessionSrc -notlike '*redeemRbToolCode(code)*' -or $sessionSrc -like '*Fire
 if ($mainCpp -notlike '*Size size(360, 640)*') {
   throw "Quellcode ohne Hochkant-Fenster. Bitte zuerst: git pull."
 }
+if ($mainCpp -like '*SetCurrentProcessExplicitAppUserModelID*') {
+  throw "main.cpp setzt noch AppUserModelID (Taskbar zeigt dann Datei-Icon). Bitte: git pull."
+}
+if ($mainCpp -notlike '*ICON_SMALL2*') {
+  throw "main.cpp ohne ICON_SMALL2 (Taskbar-Icon). Bitte: git pull."
+}
+$win32Cpp = Get-Content -Raw -Encoding UTF8 (Join-Path $ToolRoot 'windows\runner\win32_window.cpp')
+if ($win32Cpp -notlike '*RegisterClassEx*' -or $win32Cpp -notlike '*WNDCLASSEX*') {
+  throw "win32_window.cpp ohne WNDCLASSEX/RegisterClassEx. Bitte: git pull."
+}
 if ($pubspec -match '(?m)^\s*cloud_functions:') {
   throw "pubspec.yaml enthaelt noch cloud_functions. Bitte zuerst: git pull."
 }
@@ -263,6 +273,9 @@ Write-Host ""
 Write-Host "Fertig." -ForegroundColor Green
 Write-Host ("Installer: {0}" -f $SetupExe)
 Write-Host ("Portable:  {0}" -f $ZipPath)
+Write-Host ""
+Write-Host "Taskbar-Logo: alte App deinstallieren, dann NEUES Setup starten." -ForegroundColor Yellow
+Write-Host "Falls noch Datei-Icon: Explorer neu starten (Task-Manager -> Windows-Explorer -> Neu starten)."
 Write-Host ""
 Write-Host "Danach ggf. auf die Website:"
 Write-Host "  ..\..\scripts\deploy_sync_windows.ps1"
