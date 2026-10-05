@@ -35,6 +35,19 @@ Ergebnis unter `tools\rb_now_playing\dist\`:
 | `VibesBoxSync-Setup-<version>.exe` | Installer (Startmenü, Deinstallation) |
 | `VibesBoxSync-<version>-windows-x64.zip` | Portable (Ordner entpacken und `VibesBoxSync.exe` starten) |
 
+### Auf vibesbox.app hochladen
+
+Die `.exe` ist gitignored (wie die Mac-`.pkg`). Nach dem Build:
+
+```powershell
+cd $env:USERPROFILE\dev\VibesBox
+git pull
+.\scripts\deploy_sync_windows.ps1
+```
+
+Kopiert nach `public\sync\VibesBox-Sync-<version>-windows.exe` und deployt Hosting.  
+Seite: https://vibesbox.app/sync/
+
 ### Nur Flutter bauen (ohne Setup)
 
 ```powershell
