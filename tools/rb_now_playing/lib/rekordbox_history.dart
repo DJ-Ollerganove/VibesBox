@@ -304,17 +304,20 @@ LIMIT 1
   void close() {
     _db?.close();
     _db = null;
+    _openedViaCopy = false;
   }
 
   void _ensureOpen() {
     final path = locateMasterDb(override: overrideDbPath);
+    if (_db != null && _dbPath == path) return;
+    close();
     _dbPath = path;
-    if (_db != null) return;
 
     _key ??= rekordboxSqlCipherKey();
     Object? directError;
     try {
       _db = _openEncrypted(path);
+      _openedViaCopy = false;
       return;
     } catch (error) {
       directError = error;
@@ -324,6 +327,7 @@ LIMIT 1
     try {
       final copyPath = copySqliteForRead(path, 'rekordbox_master_copy.db');
       _db = _openEncrypted(copyPath);
+      _openedViaCopy = true;
     } catch (copyError) {
       throw StateError(
         '${toolI18n.text('errRbOpen')}\n$path\n$directError\n$copyError',
