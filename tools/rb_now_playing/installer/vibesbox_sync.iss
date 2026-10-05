@@ -51,7 +51,7 @@ Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; IconIndex: 0; Tasks: desktopicon
 
 ; DJ-Watchdog: Default an – Run-Key + sofortiger Watcher-Start (passt zu Prefs-Default).
-; Nutzer kann den Haken „Mit DJ-Software starten“ in den Einstellungen abschalten.
+; Nutzer kann den Haken „Mit der Dj-Software starten“ in den Einstellungen abschalten.
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "VibesBoxSyncDjWatch"; ValueData: """{app}\{#MyAppExeName}"" --dj-watch"; Flags: uninsdeletevalue
 
