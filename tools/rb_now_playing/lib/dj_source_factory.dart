@@ -1,5 +1,6 @@
 import 'dj_library_prefs.dart';
 import 'dj_library_source.dart';
+import 'djay_library.dart';
 import 'engine_dj_library.dart';
 import 'library_match.dart';
 import 'mixxx_library.dart';
@@ -25,6 +26,8 @@ DjLibrarySource openDjLibrarySource(DjSoftware software, String? overridePath) {
       return MixxxLibrarySource(overridePath);
     case DjSoftware.engineDj:
       return EngineDjLibrarySource(overridePath);
+    case DjSoftware.djayPro:
+      return DjayLibrarySource(overridePath);
   }
 }
 
