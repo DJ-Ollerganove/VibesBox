@@ -9,14 +9,6 @@ class MainFlutterWindow: NSWindow {
   private var windowChannel: FlutterMethodChannel?
 
   override func awakeFromNib() {
-    DjWatchdog.enterWatchdogModeIfNeeded()
-    if DjWatchdog.isWatchdogMode {
-      // Verstecktes Watchdog-Fenster: kein Flutter-UI-Setup.
-      orderOut(nil)
-      super.awakeFromNib()
-      return
-    }
-
     let flutterViewController = FlutterViewController()
     self.contentViewController = flutterViewController
     self.title = "VibesBox Sync"
@@ -31,19 +23,13 @@ class MainFlutterWindow: NSWindow {
       binaryMessenger: flutterViewController.engine.binaryMessenger
     )
     chrome.setMethodCallHandler { [weak self] call, result in
-      switch call.method {
-      case "setAlwaysOnTop":
-        let on = (call.arguments as? Bool) ?? false
-        self?.level = on ? .floating : .normal
-        result(true)
-      case "setLaunchWithDj":
-        let on = (call.arguments as? Bool) ?? false
-        result(DjWatchdog.setAutostartEnabled(on))
-      case "isLaunchWithDj":
-        result(DjWatchdog.isAutostartEnabled())
-      default:
+      guard call.method == "setAlwaysOnTop" else {
         result(FlutterMethodNotImplemented)
+        return
       }
+      let on = (call.arguments as? Bool) ?? false
+      self?.level = on ? .floating : .normal
+      result(true)
     }
     windowChannel = chrome
 
@@ -606,8 +592,6 @@ enum RekordboxCollectionLoad {
     case "enginedj":
       return lower.contains("enginedj") || lower.contains("engine dj")
         || (lower.contains("engine") && !lower.contains("webkit"))
-    case "djaypro", "djay":
-      return lower.contains("djay")
     default:
       return lower.contains("rekordbox") && !lower.contains("agent")
     }

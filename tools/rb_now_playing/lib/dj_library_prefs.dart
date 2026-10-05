@@ -225,7 +225,7 @@ class DjLibraryPrefs extends ChangeNotifier {
   }
 
   Future<void> _ensureWindowsDjWatch() async {
-    // Windows: DJ-Watchdog immer an (nativ auch in main.cpp). Mac unverändert.
+    // Windows: DJ-Watchdog immer an (nativ auch in main.cpp). Kein Mac-Autostart.
     if (Platform.isWindows) {
       await WindowChrome.ensureDjWatchAutostart();
     }

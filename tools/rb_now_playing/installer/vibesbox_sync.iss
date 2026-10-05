@@ -50,7 +50,7 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; IconIndex: 0; Tasks: desktopicon
 
-; DJ-Watchdog: Login-Autostart ohne Einstellungs-Haken (wie Mac LaunchAgent).
+; DJ-Watchdog: Login-Autostart ohne Einstellungs-Haken (Windows).
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "VibesBoxSyncDjWatch"; ValueData: """{app}\{#MyAppExeName}"" --dj-watch"; Flags: uninsdeletevalue
 

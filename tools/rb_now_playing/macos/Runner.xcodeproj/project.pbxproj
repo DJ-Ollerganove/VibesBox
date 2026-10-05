@@ -29,7 +29,6 @@
 		33CC11132044BFA00003C045 /* MainFlutterWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33CC11122044BFA00003C045 /* MainFlutterWindow.swift */; };
 		VB0T1DAL0000000000000001 /* TidalAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = VB0T1DAL0000000000000002 /* TidalAuth.swift */; };
 		VB0DRAGSPY00000000000001 /* DragSpy.swift in Sources */ = {isa = PBXBuildFile; fileRef = VB0DRAGSPY00000000000002 /* DragSpy.swift */; };
-		VB0DJWATCH000000000000001 /* DjWatchdog.swift in Sources */ = {isa = PBXBuildFile; fileRef = VB0DJWATCH000000000000002 /* DjWatchdog.swift */; };
 		41CA513A4CFFCB12F047A7A1 /* Pods_RunnerTests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BA016EE83C1D097D639CE6B1 /* Pods_RunnerTests.framework */; };
 		70DA5E39213356891E1F9F73 /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A7AC52854075C6545F5F1670 /* Pods_Runner.framework */; };
 /* End PBXBuildFile section */
@@ -79,7 +78,6 @@
 		33CC11122044BFA00003C045 /* MainFlutterWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainFlutterWindow.swift; sourceTree = "<group>"; };
 		VB0T1DAL0000000000000002 /* TidalAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TidalAuth.swift; sourceTree = "<group>"; };
 		VB0DRAGSPY00000000000002 /* DragSpy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragSpy.swift; sourceTree = "<group>"; };
-		VB0DJWATCH000000000000002 /* DjWatchdog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DjWatchdog.swift; sourceTree = "<group>"; };
 		33CEB47222A05771004F2AC0 /* Flutter-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Flutter-Debug.xcconfig"; sourceTree = "<group>"; };
 		33CEB47422A05771004F2AC0 /* Flutter-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Flutter-Release.xcconfig"; sourceTree = "<group>"; };
 		33CEB47722A0578A004F2AC0 /* Flutter-Generated.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = "Flutter-Generated.xcconfig"; path = "ephemeral/Flutter-Generated.xcconfig"; sourceTree = "<group>"; };
@@ -199,7 +197,6 @@
 				33CC11122044BFA00003C045 /* MainFlutterWindow.swift */,
 				VB0T1DAL0000000000000002 /* TidalAuth.swift */,
 				VB0DRAGSPY00000000000002 /* DragSpy.swift */,
-				VB0DJWATCH000000000000002 /* DjWatchdog.swift */,
 				33E51913231747F40026EE4D /* DebugProfile.entitlements */,
 				33E51914231749380026EE4D /* Release.entitlements */,
 				33CC11242044D66E0003C045 /* Resources */,
@@ -449,7 +446,6 @@
 				33CC11132044BFA00003C045 /* MainFlutterWindow.swift in Sources */,
 				VB0T1DAL0000000000000001 /* TidalAuth.swift in Sources */,
 				VB0DRAGSPY00000000000001 /* DragSpy.swift in Sources */,
-				VB0DJWATCH000000000000001 /* DjWatchdog.swift in Sources */,
 				33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */,
 				335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */,
 			);
