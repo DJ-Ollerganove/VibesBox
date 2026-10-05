@@ -12,7 +12,7 @@ class MixxxLibrarySource implements DjLibrarySource {
   MixxxLibrarySource(this.overridePath);
 
   final String? overridePath;
-  Database? _db;
+  final _sqlite = ReadonlySqlite();
   String? _dbPath;
 
   @override
@@ -29,19 +29,24 @@ class MixxxLibrarySource implements DjLibrarySource {
     ]);
     final library = sqliteTable(db, const ['library', 'Library']);
     if (sqliteHasTable(db, playlists) && sqliteHasColumn(db, playlists, 'hidden')) {
-      final order = sqliteHasColumn(db, playlists, 'date_modified')
-          ? 'date_modified DESC, id DESC'
-          : 'id DESC';
+      final hasWhen = sqliteHasColumn(db, playlistTracks, 'pl_datetime_added');
+      // Playlist mit zuletzt hinzugefügtem Track (nicht leere Neuplaylist).
       final latest = db.select('''
-SELECT id, name FROM "$playlists"
-WHERE hidden = 2
-ORDER BY $order
+SELECT p.id, p.name FROM "$playlists" p
+WHERE p.hidden = 2
+  AND EXISTS (
+    SELECT 1 FROM "$playlistTracks" pt0 WHERE pt0.playlist_id = p.id
+  )
+ORDER BY (
+  SELECT ${hasWhen ? 'MAX(pt2.pl_datetime_added)' : 'MAX(pt2.position)'}
+  FROM "$playlistTracks" pt2
+  WHERE pt2.playlist_id = p.id
+) DESC
 LIMIT 1
 ''');
       if (latest.isNotEmpty) {
         final id = latest.first['id'];
         final name = textOrNull(latest.first['name']) ?? 'History';
-        final hasWhen = sqliteHasColumn(db, playlistTracks, 'pl_datetime_added');
         final rows = db.select('''
 SELECT l.title, l.artist, l.bpm, l.key AS musicalKey, l.duration
 ${hasWhen ? ', pt.pl_datetime_added AS playedAt' : ''}
@@ -180,8 +185,7 @@ WHERE IFNULL(title, '') != ''
 
   @override
   void close() {
-    _db?.close();
-    _db = null;
+    _sqlite.close();
     _dbPath = null;
   }
 
@@ -190,11 +194,8 @@ WHERE IFNULL(title, '') != ''
     if (path == null || !File(path).existsSync()) {
       throw StateError(toolI18n.text('errMixxx'));
     }
-    if (path != _dbPath) {
-      close();
-      _dbPath = path;
-    }
-    return _db ??= openSqliteReadonly(path, 'mixxx_read_copy.sqlite');
+    _dbPath = path;
+    return _sqlite.ensure(path, 'mixxx_read_copy.sqlite');
   }
 
   List<HistoryTrack> _historyRows(ResultSet rows) {

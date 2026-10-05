@@ -15,7 +15,7 @@ class DjayLibrarySource implements DjLibrarySource {
   DjayLibrarySource(this.overridePath);
 
   final String? overridePath;
-  Database? _db;
+  final _sqlite = ReadonlySqlite();
   String? _dbPath;
 
   @override
@@ -184,8 +184,7 @@ WHERE collection = 'mediaItemUserData'
 
   @override
   void close() {
-    _db?.close();
-    _db = null;
+    _sqlite.close();
     _dbPath = null;
   }
 
@@ -194,11 +193,8 @@ WHERE collection = 'mediaItemUserData'
     if (path == null || !File(path).existsSync()) {
       throw StateError(toolI18n.text('errDjay'));
     }
-    if (path != _dbPath) {
-      close();
-      _dbPath = path;
-    }
-    return _db ??= openSqliteReadonly(path, 'djay_read_copy.sqlite');
+    _dbPath = path;
+    return _sqlite.ensure(path, 'djay_read_copy.sqlite');
   }
 
   Map<String, Uint8List> _mapByKey(Database db, String collection) {
