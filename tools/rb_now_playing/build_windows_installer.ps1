@@ -204,12 +204,12 @@ $issText = [regex]::Replace(
   'OutputBaseFilename=VibesBoxSync-Setup-[^\r\n]+',
   "OutputBaseFilename=VibesBoxSync-Setup-$AppVersion"
 )
-# Absoluter Icon-Pfad – relative SetupIconFile wird von Inno manchmal ignoriert
-$setupIconForIss = $SetupIcon -replace '\\', '/'
+# Absoluter Icon-Pfad in Anführungszeichen (Inno braucht das zuverlässig)
+$setupIconForIss = $SetupIcon
 $issText = [regex]::Replace(
   $issText,
   '(?m)^SetupIconFile=.*$',
-  "SetupIconFile=$setupIconForIss"
+  "SetupIconFile=`"$setupIconForIss`""
 )
 if ($issText -notlike "*#define MyAppVersion `"$AppVersion`"*") {
   throw "Konnte MyAppVersion in vibesbox_sync.iss nicht auf $AppVersion setzen."
