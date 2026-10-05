@@ -23,7 +23,22 @@ $ToolRoot = Join-Path $RepoRoot 'tools\rb_now_playing'
 Set-Location $RepoRoot
 
 Write-Host "==> Version aus pubspec + Hosting-Meta syncen" -ForegroundColor Cyan
-$Version = & (Join-Path $ToolRoot 'scripts\sync_version_from_pubspec.ps1') -UpdateHosting |
+$syncScript = Join-Path $ToolRoot 'scripts\sync_version_from_pubspec.ps1'
+$syncRaw = Get-Content -Raw -Encoding UTF8 $syncScript
+if ($syncRaw -notlike '*SYNC_HOSTING_STABLE_v2*') {
+  throw @"
+Altes sync_version_from_pubspec.ps1 erkannt.
+
+Einmal ausfuehren:
+  .\scripts\pull_and_deploy_sync_windows.ps1
+
+Oder manuell:
+  git fetch origin cursor/windows-sync-installer-b710
+  git checkout origin/cursor/windows-sync-installer-b710 -- tools/rb_now_playing/scripts/sync_version_from_pubspec.ps1 scripts/deploy_sync_windows.ps1 public/sync/index.html public/sync/version.json firebase.json
+  .\scripts\deploy_sync_windows.ps1
+"@
+}
+$Version = & $syncScript -UpdateHosting |
   Select-Object -Last 1
 $Version = ("{0}" -f $Version).Trim()
 if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
