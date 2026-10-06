@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:sqlite3/sqlite3.dart';
 
@@ -58,47 +59,75 @@ Database openSqliteReadonly(String path, String copyName) {
   }
 }
 
+/// Kopiert master.db + WAL für konsistenten Read.
+///
+/// Wichtig: **-shm nie von der Live-DB mitkopieren** – die gehört zum
+/// laufenden Prozess und macht den Snapshot unter Windows oft „leer“
+/// (hist=0 bei voller Library). SQLite baut -shm an der Kopie neu.
 String copySqliteForRead(String path, String copyName) {
   final dir = toolSupportDir();
   if (!dir.existsSync()) dir.createSync(recursive: true);
   final copy = File('${dir.path}${Platform.pathSeparator}$copyName');
-  withSqliteRetry(() {
-    File(path).copySync(copy.path);
-    return null;
-  });
-  for (final extra in const ['-wal', '-shm']) {
-    final src = File('$path$extra');
-    final dst = File('${copy.path}$extra');
-    try {
-      if (src.existsSync() && src.lengthSync() > 0) {
-        withSqliteRetry(() {
-          src.copySync(dst.path);
-          return null;
-        });
-      } else if (dst.existsSync()) {
-        dst.deleteSync();
-      }
-    } catch (_) {
-      try {
-        if (dst.existsSync()) dst.deleteSync();
-      } catch (_) {}
-    }
-  }
+
+  _copyFileShared(path, copy.path);
+
   final srcWal = File('$path-wal');
   final dstWal = File('${copy.path}-wal');
-  if (srcWal.existsSync() &&
-      srcWal.lengthSync() > 0 &&
-      (!dstWal.existsSync() || dstWal.lengthSync() == 0)) {
-    throw StateError('WAL-Kopie fehlgeschlagen: $path-wal');
+  if (srcWal.existsSync() && srcWal.lengthSync() > 0) {
+    try {
+      _copyFileShared(srcWal.path, dstWal.path);
+    } catch (error) {
+      try {
+        if (dstWal.existsSync()) dstWal.deleteSync();
+      } catch (_) {}
+      throw StateError('WAL-Kopie fehlgeschlagen: ${srcWal.path}\n$error');
+    }
+    if (!dstWal.existsSync() || dstWal.lengthSync() == 0) {
+      throw StateError('WAL-Kopie leer: ${srcWal.path}');
+    }
+  } else if (dstWal.existsSync()) {
+    dstWal.deleteSync();
   }
+
+  // Live -shm verwerfen (nicht mitkopieren).
+  final dstShm = File('${copy.path}-shm');
+  if (dstShm.existsSync()) {
+    try {
+      dstShm.deleteSync();
+    } catch (_) {}
+  }
+
   return copy.path;
+}
+
+/// Shared-Read-Kopie (Windows: FILE_SHARE_READ|WRITE) statt CopyFile.
+void _copyFileShared(String srcPath, String dstPath) {
+  withSqliteRetry(() {
+    final src = File(srcPath).openSync(mode: FileMode.read);
+    try {
+      final out = File(dstPath).openSync(mode: FileMode.writeOnly);
+      try {
+        const chunk = 1024 * 1024;
+        while (true) {
+          final Uint8List bytes = src.readSync(chunk);
+          if (bytes.isEmpty) break;
+          out.writeFromSync(bytes);
+        }
+      } finally {
+        out.closeSync();
+      }
+    } finally {
+      src.closeSync();
+    }
+    return null;
+  });
 }
 
 /// Retry for Windows sharing violations / SQLite "database is locked".
 T withSqliteRetry<T>(
   T Function() action, {
-  int maxAttempts = 5,
-  Duration baseDelay = const Duration(milliseconds: 25),
+  int maxAttempts = 8,
+  Duration baseDelay = const Duration(milliseconds: 30),
 }) {
   Object? lastError;
   for (var attempt = 0; attempt < maxAttempts; attempt++) {
@@ -110,8 +139,8 @@ T withSqliteRetry<T>(
         rethrow;
       }
       final delay = baseDelay * (1 << attempt);
-      sleep(delay > const Duration(milliseconds: 200)
-          ? const Duration(milliseconds: 200)
+      sleep(delay > const Duration(milliseconds: 250)
+          ? const Duration(milliseconds: 250)
           : delay);
     }
   }
