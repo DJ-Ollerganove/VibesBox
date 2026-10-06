@@ -469,26 +469,16 @@ LIMIT 1
     _dbPath = path;
 
     _key ??= rekordboxSqlCipherKey();
-    Object? lastError;
+    Object? directError;
 
-    // Windows: Snapshot inkl. WAL zuerst – Readonly sieht oft keine WAL-History.
-    if (Platform.isWindows) {
-      try {
-        final copyPath = copySqliteForRead(path, 'rekordbox_master_copy.db');
-        _db = _openEncrypted(copyPath);
-        _openedViaCopy = true;
-        return;
-      } catch (error) {
-        lastError = error;
-      }
-    }
-
+    // Wie Mac: zuerst live die master.db öffnen (sieht WAL).
+    // Kopie nur wenn Exklusiv-Lock – kein Windows-Sonderweg mehr.
     try {
       _db = _openEncrypted(path);
       _openedViaCopy = false;
       return;
     } catch (error) {
-      lastError = error;
+      directError = error;
     }
 
     try {
@@ -497,28 +487,15 @@ LIMIT 1
       _openedViaCopy = true;
     } catch (error) {
       throw StateError(
-        '${toolI18n.text('errRbOpen')}\n$path\n$lastError\n$error',
+        '${toolI18n.text('errRbOpen')}\n$path\n$directError\n$error',
       );
     }
   }
 
   Database _openEncrypted(String path) {
     return withSqliteRetry(() {
-      Database? db;
-      Object? openError;
-      try {
-        db = sqlite3.open(path, mode: OpenMode.readWrite);
-      } catch (error) {
-        openError = error;
-        try {
-          final uri = Uri.file(File(path).absolute.path).replace(
-            queryParameters: const {'mode': 'ro'},
-          );
-          db = sqlite3.open(uri.toString(), mode: OpenMode.readOnly, uri: true);
-        } catch (_) {
-          db = sqlite3.open(path, mode: OpenMode.readOnly);
-        }
-      }
+      // Wie Mac/WNP: normal öffnen (nicht mode=ro), damit WAL/SHM lesbar ist.
+      final db = sqlite3.open(path);
       try {
         db.execute("PRAGMA cipher = 'sqlcipher'");
         db.execute('PRAGMA legacy = 4');
@@ -534,7 +511,7 @@ LIMIT 1
         return db;
       } catch (error) {
         db.close();
-        throw StateError('$error${openError == null ? '' : '\n$openError'}');
+        rethrow;
       }
     });
   }

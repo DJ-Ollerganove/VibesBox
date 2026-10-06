@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Erzwingt den Remote-Stand mit Version 1.0.8 und baut danach.
+  Erzwingt den Remote-Stand mit Version 1.0.9 und baut danach.
   Nutze das, wenn pubspec bei dir hartnaeckig 1.0.5 zeigt.
 #>
 
@@ -41,7 +41,7 @@ $verLine = Select-String -Path 'tools\rb_now_playing\pubspec.yaml' -Pattern '^ve
 Write-Host $verLine
 if ("$verLine" -notmatch '1\.0\.6') {
   throw @"
-IMMER NOCH NICHT 1.0.8 nach hard reset.
+IMMER NOCH NICHT 1.0.9 nach hard reset.
 Remote zeigt lokal: $(git rev-parse origin/$Branch)
 Bitte Output von:
   git remote -v
@@ -51,6 +51,6 @@ hier posten. Repo-Pfad: $RepoRoot
 "@
 }
 
-Write-Host "OK: 1.0.8 erkannt. Starte run_windows_new.ps1 ..." -ForegroundColor Green
+Write-Host "OK: 1.0.9 erkannt. Starte run_windows_new.ps1 ..." -ForegroundColor Green
 Set-Location $ToolRoot
 & (Join-Path $ToolRoot 'run_windows_new.ps1') -Branch $Branch
