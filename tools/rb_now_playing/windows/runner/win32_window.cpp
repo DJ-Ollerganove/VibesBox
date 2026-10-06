@@ -2,6 +2,7 @@
 
 #include <dwmapi.h>
 #include <flutter_windows.h>
+#include <windowsx.h>
 
 #include "resource.h"
 
@@ -15,6 +16,23 @@ namespace {
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
 #endif
+
+// Win11 SDK constants — redefine when building with older Windows SDKs.
+#ifndef DWMWA_WINDOW_CORNER_PREFERENCE
+#define DWMWA_WINDOW_CORNER_PREFERENCE 33
+#endif
+#ifndef DWMWCP_ROUND
+#define DWMWCP_ROUND 2
+#endif
+#ifndef DWMWA_BORDER_COLOR
+#define DWMWA_BORDER_COLOR 34
+#endif
+#ifndef DWMWA_COLOR_NONE
+#define DWMWA_COLOR_NONE 0xFFFFFFFE
+#endif
+
+// Logical resize border (scaled by window DPI in HitTestFrameless).
+constexpr int kResizeBorderLogical = 8;
 
 constexpr const wchar_t kWindowClassName[] = L"FLUTTER_RUNNER_WIN32_WINDOW";
 
@@ -142,8 +160,10 @@ bool Win32Window::Create(const std::wstring& title,
   double scale_factor = dpi / 96.0;
 
   HINSTANCE instance = GetModuleHandle(nullptr);
-  HWND window = CreateWindow(
-      window_class, title.c_str(), WS_OVERLAPPEDWINDOW,
+  // WS_OVERLAPPEDWINDOW behält Resize/Min/Max/Sysmenu + Taskleisten-Eintrag.
+  // Die native Caption wird über WM_NCCALCSIZE + DWM entfernt (frameless).
+  HWND window = CreateWindowEx(
+      WS_EX_APPWINDOW, window_class, title.c_str(), WS_OVERLAPPEDWINDOW,
       Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
       Scale(size.width, scale_factor), Scale(size.height, scale_factor),
       nullptr, nullptr, instance, this);
@@ -152,7 +172,7 @@ bool Win32Window::Create(const std::wstring& title,
     return false;
   }
 
-  // Sofort nach CreateWindow: Taskleiste/Titelleiste bekommen das Logo,
+  // Sofort nach CreateWindow: Taskleiste bekommt das Logo,
   // bevor Flutter den Frame zeigt.
 #ifndef ICON_SMALL2
 #define ICON_SMALL2 2
@@ -174,6 +194,7 @@ bool Win32Window::Create(const std::wstring& title,
   }
 
   UpdateTheme(window);
+  ApplyFramelessChrome(window);
 
   return OnCreate();
 }
@@ -214,6 +235,26 @@ Win32Window::MessageHandler(HWND hwnd,
       if (quit_on_close_) {
         PostQuitMessage(0);
       }
+      return 0;
+
+    case WM_NCCALCSIZE:
+      // Gesamtes Fenster = Client-Area: keine native Titelleiste / Borders.
+      if (wparam == TRUE) {
+        return 0;
+      }
+      break;
+
+    case WM_NCHITTEST: {
+      POINT cursor{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+      return HitTestFrameless(hwnd, cursor);
+    }
+
+    case WM_NCACTIVATE:
+      // Frameless: Standard-NC-Aktivierung zeichnet sonst Artefakte.
+      return TRUE;
+
+    case WM_NCPAINT:
+      // Kein natives Non-Client-Painting (grauer Streifen / Caption).
       return 0;
 
     case WM_DPICHANGED: {
@@ -322,4 +363,78 @@ void Win32Window::UpdateTheme(HWND const window) {
     DwmSetWindowAttribute(window, DWMWA_USE_IMMERSIVE_DARK_MODE,
                           &enable_dark_mode, sizeof(enable_dark_mode));
   }
+}
+
+void Win32Window::ApplyFramelessChrome(HWND const window) {
+  // Win11: runde Ecken wie macOS cornerRadius ≈ 16.
+  DWORD corner = DWMWCP_ROUND;
+  DwmSetWindowAttribute(window, DWMWA_WINDOW_CORNER_PREFERENCE, &corner,
+                        sizeof(corner));
+
+  // Kein nativer DWM-Rahmenstrich (sonst grau/weiß um unseren Lila-Ring).
+  COLORREF border = DWMWA_COLOR_NONE;
+  DwmSetWindowAttribute(window, DWMWA_BORDER_COLOR, &border, sizeof(border));
+
+  // Keine weiße Caption-Leiste beim Hover oben rechts (Win11 DWM).
+#ifndef DWMWA_CAPTION_COLOR
+#define DWMWA_CAPTION_COLOR 35
+#endif
+#ifndef DWMWA_COLOR_NONE
+#define DWMWA_COLOR_NONE 0xFFFFFFFE
+#endif
+  COLORREF caption = DWMWA_COLOR_NONE;
+  DwmSetWindowAttribute(window, DWMWA_CAPTION_COLOR, &caption, sizeof(caption));
+
+  // 1px Bottom-Margin: Schatten ohne sichtbaren Frame (wie window_manager).
+  MARGINS margins = {0, 0, 0, 1};
+  DwmExtendFrameIntoClientArea(window, &margins);
+
+  RECT rc;
+  GetWindowRect(window, &rc);
+  SetWindowPos(window, nullptr, rc.left, rc.top, rc.right - rc.left,
+               rc.bottom - rc.top,
+               SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOOWNERZORDER);
+}
+
+LRESULT Win32Window::HitTestFrameless(HWND window, POINT screen_point) {
+  RECT window_rect;
+  GetWindowRect(window, &window_rect);
+
+  HMONITOR monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+  const UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
+  const double scale = dpi / 96.0;
+  const int border = Scale(kResizeBorderLogical, scale);
+
+  const LONG x = screen_point.x;
+  const LONG y = screen_point.y;
+  const bool at_left = x < window_rect.left + border;
+  const bool at_right = x >= window_rect.right - border;
+  const bool at_top = y < window_rect.top + border;
+  const bool at_bottom = y >= window_rect.bottom - border;
+
+  if (at_top && at_left) {
+    return HTTOPLEFT;
+  }
+  if (at_top && at_right) {
+    return HTTOPRIGHT;
+  }
+  if (at_bottom && at_left) {
+    return HTBOTTOMLEFT;
+  }
+  if (at_bottom && at_right) {
+    return HTBOTTOMRIGHT;
+  }
+  if (at_left) {
+    return HTLEFT;
+  }
+  if (at_right) {
+    return HTRIGHT;
+  }
+  if (at_top) {
+    return HTTOP;
+  }
+  if (at_bottom) {
+    return HTBOTTOM;
+  }
+  return HTCLIENT;
 }

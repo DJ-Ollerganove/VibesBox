@@ -3,6 +3,7 @@
 #include <optional>
 #include <variant>
 
+#include "dj_watchdog.h"
 #include "flutter/generated_plugin_registrant.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
@@ -36,22 +37,58 @@ bool FlutterWindow::OnCreate() {
       [this](const flutter::MethodCall<flutter::EncodableValue>& call,
              std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
                  result) {
-        if (call.method_name() != "setAlwaysOnTop") {
-          result->NotImplemented();
+        const auto& method = call.method_name();
+        HWND hwnd = GetHandle();
+        if (method == "setAlwaysOnTop") {
+          bool on = false;
+          if (const auto* args = call.arguments()) {
+            if (const auto* flag = std::get_if<bool>(args)) {
+              on = *flag;
+            }
+          }
+          if (hwnd != nullptr) {
+            ::SetWindowPos(hwnd, on ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+                           SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+          }
+          result->Success(flutter::EncodableValue(true));
           return;
         }
-        bool on = false;
-        if (const auto* args = call.arguments()) {
-          if (const auto* flag = std::get_if<bool>(args)) {
-            on = *flag;
+        if (method == "setLaunchWithDj") {
+          bool on = false;
+          if (const auto* args = call.arguments()) {
+            if (const auto* flag = std::get_if<bool>(args)) {
+              on = *flag;
+            }
           }
+          result->Success(flutter::EncodableValue(SetDjWatchAutostart(on)));
+          return;
         }
-        HWND hwnd = GetHandle();
-        if (hwnd != nullptr) {
-          ::SetWindowPos(hwnd, on ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
-                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        if (method == "ensureDjWatchAutostart") {
+          result->Success(flutter::EncodableValue(EnsureDjWatchAutostart()));
+          return;
         }
-        result->Success(flutter::EncodableValue(true));
+        if (method == "isLaunchWithDj") {
+          result->Success(
+              flutter::EncodableValue(IsDjWatchAutostartEnabled()));
+          return;
+        }
+        if (method == "startDrag") {
+          // Wie macOS isMovableByWindowBackground — Drag aus Flutter-Chrome.
+          if (hwnd != nullptr) {
+            ::ReleaseCapture();
+            ::SendMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+          }
+          result->Success(flutter::EncodableValue(true));
+          return;
+        }
+        if (method == "close") {
+          if (hwnd != nullptr) {
+            ::PostMessage(hwnd, WM_CLOSE, 0, 0);
+          }
+          result->Success(flutter::EncodableValue(true));
+          return;
+        }
+        result->NotImplemented();
       });
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -67,6 +104,10 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  // X / Schließen: Watcher soll Sync nicht sofort wieder öffnen,
+  // solange die DJ-Software noch läuft (Einstellung bleibt an).
+  MarkUiUserDismissed();
+
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -78,6 +119,12 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  // Frameless-Hit-Testing / NC-Calc vor Flutter, sonst bleibt HTCLIENT.
+  if (message == WM_NCHITTEST || message == WM_NCCALCSIZE ||
+      message == WM_NCACTIVATE || message == WM_NCPAINT) {
+    return Win32Window::MessageHandler(hwnd, message, wparam, lparam);
+  }
+
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =
