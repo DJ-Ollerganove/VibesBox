@@ -435,8 +435,8 @@ LIMIT 1
     _key ??= rekordboxSqlCipherKey();
     Object? directError;
 
-    // Wie Mac: live öffnen (sieht WAL). Kopie nur bei Lock – und dann
-    // DB+WAL ohne Live-SHM (dj_sqlite.copySqliteForRead).
+    // MAC_LIVE_OPEN: live open first (WAL), copy only on lock.
+    // Copy = DB+WAL without live SHM (dj_sqlite.copySqliteForRead).
     try {
       _db = _openEncrypted(path);
       _openedViaCopy = false;
