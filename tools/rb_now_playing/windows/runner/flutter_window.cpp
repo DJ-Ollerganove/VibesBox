@@ -38,6 +38,7 @@ bool FlutterWindow::OnCreate() {
              std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
                  result) {
         const auto& method = call.method_name();
+        HWND hwnd = GetHandle();
         if (method == "setAlwaysOnTop") {
           bool on = false;
           if (const auto* args = call.arguments()) {
@@ -45,7 +46,6 @@ bool FlutterWindow::OnCreate() {
               on = *flag;
             }
           }
-          HWND hwnd = GetHandle();
           if (hwnd != nullptr) {
             ::SetWindowPos(hwnd, on ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -70,6 +70,22 @@ bool FlutterWindow::OnCreate() {
         if (method == "isLaunchWithDj") {
           result->Success(
               flutter::EncodableValue(IsDjWatchAutostartEnabled()));
+          return;
+        }
+        if (method == "startDrag") {
+          // Wie macOS isMovableByWindowBackground — Drag aus Flutter-Chrome.
+          if (hwnd != nullptr) {
+            ::ReleaseCapture();
+            ::SendMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+          }
+          result->Success(flutter::EncodableValue(true));
+          return;
+        }
+        if (method == "close") {
+          if (hwnd != nullptr) {
+            ::PostMessage(hwnd, WM_CLOSE, 0, 0);
+          }
+          result->Success(flutter::EncodableValue(true));
           return;
         }
         result->NotImplemented();
@@ -99,6 +115,12 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  // Frameless-Hit-Testing / NC-Calc vor Flutter, sonst bleibt HTCLIENT.
+  if (message == WM_NCHITTEST || message == WM_NCCALCSIZE ||
+      message == WM_NCACTIVATE || message == WM_NCPAINT) {
+    return Win32Window::MessageHandler(hwnd, message, wparam, lparam);
+  }
+
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =

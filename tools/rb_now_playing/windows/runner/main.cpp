@@ -76,14 +76,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   if (!window.Create(L"VibesBox Sync", origin, size)) {
     return EXIT_FAILURE;
   }
-  // App-Icon explizit setzen (Taskbar + Titelleiste).
+  // App-Icon explizit setzen (Taskbar). Frameless: Client == Fenstergröße.
   if (HWND hwnd = window.GetHandle()) {
     ApplyAppIcon(hwnd);
-    // Fenstergroesse nach Create nochmal erzwingen (Client ~360x640).
-    RECT rc = {0, 0, 360, 640};
-    AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
-    SetWindowPos(hwnd, nullptr, 40, 40, rc.right - rc.left, rc.bottom - rc.top,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
+    SetWindowPos(hwnd, nullptr, 40, 40, 360, 640,
+                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
   }
   window.SetQuitOnClose(true);
 

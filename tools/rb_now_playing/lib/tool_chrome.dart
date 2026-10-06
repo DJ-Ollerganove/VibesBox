@@ -1,7 +1,12 @@
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+
+import 'dj_library_prefs.dart';
+import 'tool_i18n.dart';
 
 /// Logo so groß wie das Fenster erlaubt. Randfarbe des Logos: #000B27.
 /// Hintergrund und Rahmen sind feste Ebenen, damit die Liste sie nicht neu zeichnet.
@@ -18,6 +23,42 @@ class ToolBackdrop extends StatelessWidget {
         const _FrozenBackdrop(),
         child,
         const _LiveFrame(),
+        if (!kIsWeb && Platform.isWindows) const _WindowsFramelessChrome(),
+      ],
+    );
+  }
+}
+
+/// Drag-Zone + Close, weil Windows keine Traffic-Lights wie macOS hat.
+class _WindowsFramelessChrome extends StatelessWidget {
+  const _WindowsFramelessChrome();
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 40,
+          height: 28,
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onPanStart: (_) => WindowChrome.startDrag(),
+          ),
+        ),
+        Positioned(
+          top: 4,
+          right: 8,
+          child: IconButton(
+            tooltip: toolI18n.text('close'),
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+            onPressed: () => WindowChrome.close(),
+            icon: const Icon(Icons.close, color: Color(0xFFF44336), size: 18),
+          ),
+        ),
       ],
     );
   }
