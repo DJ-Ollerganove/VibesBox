@@ -291,6 +291,7 @@ class ToolSession extends ChangeNotifier {
     _enqueueLive(() async {
       try {
         await _ensureFreshToken();
+        // PRESENCE_NO_WIPE: do not set nowPlaying=null (keeps phone track).
         await _rest.setLiveDoc(
           idToken: _idToken!,
           ownerUid: _ownerUid!,
@@ -298,12 +299,9 @@ class ToolSession extends ChangeNotifier {
             'sessionId': _sessionId,
             'connected': true,
             'source': toolDeviceLabel(),
-            'nowPlaying': null,
-            'decks': const <Map<String, dynamic>>[],
-            'history': const <Map<String, dynamic>>[],
           },
+          fieldMask: const ['sessionId', 'connected', 'source'],
         );
-        _lastNowPlaying = null;
         _lastFingerprint = fingerprint;
       } finally {
         if (_queuedFingerprint == fingerprint) _queuedFingerprint = null;
@@ -337,6 +335,8 @@ class ToolSession extends ChangeNotifier {
                 'key': now.musicalKey,
                 'camelot': camelotFromScaleName(now.musicalKey),
                 if (now.length != null) 'durationSec': now.length!.inSeconds,
+                if (now.location != null && now.location!.trim().isNotEmpty)
+                  'location': now.location,
                 'suggestions': kept,
                 if (sameSong && previous['suggestionsFor'] != null)
                   'suggestionsFor': previous['suggestionsFor'],

@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:sqlite3/sqlite3.dart';
 
 import 'dj_library_source.dart';
+import 'dj_sqlite.dart';
 import 'library_match.dart';
 import 'tool_i18n.dart';
 import 'rekordbox_history.dart';
@@ -13,7 +14,7 @@ class SeratoLibrarySource implements DjLibrarySource {
   SeratoLibrarySource(this.overridePath);
 
   final String? overridePath;
-  Database? _db;
+  final _sqlite = ReadonlySqlite();
   String? _dbPath;
 
   @override
@@ -42,7 +43,7 @@ class SeratoLibrarySource implements DjLibrarySource {
   @override
   LibraryPulse libraryPulse() {
     if (_ensureSqlite()) {
-      final row = _db!.select('''
+      final row = _sqlite.ensure(_dbPath!, 'serato_read_copy.sqlite').select('''
 SELECT count(*) AS n,
        sum(IFNULL(dj_play_count, 0)) AS plays,
        max(time_modified) AS updatedAt
@@ -67,7 +68,7 @@ WHERE IFNULL(name, '') != ''
   @override
   Map<String, int> readPlayCounts() {
     if (_ensureSqlite()) {
-      final rows = _db!.select('''
+      final rows = _sqlite.ensure(_dbPath!, 'serato_read_copy.sqlite').select('''
 SELECT id, IFNULL(dj_play_count, 0) AS playCount
 FROM asset
 WHERE IFNULL(name, '') != ''
@@ -86,46 +87,27 @@ WHERE IFNULL(name, '') != ''
 
   @override
   void close() {
-    _db?.close();
-    _db = null;
+    _sqlite.close();
     _dbPath = null;
   }
 
   bool _ensureSqlite() {
     final path = locateSeratoSqlite(overridePath);
     if (path == null) return false;
-    if (path != _dbPath) {
-      close();
-      _dbPath = path;
-    }
-    if (_db != null) return true;
-    _db = _openSqlite(path);
+    _dbPath = path;
+    _sqlite.ensure(path, 'serato_read_copy.sqlite');
     return true;
   }
 
-  Database _openSqlite(String path) {
-    try {
-      final db = sqlite3.open(path, mode: OpenMode.readOnly);
-      db.execute('PRAGMA query_only = ON');
-      db.select('SELECT count(*) FROM sqlite_master');
-      return db;
-    } catch (_) {
-      final copy = _copyForRead(path);
-      final db = sqlite3.open(copy, mode: OpenMode.readOnly);
-      db.execute('PRAGMA query_only = ON');
-      db.select('SELECT count(*) FROM sqlite_master');
-      return db;
-    }
-  }
-
   HistorySnapshot _readSqliteHistory() {
-    final db = _db!;
+    final db = _sqlite.ensure(_dbPath!, 'serato_read_copy.sqlite');
     final hasEntry = db.select(
       "SELECT 1 FROM sqlite_master WHERE type='table' AND name='history_entry'",
     );
     if (hasEntry.isEmpty) {
       return _readSessionHistory();
     }
+    // Session mit dem zuletzt gespielten Entry (nicht leere Neusession).
     final rows = db.select('''
 SELECT
   he.name AS title,
@@ -139,8 +121,9 @@ SELECT
 FROM history_entry he
 LEFT JOIN history_session hs ON hs.id = he.session_id
 WHERE he.session_id = (
-  SELECT id FROM history_session
-  ORDER BY start_time DESC
+  SELECT he2.session_id
+  FROM history_entry he2
+  ORDER BY he2.start_time DESC
   LIMIT 1
 )
 ORDER BY he.start_time DESC
@@ -162,6 +145,7 @@ LIMIT 50
           bpm: doubleOrNull(row['bpm']),
           musicalKey: textOrNull(row['musicalKey']),
           length: _length(intOrNull(row['lengthSec'])),
+          location: seratoPortableToPath(textOrNull(row['location'])),
         ),
       );
       n -= 1;
@@ -175,7 +159,7 @@ LIMIT 50
   }
 
   List<LibraryTrack> _readSqliteLibrary() {
-    final rows = _db!.select('''
+    final rows = _sqlite.ensure(_dbPath!, 'serato_read_copy.sqlite').select('''
 SELECT
   id,
   name AS title,
@@ -310,7 +294,8 @@ List<String> _seratoSqliteCandidates() {
 
 File? _latestSessionFile(String folder) {
   if (folder.isEmpty) return null;
-  final dir = Directory('$folder/History/Sessions');
+  final sep = Platform.pathSeparator;
+  final dir = Directory('$folder${sep}History${sep}Sessions');
   if (!dir.existsSync()) return null;
   File? best;
   DateTime? bestTime;
@@ -324,22 +309,6 @@ File? _latestSessionFile(String folder) {
     }
   }
   return best;
-}
-
-String _copyForRead(String path) {
-  final home = Platform.environment['HOME'] ?? Directory.systemTemp.path;
-  final dir = Directory('$home/Library/Application Support/VibesBoxRbTool');
-  if (!dir.existsSync()) dir.createSync(recursive: true);
-  final copy = File('${dir.path}/serato_read_copy.sqlite');
-  File(path).copySync(copy.path);
-  final wal = File('$path-wal');
-  final walCopy = File('${copy.path}-wal');
-  if (wal.existsSync() && wal.lengthSync() > 0) {
-    wal.copySync(walCopy.path);
-  } else if (walCopy.existsSync()) {
-    walCopy.deleteSync();
-  }
-  return copy.path;
 }
 
 String? seratoPortableToPath(String? raw) {

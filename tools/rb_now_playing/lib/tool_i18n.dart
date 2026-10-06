@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import 'dj_sqlite.dart';
 import 'tool_gate_strings.dart';
 import 'tool_packs.dart';
 
@@ -95,10 +96,7 @@ class ToolI18n extends ChangeNotifier {
   }
 
   File _file() {
-    final home = Platform.environment['HOME'] ??
-        Platform.environment['USERPROFILE'] ??
-        Directory.systemTemp.path;
-    final dir = Directory('$home/Library/Application Support/VibesBoxRbTool');
+    final dir = toolSupportDir();
     if (!dir.existsSync()) dir.createSync(recursive: true);
     return File('${dir.path}/locale.json');
   }
