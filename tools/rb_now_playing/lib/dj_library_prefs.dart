@@ -315,8 +315,19 @@ class DjLibraryPrefs extends ChangeNotifier {
   }
 
   Directory _supportDir() {
-    final home = Platform.environment['HOME'] ?? Directory.systemTemp.path;
-    return Directory('$home/Library/Application Support/VibesBoxRbTool');
+    // Gleicher Ort wie tool_gate / tool_session (nicht Mac-Pfad unter Windows).
+    final home = Platform.environment['HOME'] ??
+        Platform.environment['USERPROFILE'] ??
+        Directory.systemTemp.path;
+    if (Platform.isWindows) {
+      final appData =
+          Platform.environment['APPDATA'] ?? '$home\\AppData\\Roaming';
+      return Directory('$appData\\VibesBoxRbTool');
+    }
+    if (Platform.isMacOS) {
+      return Directory('$home/Library/Application Support/VibesBoxRbTool');
+    }
+    return Directory('$home/.vibesbox_rb_tool');
   }
 }
 
