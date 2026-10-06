@@ -18,6 +18,8 @@ param(
   [switch]$SkipUninstall,
   [switch]$SkipInstall,
   [switch]$NoStart,
+  # Schneller: kein flutter clean (inkrementeller Rebuild).
+  [switch]$Fast,
   [string]$FlutterBat = "$env:USERPROFILE\Downloads\flutter_windows_3.38.4-stable\flutter\bin\flutter.bat"
 )
 
@@ -124,7 +126,9 @@ if (-not (Test-Path '.\windows\runner\dj_watchdog.cpp')) {
 Write-Host "Quellcode OK (Autostart + Frameless)." -ForegroundColor Green
 
 Write-Step "Flutter + Installer bauen"
-& (Join-Path $ToolRoot 'build_windows_installer.ps1') -FlutterBat $FlutterBat
+$buildArgs = @{ FlutterBat = $FlutterBat }
+if ($Fast) { $buildArgs['Fast'] = $true }
+& (Join-Path $ToolRoot 'build_windows_installer.ps1') @buildArgs
 
 $pubspec = Get-Content -Raw -Encoding UTF8 (Join-Path $ToolRoot 'pubspec.yaml')
 if ($pubspec -notmatch '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)') {

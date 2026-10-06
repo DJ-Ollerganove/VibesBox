@@ -124,9 +124,13 @@ Bitte VibesBox Sync schliessen (auch aus dem Infobereich), dann erneut:
   Write-Step "flutter --version"
   & $FlutterBat --version
 
-  Write-Step "flutter clean (damit alte Windows-EXE wirklich neu gebaut wird)"
-  & $FlutterBat clean
-  if ($LASTEXITCODE -ne 0) { throw "flutter clean fehlgeschlagen (Exit $LASTEXITCODE)" }
+  if (-not $Fast) {
+    Write-Step "flutter clean (damit alte Windows-EXE wirklich neu gebaut wird)"
+    & $FlutterBat clean
+    if ($LASTEXITCODE -ne 0) { throw "flutter clean fehlgeschlagen (Exit $LASTEXITCODE)" }
+  } else {
+    Write-Step "flutter clean uebersprungen (-Fast)"
+  }
 
   Write-Step "flutter pub get"
   & $FlutterBat pub get
