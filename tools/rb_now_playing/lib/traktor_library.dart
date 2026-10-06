@@ -134,12 +134,20 @@ File? locateTraktorHistory(String collectionPath) {
   final historyDir = Directory('${File(collectionPath).parent.path}${Platform.pathSeparator}History');
   File? best;
   DateTime? bestTime;
+  int bestSize = 0;
   void consider(File file) {
     if (!file.existsSync()) return;
+    final size = file.lengthSync();
+    // Leere / fast leere History-NMLs überspringen.
+    if (size < 400) return;
     final m = file.lastModifiedSync();
-    if (bestTime == null || m.isAfter(bestTime!)) {
+    final newer = bestTime == null || m.isAfter(bestTime!);
+    final sameTimeRicher =
+        bestTime != null && m == bestTime && size > bestSize;
+    if (newer || sameTimeRicher) {
       best = file;
       bestTime = m;
+      bestSize = size;
     }
   }
 
@@ -244,6 +252,7 @@ List<HistoryTrack> parseTraktorHistoryNml(String nml) {
         bpm: null,
         musicalKey: null,
         length: null,
+        location: toDragLocation(parsed.path),
       ),
     );
   }
@@ -279,6 +288,13 @@ List<HistoryTrack> parseTraktorLastPlayed(String nml) {
           length: intOrNull(info['PLAYTIME']) == null
               ? null
               : Duration(seconds: intOrNull(info['PLAYTIME'])!),
+          location: toDragLocation(
+            traktorLocationToPath(
+              volume: _firstTag(match.group(2) ?? '', 'LOCATION')['VOLUME'],
+              dir: _firstTag(match.group(2) ?? '', 'LOCATION')['DIR'],
+              file: _firstTag(match.group(2) ?? '', 'LOCATION')['FILE'],
+            ),
+          ),
         ),
       ),
     );

@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:sqlite3/sqlite3.dart';
 
+import 'dj_sqlite.dart';
 import 'library_match.dart';
 import 'rekordbox_cipher.dart';
 import 'tool_i18n.dart';
@@ -17,6 +18,7 @@ class HistoryTrack {
     required this.bpm,
     required this.musicalKey,
     required this.length,
+    this.location,
   });
 
   final int trackNo;
@@ -27,6 +29,8 @@ class HistoryTrack {
   final double? bpm;
   final String? musicalKey;
   final Duration? length;
+  /// Lokaler Dateipfad oder Streaming-URI (wenn bekannt).
+  final String? location;
 
   String get identity => '$trackNo|$title|$artist|${playedAt?.toUtc().toIso8601String()}';
 }
@@ -88,12 +92,19 @@ class RekordboxHistoryReader {
   String? _dbPath;
   String? _key;
   String? overrideDbPath;
+  var _openedViaCopy = false;
 
   String? get dbPath => _dbPath;
 
   HistorySnapshot read() {
+    // Direkt geöffnete DB sieht WAL-Updates von Rekordbox.
+    // Kopie muss pro Poll erneuert werden, sonst bleibt sie stehen.
+    if (_db != null && _openedViaCopy) {
+      close();
+    }
     _ensureOpen();
     final db = _db!;
+    // Session mit dem zuletzt gespielten Song (nicht die neueste leere Playlist).
     final rows = db.select('''
 SELECT
   sh.TrackNo AS trackNo,
@@ -103,17 +114,20 @@ SELECT
   a.Name AS artist,
   c.BPM AS bpm,
   k.ScaleName AS musicalKey,
-  c.Length AS lengthSec
+  c.Length AS lengthSec,
+  c.FolderPath AS location
 FROM djmdSongHistory sh
 JOIN djmdHistory h ON h.ID = sh.HistoryID
 LEFT JOIN djmdContent c ON c.ID = sh.ContentID
 LEFT JOIN djmdArtist a ON a.ID = c.ArtistID
 LEFT JOIN djmdKey k ON k.ID = c.KeyID
 WHERE h.ID = (
-  SELECT ID FROM djmdHistory
-  WHERE IFNULL(Attribute, 0) = 0
-    AND IFNULL(rb_local_deleted, 0) = 0
-  ORDER BY DateCreated DESC
+  SELECT sh2.HistoryID
+  FROM djmdSongHistory sh2
+  JOIN djmdHistory h2 ON h2.ID = sh2.HistoryID
+  WHERE IFNULL(h2.Attribute, 0) != 1
+    AND IFNULL(h2.rb_local_deleted, 0) = 0
+  ORDER BY sh2.created_at DESC, sh2.TrackNo DESC
   LIMIT 1
 )
 ORDER BY sh.TrackNo DESC
@@ -133,13 +147,14 @@ SELECT
   a.Name AS artist,
   c.BPM AS bpm,
   k.ScaleName AS musicalKey,
-  c.Length AS lengthSec
+  c.Length AS lengthSec,
+  c.FolderPath AS location
 FROM djmdSongHistory sh
 JOIN djmdHistory h ON h.ID = sh.HistoryID
 LEFT JOIN djmdContent c ON c.ID = sh.ContentID
 LEFT JOIN djmdArtist a ON a.ID = c.ArtistID
 LEFT JOIN djmdKey k ON k.ID = c.KeyID
-WHERE IFNULL(h.Attribute, 0) = 0
+WHERE IFNULL(h.Attribute, 0) != 1
   AND IFNULL(h.rb_local_deleted, 0) = 0
   AND sh.created_at >= ?
 ORDER BY sh.created_at DESC
@@ -174,6 +189,7 @@ LIMIT 120
           bpm: _asBpm(row['bpm']),
           musicalKey: _asString(row['musicalKey']),
           length: _asLength(row['lengthSec']),
+          location: _asString(row['location']),
         ),
       );
     }
@@ -294,17 +310,38 @@ LIMIT 1
   void close() {
     _db?.close();
     _db = null;
+    _openedViaCopy = false;
   }
 
   void _ensureOpen() {
     final path = locateMasterDb(override: overrideDbPath);
-    if (path != _dbPath) {
-      close();
-      _dbPath = path;
-    }
-    if (_db != null) return;
+    if (_db != null && _dbPath == path) return;
+    close();
+    _dbPath = path;
 
     _key ??= rekordboxSqlCipherKey();
+    Object? directError;
+    try {
+      _db = _openEncrypted(path);
+      _openedViaCopy = false;
+      return;
+    } catch (error) {
+      directError = error;
+    }
+
+    // Rekordbox hält master.db oft exklusiv — Kopie inkl. WAL lesen.
+    try {
+      final copyPath = copySqliteForRead(path, 'rekordbox_master_copy.db');
+      _db = _openEncrypted(copyPath);
+      _openedViaCopy = true;
+    } catch (copyError) {
+      throw StateError(
+        '${toolI18n.text('errRbOpen')}\n$path\n$directError\n$copyError',
+      );
+    }
+  }
+
+  Database _openEncrypted(String path) {
     final db = sqlite3.open(path, mode: OpenMode.readOnly);
     try {
       db.execute("PRAGMA cipher = 'sqlcipher'");
@@ -312,21 +349,24 @@ LIMIT 1
       db.execute("PRAGMA key = '$_key'");
       db.execute('PRAGMA query_only = ON');
       db.select('SELECT count(*) FROM sqlite_master');
-      _db = db;
+      // Sanity: History-Tabellen müssen existieren.
+      db.select(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='djmdSongHistory' LIMIT 1",
+      );
+      return db;
     } catch (error) {
       db.close();
-      throw StateError(
-        '${toolI18n.text('errRbOpen')}\n$path\n$error',
-      );
+      rethrow;
     }
   }
 }
 
 String locateMasterDb({String? override}) {
   final custom = override?.trim();
-  if (custom != null && custom.isNotEmpty) {
-    if (File(custom).existsSync()) return custom;
-    throw StateError('${toolI18n.text('errNotFound')}\n$custom');
+  // Fehlender Override blockiert die Suche nicht (Standardpfad kann leer sein,
+  // während options.json den echten db-path hat).
+  if (custom != null && custom.isNotEmpty && File(custom).existsSync()) {
+    return custom;
   }
 
   final fromAgent = _dbPathFromOptionsJson();
@@ -334,7 +374,8 @@ String locateMasterDb({String? override}) {
     return fromAgent;
   }
 
-  final home = Platform.environment['HOME'];
+  final home = Platform.environment['HOME'] ??
+      Platform.environment['USERPROFILE'];
   if (home != null) {
     final macPath = '$home/Library/Pioneer/rekordbox/master.db';
     if (File(macPath).existsSync()) return macPath;
@@ -346,6 +387,9 @@ String locateMasterDb({String? override}) {
     if (File(winPath).existsSync()) return winPath;
   }
 
+  if (custom != null && custom.isNotEmpty) {
+    throw StateError('${toolI18n.text('errNotFound')}\n$custom');
+  }
   throw StateError(toolI18n.text('errRb'));
 }
 

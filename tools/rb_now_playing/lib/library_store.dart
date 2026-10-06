@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 
 import 'camelot.dart';
 import 'dj_library_source.dart';
+import 'dj_sqlite.dart';
 import 'library_match.dart';
 import 'rekordbox_history.dart';
 import 'tool_i18n.dart';
@@ -19,6 +20,7 @@ String libraryCacheFileName(String? softwareId) {
     case 'traktor':
     case 'mixxx':
     case 'enginedj':
+    case 'djaypro':
       return 'library_$softwareId.json';
     default:
       return 'library.json';
@@ -396,8 +398,7 @@ class LibraryStore extends ChangeNotifier {
   }
 
   File _file({bool forWrite = false}) {
-    final home = Platform.environment['HOME'] ?? Directory.systemTemp.path;
-    final dir = Directory('$home/Library/Application Support/VibesBoxRbTool');
+    final dir = toolSupportDir();
     if (!dir.existsSync()) {
       dir.createSync(recursive: true);
     }

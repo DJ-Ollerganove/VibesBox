@@ -3,6 +3,7 @@
 #include <optional>
 #include <variant>
 
+#include "dj_watchdog.h"
 #include "flutter/generated_plugin_registrant.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
@@ -36,22 +37,42 @@ bool FlutterWindow::OnCreate() {
       [this](const flutter::MethodCall<flutter::EncodableValue>& call,
              std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
                  result) {
-        if (call.method_name() != "setAlwaysOnTop") {
-          result->NotImplemented();
+        const auto& method = call.method_name();
+        if (method == "setAlwaysOnTop") {
+          bool on = false;
+          if (const auto* args = call.arguments()) {
+            if (const auto* flag = std::get_if<bool>(args)) {
+              on = *flag;
+            }
+          }
+          HWND hwnd = GetHandle();
+          if (hwnd != nullptr) {
+            ::SetWindowPos(hwnd, on ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+                           SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+          }
+          result->Success(flutter::EncodableValue(true));
           return;
         }
-        bool on = false;
-        if (const auto* args = call.arguments()) {
-          if (const auto* flag = std::get_if<bool>(args)) {
-            on = *flag;
+        if (method == "setLaunchWithDj") {
+          bool on = false;
+          if (const auto* args = call.arguments()) {
+            if (const auto* flag = std::get_if<bool>(args)) {
+              on = *flag;
+            }
           }
+          result->Success(flutter::EncodableValue(SetDjWatchAutostart(on)));
+          return;
         }
-        HWND hwnd = GetHandle();
-        if (hwnd != nullptr) {
-          ::SetWindowPos(hwnd, on ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
-                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        if (method == "ensureDjWatchAutostart") {
+          result->Success(flutter::EncodableValue(EnsureDjWatchAutostart()));
+          return;
         }
-        result->Success(flutter::EncodableValue(true));
+        if (method == "isLaunchWithDj") {
+          result->Success(
+              flutter::EncodableValue(IsDjWatchAutostartEnabled()));
+          return;
+        }
+        result->NotImplemented();
       });
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {

@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rb_now_playing/dj_library_prefs.dart';
+import 'package:rb_now_playing/dj_process_match.dart';
 import 'package:rb_now_playing/djay_library.dart';
 import 'package:rb_now_playing/engine_dj_library.dart';
 import 'package:rb_now_playing/library_match.dart';
@@ -245,6 +246,20 @@ void main() {
     expect(toDragLocation('/Music/a.mp3'), '/Music/a.mp3');
   });
 
+  test('erkennt integrierte DJ-Prozessnamen', () {
+    expect(isIntegratedDjProcessName('rekordbox.exe'), isTrue);
+    expect(isIntegratedDjProcessName('rekordbox Agent'), isFalse);
+    expect(isIntegratedDjProcessName('Serato DJ Pro.exe'), isTrue);
+    expect(isIntegratedDjProcessName('mixxx.exe'), isTrue);
+    expect(isIntegratedDjProcessName('Traktor.exe'), isTrue);
+    expect(isIntegratedDjProcessName('virtualdj.exe'), isTrue);
+    expect(isIntegratedDjProcessName('djay Pro.exe'), isTrue);
+    expect(isIntegratedDjProcessName('Engine DJ.exe'), isTrue);
+    expect(isIntegratedDjProcessName('Engine.exe'), isTrue);
+    expect(isIntegratedDjProcessName('VibesBoxSync.exe'), isFalse);
+    expect(isIntegratedDjProcessName('chrome.exe'), isFalse);
+  });
+
   test('erkennt die DJ-Systeme mit Bibliothek und History', () {
     expect(DjSoftware.tryParse('Rekordbox'), DjSoftware.rekordbox);
     expect(DjSoftware.tryParse('serato dj pro')?.label, 'Serato DJ Pro');
@@ -300,7 +315,7 @@ void main() {
     expect(compareSyncVersions('1.0.1', '1.0.2') < 0, isTrue);
     expect(compareSyncVersions('1.0.1+1', '1.0.1'), 0);
     expect(compareSyncVersions('1.0.2', '1.0.1') > 0, isTrue);
-    expect(kSyncToolVersion, '1.0.3');
+    expect(kSyncToolVersion, '1.0.4');
     expect(formatToolDevice('macos', 'Version 26.6.2 (Build 25G83)'), 'macOS 26.6.2');
     expect(formatToolDevice('windows', '10.0.22631'), 'Windows 11');
     expect(formatToolDevice('windows', '10.0.19045'), 'Windows 10');
@@ -410,7 +425,9 @@ void main() {
     final tracks = parseVirtualDjM3u(m3u);
     expect(tracks.first.title, 'SOS');
     expect(tracks.first.artist, 'ABBA');
+    expect(tracks.first.location, '/Music/sos.mp3');
     expect(tracks.last.title, 'Africa');
+    expect(tracks.last.location, '/Music/africa.mp3');
   });
 
   test('parst Traktor-collection.nml und History-PRIMARYKEY', () {
@@ -454,7 +471,9 @@ void main() {
 ''';
     final played = parseTraktorHistoryNml(history);
     expect(played.first.title, 'Africa');
+    expect(played.first.location, '/Music/Africa.mp3');
     expect(played.last.title, 'SOS');
+    expect(played.last.location, '/Music/SOS.mp3');
   });
 
   test('baut Engine-DJ-Pfade und Tidal-URIs', () {
@@ -525,7 +544,11 @@ INSERT INTO HistorylistEntity VALUES (1, 1, 1, 1750000000);
     expect(tracks.first.title, 'Africa');
     expect(tracks.first.playCount, 4);
     expect(tracks.first.location, endsWith('Folder/africa.mp3'));
-    expect(source.readHistory().nowPlaying?.title, 'Africa');
+    final history = source.readHistory();
+    expect(history.nowPlaying?.title, 'Africa');
+    expect(history.nowPlaying?.bpm, 93);
+    expect(history.nowPlaying?.musicalKey, 'B');
+    expect(history.nowPlaying?.location, endsWith('Folder/africa.mp3'));
     source.close();
     dir.deleteSync(recursive: true);
   });
@@ -602,8 +625,22 @@ CREATE TABLE database2 (
     db.close();
 
     expect(extractDjayString(titleBlob, 'title'), 'Africa');
+    // keySignatureIndex-Map = what's-now-playing KEY_SIGNATURE_MAP
+    expect(djayKeyName(0), 'Db');
+    expect(djayKeyName(1), 'Bbm');
+    expect(djayKeyName(8), 'F');
+    expect(djayKeyName(22), 'C');
     expect(djayKeyName(23), 'Am');
     expect(resolveDjayUri('file:///Music/africa.mp3'), '/Music/africa.mp3');
+    expect(
+      resolveDjayUri('file:///D:/Music/africa.mp3', windows: true),
+      r'D:\Music\africa.mp3',
+    );
+    expect(
+      resolveDjayUri(r'file:///D:%5CMusic%5Cafrica.mp3', windows: true),
+      r'D:\Music\africa.mp3',
+    );
+    expect(resolveDjayUri('file:///'), isNull);
 
     final source = DjayLibrarySource(path);
     final tracks = source.readLibrary();
@@ -614,7 +651,11 @@ CREATE TABLE database2 (
     expect(tracks.first.musicalKey, 'Am');
     expect(tracks.first.playCount, 7);
     expect(tracks.first.location, '/Music/africa.mp3');
-    expect(source.readHistory().nowPlaying?.title, 'Africa');
+    final history = source.readHistory();
+    expect(history.nowPlaying?.title, 'Africa');
+    expect(history.nowPlaying?.bpm, 93);
+    expect(history.nowPlaying?.musicalKey, 'Am');
+    expect(history.nowPlaying?.location, '/Music/africa.mp3');
     expect(source.libraryPulse().trackCount, 1);
     expect(source.libraryPulse().playSum, 7);
     source.close();

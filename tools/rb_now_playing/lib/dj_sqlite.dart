@@ -2,26 +2,59 @@ import 'dart:io';
 
 import 'package:sqlite3/sqlite3.dart';
 
+/// Readonly SQLite with copy-on-lock and automatic copy refresh per poll.
+class ReadonlySqlite {
+  Database? _db;
+  String? _sourcePath;
+  String? _copyName;
+  bool openedViaCopy = false;
+
+  Database ensure(String path, String copyName) {
+    if (_db != null && _sourcePath == path && !openedViaCopy) {
+      return _db!;
+    }
+    // Kopie oder anderer Pfad: neu öffnen (Kopie sonst veraltet).
+    close();
+    _sourcePath = path;
+    _copyName = copyName;
+    try {
+      _db = openSqliteDirect(path);
+      openedViaCopy = false;
+    } catch (_) {
+      final copy = copySqliteForRead(path, copyName);
+      _db = openSqliteDirect(copy);
+      openedViaCopy = true;
+    }
+    return _db!;
+  }
+
+  void close() {
+    _db?.close();
+    _db = null;
+    openedViaCopy = false;
+  }
+}
+
+Database openSqliteDirect(String path) {
+  final db = sqlite3.open(path, mode: OpenMode.readOnly);
+  db.execute('PRAGMA query_only = ON');
+  db.select('SELECT count(*) FROM sqlite_master');
+  return db;
+}
+
 Database openSqliteReadonly(String path, String copyName) {
   try {
-    final db = sqlite3.open(path, mode: OpenMode.readOnly);
-    db.execute('PRAGMA query_only = ON');
-    db.select('SELECT count(*) FROM sqlite_master');
-    return db;
+    return openSqliteDirect(path);
   } catch (_) {
     final copy = copySqliteForRead(path, copyName);
-    final db = sqlite3.open(copy, mode: OpenMode.readOnly);
-    db.execute('PRAGMA query_only = ON');
-    db.select('SELECT count(*) FROM sqlite_master');
-    return db;
+    return openSqliteDirect(copy);
   }
 }
 
 String copySqliteForRead(String path, String copyName) {
-  final home = Platform.environment['HOME'] ?? Directory.systemTemp.path;
-  final dir = Directory('$home/Library/Application Support/VibesBoxRbTool');
+  final dir = toolSupportDir();
   if (!dir.existsSync()) dir.createSync(recursive: true);
-  final copy = File('${dir.path}/$copyName');
+  final copy = File('${dir.path}${Platform.pathSeparator}$copyName');
   File(path).copySync(copy.path);
   for (final extra in const ['-wal', '-shm']) {
     final src = File('$path$extra');
@@ -33,6 +66,22 @@ String copySqliteForRead(String path, String copyName) {
     }
   }
   return copy.path;
+}
+
+/// Gemeinsamer App-Support-Ordner (Windows: %APPDATA%\\VibesBoxRbTool).
+Directory toolSupportDir() {
+  final home = Platform.environment['HOME'] ??
+      Platform.environment['USERPROFILE'] ??
+      Directory.systemTemp.path;
+  if (Platform.isWindows) {
+    final appData =
+        Platform.environment['APPDATA'] ?? '$home\\AppData\\Roaming';
+    return Directory('$appData\\VibesBoxRbTool');
+  }
+  if (Platform.isMacOS) {
+    return Directory('$home/Library/Application Support/VibesBoxRbTool');
+  }
+  return Directory('$home/.vibesbox_rb_tool');
 }
 
 bool sqliteHasTable(Database db, String name) {
@@ -71,6 +120,7 @@ String sqliteTable(Database db, List<String> names) {
 bool sqliteHasColumn(Database db, String table, String column) {
   final rows = db.select('PRAGMA table_info("$table")');
   return rows.any(
-    (row) => (row['name']?.toString() ?? '').toLowerCase() == column.toLowerCase(),
+    (row) =>
+        (row['name']?.toString() ?? '').toLowerCase() == column.toLowerCase(),
   );
 }

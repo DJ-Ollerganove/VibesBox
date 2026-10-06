@@ -158,6 +158,9 @@ class DjLibraryPrefs extends ChangeNotifier {
   bool? readLibrary;
   bool autoUpdate = false;
   bool alwaysOnTop = false;
+  /// Windows: Sync starten, wenn eine integrierte DJ-Software startet.
+  /// Standard: an (neue Installationen / fehlender Prefs-Key).
+  bool launchWithDj = true;
   final Map<DjSoftware, String> _customPaths = {};
 
   bool get wantsRead => software != null && readLibrary == true;
@@ -183,14 +186,17 @@ class DjLibraryPrefs extends ChangeNotifier {
           software = DjSoftware.rekordbox;
           readLibrary = true;
           autoUpdate = true;
-          await save();
         }
+        // Frische Installation / fehlende Prefs: launchWithDj bleibt Default true.
+        await save();
         notifyListeners();
+        await _syncWindowsDjWatch();
         return;
       }
       final data = jsonDecode(await file.readAsString());
       if (data is! Map) {
         notifyListeners();
+        await _syncWindowsDjWatch();
         return;
       }
       software = DjSoftware.tryParse(data['software']?.toString());
@@ -198,6 +204,8 @@ class DjLibraryPrefs extends ChangeNotifier {
       readLibrary = read is bool ? read : null;
       autoUpdate = data['autoUpdate'] == true;
       alwaysOnTop = data['alwaysOnTop'] == true;
+      // Fehlender Key = an (Default), nur explizites false schaltet ab.
+      launchWithDj = data['launchWithDj'] != false;
       _customPaths.clear();
       void take(DjSoftware key, String jsonKey) {
         final v = data[jsonKey]?.toString().trim();
@@ -211,13 +219,25 @@ class DjLibraryPrefs extends ChangeNotifier {
       take(DjSoftware.mixxx, 'pathMixxx');
       take(DjSoftware.engineDj, 'pathEngineDj');
       take(DjSoftware.djayPro, 'pathDjayPro');
+      // Prefs-Key ggf. nachziehen (fehlend → true).
+      if (!data.containsKey('launchWithDj')) {
+        await save();
+      }
       notifyListeners();
       if (alwaysOnTop) {
         await WindowChrome.setAlwaysOnTop(true);
       }
+      await _syncWindowsDjWatch();
     } catch (_) {
       notifyListeners();
+      await _syncWindowsDjWatch();
     }
+  }
+
+  /// Windows: Prefs steuern HKCU-Run + Watcher (idempotent bei an).
+  Future<void> _syncWindowsDjWatch() async {
+    if (!Platform.isWindows) return;
+    await WindowChrome.setLaunchWithDj(launchWithDj);
   }
 
   Future<void> setAlwaysOnTop(bool value) async {
@@ -226,6 +246,16 @@ class DjLibraryPrefs extends ChangeNotifier {
     await save();
     notifyListeners();
     await WindowChrome.setAlwaysOnTop(value);
+  }
+
+  Future<void> setLaunchWithDj(bool value) async {
+    if (launchWithDj == value) return;
+    launchWithDj = value;
+    await save();
+    notifyListeners();
+    if (Platform.isWindows) {
+      await WindowChrome.setLaunchWithDj(value);
+    }
   }
 
   Future<void> setSoftware(DjSoftware? value) async {
@@ -293,6 +323,7 @@ class DjLibraryPrefs extends ChangeNotifier {
         'readLibrary': readLibrary,
         'autoUpdate': autoUpdate,
         'alwaysOnTop': alwaysOnTop,
+        'launchWithDj': launchWithDj,
         'pathRekordbox': _customPaths[DjSoftware.rekordbox],
         'pathSerato': _customPaths[DjSoftware.serato],
         'pathVirtualDj': _customPaths[DjSoftware.virtualDj],
@@ -315,8 +346,19 @@ class DjLibraryPrefs extends ChangeNotifier {
   }
 
   Directory _supportDir() {
-    final home = Platform.environment['HOME'] ?? Directory.systemTemp.path;
-    return Directory('$home/Library/Application Support/VibesBoxRbTool');
+    // Gleicher Ort wie tool_gate / tool_session (nicht Mac-Pfad unter Windows).
+    final home = Platform.environment['HOME'] ??
+        Platform.environment['USERPROFILE'] ??
+        Directory.systemTemp.path;
+    if (Platform.isWindows) {
+      final appData =
+          Platform.environment['APPDATA'] ?? '$home\\AppData\\Roaming';
+      return Directory('$appData\\VibesBoxRbTool');
+    }
+    if (Platform.isMacOS) {
+      return Directory('$home/Library/Application Support/VibesBoxRbTool');
+    }
+    return Directory('$home/.vibesbox_rb_tool');
   }
 }
 
@@ -396,6 +438,29 @@ class WindowChrome {
       await _channel.invokeMethod<bool>('setAlwaysOnTop', on);
     } on PlatformException {
       return;
+    }
+  }
+
+  /// Windows: HKCU-Run + Watcher setzen/entfernen. Andere Plattformen: no-op.
+  static Future<bool> setLaunchWithDj(bool on) async {
+    if (!Platform.isWindows) return false;
+    try {
+      return await _channel.invokeMethod<bool>('setLaunchWithDj', on) ?? false;
+    } on PlatformException {
+      return false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
+  static Future<bool?> isLaunchWithDj() async {
+    if (!Platform.isWindows) return null;
+    try {
+      return await _channel.invokeMethod<bool>('isLaunchWithDj');
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
     }
   }
 }

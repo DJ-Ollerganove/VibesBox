@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 
@@ -145,11 +146,24 @@ class _SongRecSettingsPageState extends State<SongRecSettingsPage> {
             padding: const EdgeInsets.fromLTRB(12, 2, 12, 16),
             children: [
               _GroupFrame(
-                child: _checkRow(
-                  label: toolI18n.text('alwaysOnTop'),
-                  value: widget.djPrefs.alwaysOnTop,
-                  onChanged: (value) =>
-                      unawaited(widget.djPrefs.setAlwaysOnTop(value)),
+                child: Column(
+                  children: [
+                    _checkRow(
+                      label: toolI18n.text('alwaysOnTop'),
+                      value: widget.djPrefs.alwaysOnTop,
+                      onChanged: (value) =>
+                          unawaited(widget.djPrefs.setAlwaysOnTop(value)),
+                    ),
+                    if (Platform.isWindows) ...[
+                      const Divider(height: 1),
+                      _checkRow(
+                        label: toolI18n.text('launchWithDj'),
+                        value: widget.djPrefs.launchWithDj,
+                        onChanged: (value) =>
+                            unawaited(widget.djPrefs.setLaunchWithDj(value)),
+                      ),
+                    ],
+                  ],
                 ),
               ),
               const SizedBox(height: 8),
