@@ -153,8 +153,6 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
   String? _markedPlayId;
   HistoryTrack? _transitionFrom;
   LiveSnapshot? _snapshot;
-  /// Rohe DJ-History (vor Idle), damit die Liste immer sichtbar bleibt.
-  HistorySnapshot? _liveHistory;
   String _historyFp = '';
   String? _error;
   String? _seenIdentity;
@@ -342,7 +340,6 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
               : snapshot;
       final sameDeck = _deckKey(_snapshot) == _deckKey(effective);
       _snapshot = effective;
-      _liveHistory = snapshot.history;
       if (!mounted) return;
       if (!sameDeck || _error != null || historyFp != _historyFp) {
         _historyFp = historyFp;
@@ -390,7 +387,6 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
       _source?.close();
       if (!mounted) return;
       setState(() {
-        _liveHistory = null;
         _historyFp = '';
         _error = error.toString().replaceFirst('Bad state: ', '');
       });
@@ -1257,12 +1253,6 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                       onPrev: () => _stepHeard(-1),
                       onNext: () => _stepHeard(1),
                     ),
-                  const SizedBox(height: 6),
-                  _DjHistoryPanel(
-                    softwareLabel: _djPrefs.software?.label,
-                    history: _liveHistory,
-                    idle: _snapshot?.idle ?? true,
-                  ),
                   const SizedBox(height: 6),
                   _MainTabs(
                     index: _mainTab,
@@ -2679,116 +2669,6 @@ class _Heard {
   List<Map<String, dynamic>> suggestions = const [];
   bool searching = false;
   int playCount = 0;
-}
-
-/// Live-Anzeige der gelesenen DJ-History (Diagnose + Transparenz).
-class _DjHistoryPanel extends StatelessWidget {
-  const _DjHistoryPanel({
-    required this.softwareLabel,
-    required this.history,
-    required this.idle,
-  });
-
-  final String? softwareLabel;
-  final HistorySnapshot? history;
-  final bool idle;
-
-  @override
-  Widget build(BuildContext context) {
-    final software = softwareLabel ?? '–';
-    final hist = history;
-    final tracks = hist?.tracks ?? const <HistoryTrack>[];
-    final path = (hist?.dbPath ?? '').trim();
-    final shortPath = path.isEmpty
-        ? '–'
-        : (path.length <= 64 ? path : '…${path.substring(path.length - 60)}');
-    final session = (hist?.historyName ?? '').trim();
-    final debug = (hist?.debugNote ?? '').trim();
-    final status = hist == null
-        ? toolI18n.text('noHistory')
-        : (tracks.isEmpty
-            ? toolI18n.text('noHistory')
-            : '${tracks.length} · ${idle ? "idle" : "live"}'
-                '${session.isEmpty ? "" : " · $session"}');
-
-    return Container(
-      constraints: const BoxConstraints(maxHeight: 168),
-      padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
-      decoration: BoxDecoration(
-        color: const Color(0x66101830),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0x4422E7FF)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            '${toolI18n.text('history')} · $software · $status · v$kSyncToolVersion',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Color(0xFF22E7FF),
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            shortPath,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: Colors.white38, fontSize: 10),
-          ),
-          if (debug.isNotEmpty) ...[
-            const SizedBox(height: 2),
-            Text(
-              debug,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: tracks.isEmpty
-                    ? const Color(0xFFFFAB91)
-                    : Colors.white38,
-                fontSize: 10,
-              ),
-            ),
-          ],
-          const SizedBox(height: 4),
-          Expanded(
-            child: tracks.isEmpty
-                ? Text(
-                    debug.isNotEmpty ? debug : toolI18n.text('noHistory'),
-                    style: const TextStyle(color: Colors.white54, fontSize: 11),
-                  )
-                : ListView.builder(
-                    itemCount: tracks.length.clamp(0, 12),
-                    itemBuilder: (context, i) {
-                      final t = tracks[i];
-                      final time = t.playedAt == null
-                          ? '--:--'
-                          : '${t.playedAt!.hour.toString().padLeft(2, '0')}:'
-                              '${t.playedAt!.minute.toString().padLeft(2, '0')}';
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 2),
-                        child: Text(
-                          '$time  ${t.artist} – ${t.title}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: i == 0 ? Colors.white : Colors.white70,
-                            fontSize: 11,
-                            fontWeight:
-                                i == 0 ? FontWeight.w600 : FontWeight.w400,
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 class _NowPlayingCard extends StatelessWidget {
