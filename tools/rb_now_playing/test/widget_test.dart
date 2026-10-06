@@ -373,6 +373,10 @@ void main() {
     final opened = live.ensure(src.path, 'unused_copy.db');
     expect(live.openedViaCopy, isFalse);
     expect(opened.select('SELECT count(*) AS n FROM t').first['n'], 2);
+    // Zweiter Poll öffnet erneut (Echtzeit / frische WAL).
+    final opened2 = live.ensure(src.path, 'unused_copy.db');
+    expect(identical(opened, opened2), isFalse);
+    expect(opened2.select('SELECT count(*) AS n FROM t').first['n'], 2);
     live.close();
     dir.deleteSync(recursive: true);
   });

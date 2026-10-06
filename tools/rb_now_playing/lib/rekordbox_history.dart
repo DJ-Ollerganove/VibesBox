@@ -97,72 +97,14 @@ class RekordboxHistoryReader {
   String? get dbPath => _dbPath;
 
   HistorySnapshot read() {
-    // Direkt geöffnete DB sieht WAL-Updates von Rekordbox (Echtzeit).
-    // Kopie muss pro Poll erneuert werden, sonst bleibt sie stehen.
-    if (_db != null && _openedViaCopy) {
-      close();
-    }
+    // Wie what's-now-playing: JEDEN Poll neue Connection.
+    // Windows aktualisiert WAL sonst nicht zuverlässig auf einer
+    // langlebigen Readonly-Verbindung (Mac oft schon).
+    close();
     _ensureOpen();
     final db = _db!;
-    // Session mit dem zuletzt gespielten Song (nicht die neueste leere Playlist).
-    final rows = db.select('''
-SELECT
-  sh.TrackNo AS trackNo,
-  sh.created_at AS playedAt,
-  h.Name AS historyName,
-  c.Title AS title,
-  a.Name AS artist,
-  c.BPM AS bpm,
-  k.ScaleName AS musicalKey,
-  c.Length AS lengthSec,
-  c.FolderPath AS location
-FROM djmdSongHistory sh
-JOIN djmdHistory h ON h.ID = sh.HistoryID
-LEFT JOIN djmdContent c ON c.ID = sh.ContentID
-LEFT JOIN djmdArtist a ON a.ID = c.ArtistID
-LEFT JOIN djmdKey k ON k.ID = c.KeyID
-WHERE h.ID = (
-  SELECT sh2.HistoryID
-  FROM djmdSongHistory sh2
-  JOIN djmdHistory h2 ON h2.ID = sh2.HistoryID
-  WHERE IFNULL(h2.Attribute, 0) != 1
-    AND IFNULL(h2.rb_local_deleted, 0) = 0
-  ORDER BY sh2.created_at DESC, sh2.TrackNo DESC
-  LIMIT 1
-)
-ORDER BY sh.TrackNo DESC
-LIMIT 50
-''');
-
-    var session = _mapHistoryRows(rows);
-    // Fallback: global neuester History-Eintrag (wie what's-now-playing).
-    if (session.$1.isEmpty) {
-      final fallback = db.select('''
-SELECT
-  sh.TrackNo AS trackNo,
-  sh.created_at AS playedAt,
-  h.Name AS historyName,
-  c.Title AS title,
-  a.Name AS artist,
-  c.BPM AS bpm,
-  k.ScaleName AS musicalKey,
-  c.Length AS lengthSec,
-  c.FolderPath AS location
-FROM djmdSongHistory sh
-JOIN djmdHistory h ON h.ID = sh.HistoryID
-LEFT JOIN djmdContent c ON c.ID = sh.ContentID
-LEFT JOIN djmdArtist a ON a.ID = c.ArtistID
-LEFT JOIN djmdKey k ON k.ID = c.KeyID
-WHERE IFNULL(h.Attribute, 0) != 1
-  AND IFNULL(h.rb_local_deleted, 0) = 0
-ORDER BY sh.created_at DESC, sh.TrackNo DESC
-LIMIT 50
-''');
-      session = _mapHistoryRows(fallback);
-    }
-    // Letzter Fallback ohne Attribute-Filter (WNP-Query-Stil).
-    if (session.$1.isEmpty) {
-      final raw = db.select('''
+    // Primär: global neuester History-Song (WNP-Query) → Echtzeit.
+    final latest = db.select('''
 SELECT
   sh.TrackNo AS trackNo,
   sh.created_at AS playedAt,
@@ -179,9 +121,45 @@ LEFT JOIN djmdContent c ON c.ID = sh.ContentID
 LEFT JOIN djmdArtist a ON a.ID = c.ArtistID
 LEFT JOIN djmdKey k ON k.ID = c.KeyID
 ORDER BY sh.created_at DESC, sh.TrackNo DESC
-LIMIT 50
+LIMIT 1
 ''');
-      session = _mapHistoryRows(raw);
+    var session = _mapHistoryRows(latest);
+
+    // Session-Liste zum zuletzt gespielten Song (für recent/UI).
+    if (session.$1.isNotEmpty) {
+      final historyIdRows = db.select('''
+SELECT sh.HistoryID AS hid
+FROM djmdSongHistory sh
+ORDER BY sh.created_at DESC, sh.TrackNo DESC
+LIMIT 1
+''');
+      if (historyIdRows.isNotEmpty) {
+        final hid = historyIdRows.first['hid']?.toString();
+        if (hid != null && hid.isNotEmpty) {
+          final rows = db.select('''
+SELECT
+  sh.TrackNo AS trackNo,
+  sh.created_at AS playedAt,
+  h.Name AS historyName,
+  c.Title AS title,
+  a.Name AS artist,
+  c.BPM AS bpm,
+  k.ScaleName AS musicalKey,
+  c.Length AS lengthSec,
+  c.FolderPath AS location
+FROM djmdSongHistory sh
+LEFT JOIN djmdHistory h ON h.ID = sh.HistoryID
+LEFT JOIN djmdContent c ON c.ID = sh.ContentID
+LEFT JOIN djmdArtist a ON a.ID = c.ArtistID
+LEFT JOIN djmdKey k ON k.ID = c.KeyID
+WHERE sh.HistoryID = ?
+ORDER BY sh.TrackNo DESC
+LIMIT 50
+''', [hid]);
+          final full = _mapHistoryRows(rows);
+          if (full.$1.isNotEmpty) session = full;
+        }
+      }
     }
     List<HistoryTrack> recent = const [];
     try {
@@ -363,15 +341,13 @@ LIMIT 1
 
   void _ensureOpen() {
     final path = locateMasterDb(override: overrideDbPath);
-    if (_db != null && _dbPath == path) return;
     close();
     _dbPath = path;
 
     _key ??= rekordboxSqlCipherKey();
     Object? directError;
 
-    // Wie Mac / what's-now-playing: live öffnen (WAL in Echtzeit).
-    // Kopie nur wenn Rekordbox die Datei exklusiv sperrt.
+    // Live öffnen (WAL). Kopie nur bei Exclusive-Lock.
     try {
       _db = _openEncrypted(path);
       _openedViaCopy = false;
@@ -393,6 +369,7 @@ LIMIT 1
 
   Database _openEncrypted(String path) {
     return withSqliteRetry(() {
+      // WNP-Reihenfolge: URI mode=ro, dann key + cipher_compatibility.
       final uri = Uri.file(File(path).absolute.path).replace(
         queryParameters: const {'mode': 'ro'},
       );
@@ -403,20 +380,21 @@ LIMIT 1
         db = sqlite3.open(path, mode: OpenMode.readOnly);
       }
       try {
-        // sqlite3mc: SQLCipher-4 wie what's-now-playing / pyrekordbox
         db.execute("PRAGMA cipher = 'sqlcipher'");
         db.execute('PRAGMA legacy = 4');
         try {
           db.execute('PRAGMA cipher_compatibility = 4');
         } catch (_) {}
         db.execute('PRAGMA key="$_key"');
-        db.execute('PRAGMA query_only = ON');
         db.execute('PRAGMA read_uncommitted = 1');
+        // query_only erst nach erfolgreichem Decrypt-Check
         db.select('SELECT count(*) FROM sqlite_master');
-        // Sanity: History-Tabellen müssen existieren.
         db.select(
           "SELECT 1 FROM sqlite_master WHERE type='table' AND name='djmdSongHistory' LIMIT 1",
         );
+        try {
+          db.execute('PRAGMA query_only = ON');
+        } catch (_) {}
         return db;
       } catch (error) {
         db.close();

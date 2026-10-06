@@ -10,14 +10,8 @@ class ReadonlySqlite {
   bool openedViaCopy = false;
 
   Database ensure(String path, String copyName) {
-    // Live-Direktverbindung sieht WAL-Updates der DJ-Software in Echtzeit
-    // (Mac und Windows – wie what's-now-playing). Kopie nur bei Lock.
-    if (_db != null &&
-        _sourcePath == path &&
-        !openedViaCopy) {
-      return _db!;
-    }
-    // Kopie ist sofort veraltet → jeden Poll neu.
+    // Immer neu öffnen (wie what's-now-playing): unter Windows bleiben
+    // WAL-Updates auf einer alten Readonly-Connection sonst oft unsichtbar.
     close();
     _sourcePath = path;
     _copyName = copyName;

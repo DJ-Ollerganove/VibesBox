@@ -220,7 +220,8 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     unawaited(_startLibrary());
     unawaited(_startTidal());
     WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
-    _timer = Timer.periodic(const Duration(seconds: 2), (_) => _refresh());
+    // 1s wie typische Now-Playing-Tools – History soll sofort nachziehen.
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) => _refresh());
   }
 
   Future<void> _startTidal() async {
@@ -301,18 +302,11 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     if (track == null) return true;
     final now = DateTime.now();
     final identity = track.identity;
-    final firstSight = identity != _seenIdentity;
-    if (firstSight) {
+    // Neuester History-Song sofort anzeigen (auch nach App-Start).
+    // Idle erst, wenn derselbe Eintrag 10 Minuten lang unverändert bleibt.
+    if (identity != _seenIdentity) {
       _seenIdentity = identity;
       _seenAt = now;
-    }
-    // Frisch geladener Track immer zeigen. Nur beim ersten Auftauchen eines
-    // alten History-Eintrags (App-Start) über playedAt ausblenden.
-    if (firstSight) {
-      final playedAt = track.playedAt;
-      if (playedAt != null && now.difference(playedAt) >= _idleAfter) {
-        return true;
-      }
       return false;
     }
     final age = _seenAt == null ? Duration.zero : now.difference(_seenAt!);
