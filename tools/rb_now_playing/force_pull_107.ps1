@@ -39,7 +39,7 @@ git rev-parse HEAD
 Write-Host "Nachher pubspec:" -ForegroundColor Green
 $verLine = Select-String -Path 'tools\rb_now_playing\pubspec.yaml' -Pattern '^version:' | Select-Object -First 1
 Write-Host $verLine
-if ("$verLine" -notmatch '1\.0\.6') {
+if ("$verLine" -notmatch '1\.0\.9') {
   throw @"
 IMMER NOCH NICHT 1.0.9 nach hard reset.
 Remote zeigt lokal: $(git rev-parse origin/$Branch)
