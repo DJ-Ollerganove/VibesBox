@@ -291,6 +291,8 @@ class ToolSession extends ChangeNotifier {
     _enqueueLive(() async {
       try {
         await _ensureFreshToken();
+        // Nur Presence – nowPlaying NICHT auf null setzen (sonst löscht
+        // Windows/Mac den Song auf dem Handy, solange syncSend noch false ist).
         await _rest.setLiveDoc(
           idToken: _idToken!,
           ownerUid: _ownerUid!,
@@ -298,12 +300,9 @@ class ToolSession extends ChangeNotifier {
             'sessionId': _sessionId,
             'connected': true,
             'source': toolDeviceLabel(),
-            'nowPlaying': null,
-            'decks': const <Map<String, dynamic>>[],
-            'history': const <Map<String, dynamic>>[],
           },
+          fieldMask: const ['sessionId', 'connected', 'source'],
         );
-        _lastNowPlaying = null;
         _lastFingerprint = fingerprint;
       } finally {
         if (_queuedFingerprint == fingerprint) _queuedFingerprint = null;

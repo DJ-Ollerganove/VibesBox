@@ -1,11 +1,11 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Ein Zug: alte Sync-App VERWERFEN, hart auf 1.0.12, neu bauen, installieren.
+  Ein Zug: alte Sync-App VERWERFEN, hart auf 1.0.13, neu bauen, installieren.
 
 .DESCRIPTION
   Default-Branch: cursor/windows-sync-all-in-one-b710
-  Deinstalliert jede alte VibesBox Sync, hard-reset auf Origin, baut nur 1.0.12.
+  Deinstalliert jede alte VibesBox Sync, hard-reset auf Origin, baut nur 1.0.13.
 
 .NOTES
   Nur ASCII in dieser Datei (Windows PowerShell 5.1).
@@ -25,7 +25,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ExpectVersion = '1.0.12'
+$ExpectVersion = '1.0.13'
 $ToolRoot = $PSScriptRoot
 $RepoRoot = Resolve-Path (Join-Path $ToolRoot '..\..')
 
@@ -72,7 +72,7 @@ function Remove-LeftoverInstallDirs {
 }
 
 function Uninstall-VibesBoxSync {
-  Write-Step "Alte Installation VERWERFEN (alles vor 1.0.12)"
+  Write-Step "Alte Installation VERWERFEN (alles vor 1.0.13)"
   Clear-DjWatchRunKey
 
   $candidates = @(
@@ -192,30 +192,33 @@ if (-not (Test-Path '.\windows\runner\dj_watchdog.cpp')) {
   throw 'dj_watchdog.cpp fehlt. Falscher Branch/Stand.'
 }
 if ($mainDart -notlike '*_DjHistoryPanel*' -or $mainDart -notlike '*_liveHistory*') {
-  throw 'main.dart ohne History-Panel. Brauche Song-Detection-Merge (v1.0.12).'
+  throw 'main.dart ohne History-Panel. Brauche Song-Detection-Merge (v1.0.13).'
 }
 if ($rbHist -notlike '*ORDER BY sh.created_at DESC*') {
   throw 'rekordbox_history.dart ohne Live-Latest-Query. Falscher Stand.'
 }
 if ($rbHist -like '*_selectLatestLibrary*' -or $rbHist -like '*fromLibrary*') {
-  throw 'rekordbox_history.dart hat noch Library-Fallback (Load=Play). Brauche 1.0.12.'
+  throw 'rekordbox_history.dart hat noch Library-Fallback (Load=Play). Brauche 1.0.13.'
 }
 if ($rbHist -like '*_pollPlayCountBump*' -or $rbHist -like '*_selectLatestLibrary*') {
-  throw 'rekordbox_history.dart hat wieder Fallbacks – brauche sauberes 1.0.12.'
+  throw 'rekordbox_history.dart hat wieder Fallbacks – brauche sauberes 1.0.13.'
 }
-if ($rbHist -notlike '*Platform.isWindows*') {
-  throw 'rekordbox_history.dart ohne Windows-WAL-Copy (brauche 1.0.12).'
+if ($rbHist -notlike '*Wie Mac: live öffnen*') {
+  throw 'rekordbox_history.dart ohne Mac-Live-Open (brauche 1.0.13).'
 }
 $djSql = Get-Content -Raw -Encoding UTF8 '.\lib\dj_sqlite.dart'
 if ($djSql -notlike '*Live -shm verwerfen*' -and $djSql -notlike '*-shm nie*') {
-  throw 'dj_sqlite.dart kopiert noch Live-SHM mit – brauche 1.0.12.'
+  throw 'dj_sqlite.dart ohne SHM-Fix – brauche 1.0.13.'
 }
-
-$toolVer = Get-Content -Raw -Encoding UTF8 '.\lib\tool_version.dart'
-if ($toolVer -notlike "*kSyncToolVersion = '$ExpectVersion'*") {
-  throw ("tool_version.dart ist nicht $ExpectVersion - alte Version verworfen.")
+$rest = Get-Content -Raw -Encoding UTF8 '.\lib\tool_rest.dart'
+if ($rest -notlike '*fieldMask*') {
+  throw 'tool_rest.dart ohne fieldMask – Presence würde Songs löschen.'
 }
-Write-Host "Quellcode OK (nur 1.0.12, Play-only, History-Panel)." -ForegroundColor Green
+$sessionDart = Get-Content -Raw -Encoding UTF8 '.\lib\tool_session.dart'
+if ($sessionDart -notlike '*nowPlaying NICHT*') {
+  throw 'tool_session.dart Presence löscht noch nowPlaying – brauche 1.0.13.'
+}
+Write-Host "Quellcode OK (nur 1.0.13, Play-only, History-Panel)." -ForegroundColor Green
 
 Write-Step "Flutter + Installer bauen"
 $buildArgs = @{ FlutterBat = $FlutterBat }
@@ -251,7 +254,7 @@ if (-not $SkipInstall) {
   if ($inst.ExitCode -ne 0 -and $inst.ExitCode -ne $null) {
     throw ("Setup ExitCode: {0}" -f $inst.ExitCode)
   }
-  Write-Host "Installation fertig (nur 1.0.12)." -ForegroundColor Green
+  Write-Host "Installation fertig (nur 1.0.13)." -ForegroundColor Green
 }
 
 $installed = @(
@@ -268,7 +271,7 @@ if ($installed) {
 }
 
 if (-not $NoStart) {
-  Write-Step "Starte VibesBox Sync 1.0.12"
+  Write-Step "Starte VibesBox Sync 1.0.13"
   if ($installed) {
     Start-Process -FilePath $installed
   } else {
@@ -280,7 +283,7 @@ if (-not $NoStart) {
 Write-Host ""
 Write-Host "====================================================" -ForegroundColor Green
 Write-Host ("NEUER BUILD  Branch={0}  Version={1}" -f $Branch, $AppVersion) -ForegroundColor Green
-Write-Host "Alte Versionen verworfen. Panel muss v1.0.12 zeigen." -ForegroundColor Yellow
+Write-Host "Alte Versionen verworfen. Panel muss v1.0.13 zeigen." -ForegroundColor Yellow
 Write-Host "Features: Play-only History + rahmenlos + DJ-Autostart" -ForegroundColor Green
 Write-Host "====================================================" -ForegroundColor Green
 if (Test-Path $setup) {

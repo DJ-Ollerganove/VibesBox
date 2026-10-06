@@ -434,21 +434,9 @@ LIMIT 1
 
     _key ??= rekordboxSqlCipherKey();
     Object? directError;
-    Object? copyError;
 
-    // Windows: Snapshot DB+WAL (ohne Live-SHM) – sonst oft hist=0.
-    if (Platform.isWindows) {
-      try {
-        final copyPath = copySqliteForRead(path, 'rekordbox_master_copy.db');
-        _db = _openEncrypted(copyPath);
-        _openedViaCopy = true;
-        return;
-      } catch (error) {
-        copyError = error;
-      }
-    }
-
-    // Mac / Fallback: live öffnen, sonst Kopie.
+    // Wie Mac: live öffnen (sieht WAL). Kopie nur bei Lock – und dann
+    // DB+WAL ohne Live-SHM (dj_sqlite.copySqliteForRead).
     try {
       _db = _openEncrypted(path);
       _openedViaCopy = false;
@@ -463,8 +451,7 @@ LIMIT 1
       _openedViaCopy = true;
     } catch (error) {
       throw StateError(
-        '${toolI18n.text('errRbOpen')}\n$path\n'
-        '${directError ?? copyError}\n$error',
+        '${toolI18n.text('errRbOpen')}\n$path\n$directError\n$error',
       );
     }
   }
