@@ -104,6 +104,10 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  // X / Schließen: Watcher soll Sync nicht sofort wieder öffnen,
+  // solange die DJ-Software noch läuft (Einstellung bleibt an).
+  MarkUiUserDismissed();
+
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }

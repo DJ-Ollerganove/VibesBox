@@ -130,6 +130,61 @@ bool MutexAlreadyExists(const wchar_t* name) {
 
 bool IsUiRunning() { return MutexAlreadyExists(kUiMutex); }
 
+std::wstring DismissMarkerPath() {
+  wchar_t appdata[MAX_PATH];
+  DWORD n = ::GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH);
+  if (n == 0 || n >= MAX_PATH) {
+    return L"";
+  }
+  return std::wstring(appdata) + L"\\VibesBoxRbTool\\watch_dismissed";
+}
+
+bool EnsureSupportDir() {
+  wchar_t appdata[MAX_PATH];
+  DWORD n = ::GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH);
+  if (n == 0 || n >= MAX_PATH) {
+    return false;
+  }
+  const std::wstring dir = std::wstring(appdata) + L"\\VibesBoxRbTool";
+  if (::CreateDirectoryW(dir.c_str(), nullptr) ||
+      ::GetLastError() == ERROR_ALREADY_EXISTS) {
+    return true;
+  }
+  return false;
+}
+
+bool IsUiDismissed() {
+  const std::wstring path = DismissMarkerPath();
+  if (path.empty()) {
+    return false;
+  }
+  const DWORD attrs = ::GetFileAttributesW(path.c_str());
+  return attrs != INVALID_FILE_ATTRIBUTES &&
+         (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
+void ClearUiDismissed() {
+  const std::wstring path = DismissMarkerPath();
+  if (!path.empty()) {
+    ::DeleteFileW(path.c_str());
+  }
+}
+
+void SetUiDismissed() {
+  if (!EnsureSupportDir()) {
+    return;
+  }
+  const std::wstring path = DismissMarkerPath();
+  if (path.empty()) {
+    return;
+  }
+  HANDLE file = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
+                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file != INVALID_HANDLE_VALUE) {
+    ::CloseHandle(file);
+  }
+}
+
 void LaunchUi() {
   if (IsUiRunning()) {
     return;
@@ -289,6 +344,7 @@ int RunDjWatchdog() {
   // Beobachten solange Run-Key gesetzt und EXE vorhanden.
   // Run-Key entfernt (Einstellung aus) → sauber beenden.
   // EXE fehlt (Deinstallation) → ebenfalls beenden.
+  // Nach manuellem X: nicht neu starten, bis alle DJ-Apps weg sind.
   for (;;) {
     if (!ExeStillInstalled()) {
       break;
@@ -296,7 +352,11 @@ int RunDjWatchdog() {
     if (!IsDjWatchAutostartEnabled()) {
       break;
     }
-    if (ProcessListContainsDj() && !IsUiRunning()) {
+    const bool dj_running = ProcessListContainsDj();
+    if (!dj_running) {
+      // Nächste DJ-Session darf Sync wieder automatisch öffnen.
+      ClearUiDismissed();
+    } else if (!IsUiRunning() && !IsUiDismissed()) {
       LaunchUi();
     }
     ::Sleep(kPollMs);
@@ -305,3 +365,5 @@ int RunDjWatchdog() {
   ::CloseHandle(mutex);
   return EXIT_SUCCESS;
 }
+
+void MarkUiUserDismissed() { SetUiDismissed(); }

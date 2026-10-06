@@ -24,4 +24,8 @@ bool ClearDjWatchAutostart();
 // True wenn der Run-Eintrag vorhanden ist.
 bool IsDjWatchAutostartEnabled();
 
+// Nutzer hat die UI per X geschlossen: bis alle DJ-Apps beendet sind
+// nicht automatisch neu starten. Autostart-Einstellung bleibt an.
+void MarkUiUserDismissed();
+
 #endif  // RUNNER_DJ_WATCHDOG_H_
