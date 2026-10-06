@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import 'dj_sqlite.dart';
 import 'library_match.dart';
 
 class TidalHit {
@@ -363,8 +364,7 @@ class TidalLookupStore extends ChangeNotifier {
   }
 
   File _file() {
-    final home = Platform.environment['HOME'] ?? Directory.systemTemp.path;
-    final dir = Directory('$home/Library/Application Support/VibesBoxRbTool');
+    final dir = toolSupportDir();
     if (!dir.existsSync()) dir.createSync(recursive: true);
     return File('${dir.path}/tidal_cache.json');
   }

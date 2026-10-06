@@ -124,12 +124,16 @@ if (-not $macOk) {
       }
     }
   }
-  if (-not $MacVersion) { $MacVersion = '1.0.2' }
+  if (-not $MacVersion) { $MacVersion = '1.0.5' }
 
+  # WICHTIG: zuerst die stabile Live-PKG. Versionsierte URLs wie
+  # VibesBox-Sync-1.0.2-mac.pkg duerfen eine neuere Mac-1.0.5 nicht ueberschreiben.
   $candidates = @(
-    "https://vibesbox.app/sync/VibesBox-Sync-$MacVersion-mac.pkg",
     "https://vibesbox.app/sync/VibesBox-Sync-mac.pkg"
   )
+  if ($MacVersion -and $MacVersion -ne '1.0.2') {
+    $candidates += "https://vibesbox.app/sync/VibesBox-Sync-$MacVersion-mac.pkg"
+  }
   foreach ($MacUrl in $candidates) {
     try {
       Write-Host "==> Lade Mac-PKG von Live: $MacUrl" -ForegroundColor Cyan

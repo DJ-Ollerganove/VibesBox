@@ -153,6 +153,7 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
   String? _markedPlayId;
   HistoryTrack? _transitionFrom;
   LiveSnapshot? _snapshot;
+  String _historyFp = '';
   String? _error;
   String? _seenIdentity;
   DateTime? _seenAt;
@@ -215,12 +216,13 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
   void _armIfAllowed() {
     if (_armed) return;
     if (!_gateReady || !_consentOk || _policy.blocks) return;
-    if (!widget.session.isConnected) return;
+    // History lokal pollen (wie auf dem Mac) – VibesBox-Connect nur für Push.
     _armed = true;
     unawaited(_startLibrary());
     unawaited(_startTidal());
     WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
-    _timer = Timer.periodic(const Duration(seconds: 2), (_) => _refresh());
+    // 1s wie typische Now-Playing-Tools – History soll sofort nachziehen.
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) => _refresh());
   }
 
   Future<void> _startTidal() async {
@@ -267,6 +269,8 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
       }
     }
     if (mounted) setState(() {});
+    // Sofort History lesen, nicht auf den nächsten Timer warten.
+    if (_armed) _refresh();
   }
 
   void _scheduleLibrarySync() {
@@ -301,16 +305,14 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     if (track == null) return true;
     final now = DateTime.now();
     final identity = track.identity;
+    // Neuester History-Song sofort anzeigen (auch nach App-Start).
+    // Idle erst, wenn derselbe Eintrag 10 Minuten lang unverändert bleibt.
     if (identity != _seenIdentity) {
       _seenIdentity = identity;
       _seenAt = now;
+      return false;
     }
-    var age = _seenAt == null ? Duration.zero : now.difference(_seenAt!);
-    final playedAt = track.playedAt;
-    if (playedAt != null) {
-      final fromPlayed = now.difference(playedAt);
-      if (fromPlayed > age) age = fromPlayed;
-    }
+    final age = _seenAt == null ? Duration.zero : now.difference(_seenAt!);
     return age >= _idleAfter;
   }
 
@@ -321,9 +323,17 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     return '${track.identity}|${track.bpm}|${track.musicalKey}';
   }
 
+  String _historyFingerprint(HistorySnapshot history) {
+    final head = history.tracks.isEmpty
+        ? 'empty'
+        : history.tracks.take(5).map((t) => t.identity).join(';');
+    return '${history.dbPath}|${history.historyName}|${history.tracks.length}|$head';
+  }
+
   void _refresh() {
     try {
       final snapshot = _liveReader.read();
+      final historyFp = _historyFingerprint(snapshot.history);
       final effective =
           _shouldTreatAsIdle(snapshot.history.nowPlaying)
               ? snapshot.asIdle()
@@ -331,9 +341,12 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
       final sameDeck = _deckKey(_snapshot) == _deckKey(effective);
       _snapshot = effective;
       if (!mounted) return;
-      if (!sameDeck || _error != null) {
+      if (!sameDeck || _error != null || historyFp != _historyFp) {
+        _historyFp = historyFp;
         setState(() => _error = null);
       }
+      // Song nur pushen wenn Sync-Senden an ist. Presence darf nowPlaying
+      // nicht mehr löschen (siehe pushPresence fieldMask).
       if (_wishboard.sendRecognition) {
         unawaited(widget.session.pushLive(effective));
       } else {
@@ -374,6 +387,7 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
       _source?.close();
       if (!mounted) return;
       setState(() {
+        _historyFp = '';
         _error = error.toString().replaceFirst('Bad state: ', '');
       });
     }
@@ -1229,6 +1243,8 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                   const SizedBox(height: 4),
                   if (_error != null)
                     _ErrorCard(message: _error!)
+                  else if (_armed && _source == null)
+                    _ErrorCard(message: toolI18n.text('pickDjSoftware'))
                   else
                     _NowPlayingCard(
                       hit: _shownHit,

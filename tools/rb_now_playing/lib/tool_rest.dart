@@ -248,26 +248,34 @@ class ToolRestClient {
     required String idToken,
     required String ownerUid,
     required Map<String, dynamic> payload,
+    /// Wenn gesetzt: nur diese Felder schreiben (nowPlaying bleibt erhalten).
+    List<String>? fieldMask,
   }) async {
     final name =
         'projects/$_projectId/databases/(default)/documents/rb_tool_live/$ownerUid';
     final uri = Uri.parse(
       'https://firestore.googleapis.com/v1/projects/$_projectId/databases/(default)/documents:commit',
     );
+    final fields = <String, dynamic>{
+      ...payload,
+      'updatedAt': DateTime.now().toUtc(),
+    };
+    final write = <String, dynamic>{
+      'update': {
+        'name': name,
+        'fields': _encodeFields(fields),
+      },
+    };
+    if (fieldMask != null && fieldMask.isNotEmpty) {
+      final paths = <String>{...fieldMask, 'updatedAt'};
+      write['updateMask'] = {
+        'fieldPaths': paths.toList(),
+      };
+    }
     await _postJson(
       uri,
       {
-        'writes': [
-          {
-            'update': {
-              'name': name,
-              'fields': _encodeFields({
-                ...payload,
-                'updatedAt': DateTime.now().toUtc(),
-              }),
-            },
-          },
-        ],
+        'writes': [write],
       },
       bearer: idToken,
     );
