@@ -42,6 +42,7 @@ class HistorySnapshot {
     required this.tracks,
     this.recent = const [],
     required this.readAt,
+    this.debugNote,
   });
 
   final String dbPath;
@@ -50,6 +51,8 @@ class HistorySnapshot {
   /// Gespielte Titel der letzten 12 Stunden, auch aus älteren Playlists.
   final List<HistoryTrack> recent;
   final DateTime readAt;
+  /// Diagnose für die UI: Zähler, Open-Modus, leere-History-Hinweis.
+  final String? debugNote;
 
   HistoryTrack? get nowPlaying => tracks.isEmpty ? null : tracks.first;
 }
@@ -98,13 +101,34 @@ class RekordboxHistoryReader {
 
   HistorySnapshot read() {
     // Wie what's-now-playing: JEDEN Poll neue Connection.
-    // Windows aktualisiert WAL sonst nicht zuverlässig auf einer
-    // langlebigen Readonly-Verbindung (Mac oft schon).
     close();
     _ensureOpen();
     final db = _db!;
-    // Primär: global neuester History-Song (WNP-Query) → Echtzeit.
-    final latest = db.select('''
+    final path = _dbPath ?? '';
+    final wal = File('$path-wal');
+    final songCount = _count(db, 'djmdSongHistory');
+    final contentCount = _count(db, 'djmdContent');
+    final via = _openedViaCopy ? 'copy' : 'direct';
+    final walNote = wal.existsSync()
+        ? 'WAL ${(wal.lengthSync() / 1024).round()}kb'
+        : 'kein-WAL';
+
+    var session = _mapHistoryRows(_selectLatestHistory(db, limit: 1));
+    if (session.$1.isNotEmpty) {
+      final hid = _latestHistoryId(db);
+      if (hid != null) {
+        final full = _mapHistoryRows(_selectHistoryForId(db, hid, limit: 50));
+        if (full.$1.isNotEmpty) session = full;
+      }
+    }
+    if (session.$1.isEmpty && songCount > 0) {
+      session = _mapHistoryRows(_selectHistoryAny(db, limit: 50));
+    }
+
+    List<HistoryTrack> recent = const [];
+    try {
+      final since = DateTime.now().subtract(const Duration(hours: 12));
+      final recentRows = db.select('''
 SELECT
   sh.TrackNo AS trackNo,
   sh.created_at AS playedAt,
@@ -120,23 +144,104 @@ LEFT JOIN djmdHistory h ON h.ID = sh.HistoryID
 LEFT JOIN djmdContent c ON c.ID = sh.ContentID
 LEFT JOIN djmdArtist a ON a.ID = c.ArtistID
 LEFT JOIN djmdKey k ON k.ID = c.KeyID
-ORDER BY sh.created_at DESC, sh.TrackNo DESC
-LIMIT 1
-''');
-    var session = _mapHistoryRows(latest);
+WHERE IFNULL(h.rb_local_deleted, 0) = 0
+  AND sh.created_at >= ?
+ORDER BY sh.created_at DESC
+LIMIT 120
+''', [_rekordboxStamp(since)]);
+      recent = _mapHistoryRows(recentRows).$1;
+    } catch (_) {
+      recent = const [];
+    }
 
-    // Session-Liste zum zuletzt gespielten Song (für recent/UI).
-    if (session.$1.isNotEmpty) {
-      final historyIdRows = db.select('''
-SELECT sh.HistoryID AS hid
+    final emptyHint = session.$1.isEmpty
+        ? (songCount == 0
+            ? (contentCount > 0
+                ? 'History-Tabelle leer – Track auf Deck laden (nicht nur Preview)'
+                : 'DB ohne Tracks – falscher master.db Pfad?')
+            : 'History-Zeilen=$songCount aber Query leer')
+        : null;
+    final debug = [
+      'hist=$songCount',
+      'lib=$contentCount',
+      via,
+      walNote,
+      if (emptyHint != null) emptyHint,
+    ].join(' · ');
+
+    return HistorySnapshot(
+      dbPath: path,
+      historyName: session.$2,
+      tracks: session.$1,
+      recent: recent,
+      readAt: DateTime.now(),
+      debugNote: debug,
+    );
+  }
+
+  int _count(Database db, String table) {
+    try {
+      final n = db.select('SELECT count(*) AS n FROM "$table"').first['n'];
+      return _asInt(n) ?? 0;
+    } catch (_) {
+      return -1;
+    }
+  }
+
+  String? _latestHistoryId(Database db) {
+    for (final sql in const [
+      'SELECT sh.HistoryID AS hid FROM djmdSongHistory sh ORDER BY sh.created_at DESC, sh.TrackNo DESC LIMIT 1',
+      'SELECT sh.HistoryID AS hid FROM djmdSongHistory sh ORDER BY sh.ID DESC LIMIT 1',
+      'SELECT sh.HistoryID AS hid FROM djmdSongHistory sh LIMIT 1',
+    ]) {
+      try {
+        final rows = db.select(sql);
+        if (rows.isEmpty) continue;
+        final hid = rows.first['hid']?.toString();
+        if (hid != null && hid.isNotEmpty) return hid;
+      } catch (_) {
+        continue;
+      }
+    }
+    return null;
+  }
+
+  ResultSet _selectLatestHistory(Database db, {required int limit}) {
+    for (final order in const [
+      'sh.created_at DESC, sh.TrackNo DESC',
+      'sh.ID DESC',
+      'sh.rowid DESC',
+    ]) {
+      try {
+        return db.select('''
+SELECT
+  sh.TrackNo AS trackNo,
+  sh.created_at AS playedAt,
+  h.Name AS historyName,
+  c.Title AS title,
+  a.Name AS artist,
+  c.BPM AS bpm,
+  k.ScaleName AS musicalKey,
+  c.Length AS lengthSec,
+  c.FolderPath AS location
 FROM djmdSongHistory sh
-ORDER BY sh.created_at DESC, sh.TrackNo DESC
-LIMIT 1
+LEFT JOIN djmdHistory h ON h.ID = sh.HistoryID
+LEFT JOIN djmdContent c ON c.ID = sh.ContentID
+LEFT JOIN djmdArtist a ON a.ID = c.ArtistID
+LEFT JOIN djmdKey k ON k.ID = c.KeyID
+ORDER BY $order
+LIMIT $limit
 ''');
-      if (historyIdRows.isNotEmpty) {
-        final hid = historyIdRows.first['hid']?.toString();
-        if (hid != null && hid.isNotEmpty) {
-          final rows = db.select('''
+      } catch (_) {
+        continue;
+      }
+    }
+    return _selectHistoryAny(db, limit: limit);
+  }
+
+  ResultSet _selectHistoryForId(Database db, String hid, {required int limit}) {
+    try {
+      return db.select('''
 SELECT
   sh.TrackNo AS trackNo,
   sh.created_at AS playedAt,
@@ -154,17 +259,15 @@ LEFT JOIN djmdArtist a ON a.ID = c.ArtistID
 LEFT JOIN djmdKey k ON k.ID = c.KeyID
 WHERE sh.HistoryID = ?
 ORDER BY sh.TrackNo DESC
-LIMIT 50
+LIMIT $limit
 ''', [hid]);
-          final full = _mapHistoryRows(rows);
-          if (full.$1.isNotEmpty) session = full;
-        }
-      }
+    } catch (_) {
+      return _selectHistoryAny(db, limit: limit);
     }
-    List<HistoryTrack> recent = const [];
-    try {
-      final since = DateTime.now().subtract(const Duration(hours: 12));
-      final recentRows = db.select('''
+  }
+
+  ResultSet _selectHistoryAny(Database db, {required int limit}) {
+    return db.select('''
 SELECT
   sh.TrackNo AS trackNo,
   sh.created_at AS playedAt,
@@ -176,28 +279,12 @@ SELECT
   c.Length AS lengthSec,
   c.FolderPath AS location
 FROM djmdSongHistory sh
-JOIN djmdHistory h ON h.ID = sh.HistoryID
+LEFT JOIN djmdHistory h ON h.ID = sh.HistoryID
 LEFT JOIN djmdContent c ON c.ID = sh.ContentID
 LEFT JOIN djmdArtist a ON a.ID = c.ArtistID
 LEFT JOIN djmdKey k ON k.ID = c.KeyID
-WHERE IFNULL(h.Attribute, 0) != 1
-  AND IFNULL(h.rb_local_deleted, 0) = 0
-  AND sh.created_at >= ?
-ORDER BY sh.created_at DESC
-LIMIT 120
-''', [_rekordboxStamp(since)]);
-      recent = _mapHistoryRows(recentRows).$1;
-    } catch (_) {
-      recent = const [];
-    }
-
-    return HistorySnapshot(
-      dbPath: _dbPath!,
-      historyName: session.$2,
-      tracks: session.$1,
-      recent: recent,
-      readAt: DateTime.now(),
-    );
+LIMIT $limit
+''');
   }
 
   (List<HistoryTrack>, String?) _mapHistoryRows(ResultSet rows) {

@@ -2701,6 +2701,7 @@ class _DjHistoryPanel extends StatelessWidget {
         ? '–'
         : (path.length <= 64 ? path : '…${path.substring(path.length - 60)}');
     final session = (hist?.historyName ?? '').trim();
+    final debug = (hist?.debugNote ?? '').trim();
     final status = hist == null
         ? toolI18n.text('noHistory')
         : (tracks.isEmpty
@@ -2709,7 +2710,7 @@ class _DjHistoryPanel extends StatelessWidget {
                 '${session.isEmpty ? "" : " · $session"}');
 
     return Container(
-      constraints: const BoxConstraints(maxHeight: 150),
+      constraints: const BoxConstraints(maxHeight: 168),
       padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
       decoration: BoxDecoration(
         color: const Color(0x66101830),
@@ -2736,11 +2737,25 @@ class _DjHistoryPanel extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(color: Colors.white38, fontSize: 10),
           ),
+          if (debug.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Text(
+              debug,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: tracks.isEmpty
+                    ? const Color(0xFFFFAB91)
+                    : Colors.white38,
+                fontSize: 10,
+              ),
+            ),
+          ],
           const SizedBox(height: 4),
           Expanded(
             child: tracks.isEmpty
                 ? Text(
-                    toolI18n.text('noHistory'),
+                    debug.isNotEmpty ? debug : toolI18n.text('noHistory'),
                     style: const TextStyle(color: Colors.white54, fontSize: 11),
                   )
                 : ListView.builder(

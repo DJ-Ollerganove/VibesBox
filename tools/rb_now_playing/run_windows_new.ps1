@@ -6,11 +6,11 @@
 
 .DESCRIPTION
   Default-Branch: cursor/windows-sync-all-in-one-b710
-  (History-Echtzeit + History-Panel + Frameless + DJ-Autostart, v1.0.6).
+  (History-Echtzeit + History-Panel + Frameless + DJ-Autostart, v1.0.7).
 
 .NOTES
   Nur ASCII in dieser Datei (Windows PowerShell 5.1).
-  Bricht ab, wenn pubspec nicht 1.0.6 ist (alte 1.0.5-Builds verhindern).
+  Bricht ab, wenn pubspec nicht 1.0.7 ist (alte 1.0.5-Builds verhindern).
 #>
 
 [CmdletBinding()]
@@ -103,9 +103,9 @@ if ($pubspecEarly -notmatch '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)') {
 }
 $verEarly = $Matches[1]
 Write-Host ("pubspec nach pull: {0}" -f $verEarly) -ForegroundColor Yellow
-if ($verEarly -ne '1.0.6') {
+if ($verEarly -ne '1.0.7') {
   throw @"
-FALSCHE VERSION nach git pull: $verEarly (erwartet 1.0.6).
+FALSCHE VERSION nach git pull: $verEarly (erwartet 1.0.7).
 Du bist nicht auf dem Merge-Stand. Bitte EXAKT:
 
   cd C:\Users\Ollerganove\dev\VibesBox
@@ -114,7 +114,7 @@ Du bist nicht auf dem Merge-Stand. Bitte EXAKT:
   git pull origin cursor/windows-sync-all-in-one-b710
   Get-Content tools\rb_now_playing\pubspec.yaml | Select-String '^version:'
 
-Muss zeigen: version: 1.0.6+1
+Muss zeigen: version: 1.0.7+1
 Dann erst: cd tools\rb_now_playing ; .\run_windows_new.ps1
 "@
 }
@@ -155,7 +155,7 @@ if (-not (Test-Path '.\windows\runner\dj_watchdog.cpp')) {
   throw 'dj_watchdog.cpp fehlt. Falscher Branch/Stand.'
 }
 if ($mainDart -notlike '*_DjHistoryPanel*' -or $mainDart -notlike '*_liveHistory*') {
-  throw 'main.dart ohne History-Panel. Brauche Song-Detection-Merge (v1.0.6).'
+  throw 'main.dart ohne History-Panel. Brauche Song-Detection-Merge (v1.0.7).'
 }
 if ($rbHist -notlike '*ORDER BY sh.created_at DESC*') {
   throw 'rekordbox_history.dart ohne Live-Latest-Query. Falscher Stand.'
@@ -172,8 +172,8 @@ if ($pubspec -notmatch '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)') {
   throw 'Version in pubspec.yaml nicht lesbar.'
 }
 $AppVersion = $Matches[1]
-if ($AppVersion -ne '1.0.6') {
-  throw ("Falsche Version $AppVersion - erwartet 1.0.6 (Song-Detection-Merge).")
+if ($AppVersion -ne '1.0.7') {
+  throw ("Falsche Version $AppVersion - erwartet 1.0.7 (Song-Detection-Merge).")
 }
 $setup = Join-Path $ToolRoot ("dist\VibesBoxSync-Setup-{0}.exe" -f $AppVersion)
 $exe = Join-Path $ToolRoot 'build\windows\x64\runner\Release\VibesBoxSync.exe'
@@ -211,7 +211,7 @@ if (-not $NoStart) {
 Write-Host ""
 Write-Host "====================================================" -ForegroundColor Green
 Write-Host ("NEUER BUILD  Branch={0}  Version={1}" -f $Branch, $AppVersion) -ForegroundColor Green
-Write-Host "Muss zeigen: History-Kasten mit v1.0.6 (nicht 1.0.5)." -ForegroundColor Yellow
+Write-Host "Muss zeigen: History-Kasten mit v1.0.7 (nicht 1.0.5)." -ForegroundColor Yellow
 Write-Host "Features: History-Live + rahmenlos + Mit der Dj-Software starten" -ForegroundColor Green
 Write-Host "====================================================" -ForegroundColor Green
 if (Test-Path $setup) {
