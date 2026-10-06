@@ -99,6 +99,7 @@ class RekordboxHistoryReader {
   HistorySnapshot read() {
     // Direkt geöffnete DB sieht WAL-Updates von Rekordbox.
     // Kopie muss pro Poll erneuert werden, sonst bleibt sie stehen.
+    // Windows: immer Snapshot (siehe _ensureOpen).
     if (_db != null && _openedViaCopy) {
       close();
     }
@@ -134,7 +135,33 @@ ORDER BY sh.TrackNo DESC
 LIMIT 50
 ''');
 
-    final session = _mapHistoryRows(rows);
+    var session = _mapHistoryRows(rows);
+    // Fallback: global neuester History-Eintrag (wie what's-now-playing),
+    // falls die Session-Subquery leer bleibt.
+    if (session.$1.isEmpty) {
+      final fallback = db.select('''
+SELECT
+  sh.TrackNo AS trackNo,
+  sh.created_at AS playedAt,
+  h.Name AS historyName,
+  c.Title AS title,
+  a.Name AS artist,
+  c.BPM AS bpm,
+  k.ScaleName AS musicalKey,
+  c.Length AS lengthSec,
+  c.FolderPath AS location
+FROM djmdSongHistory sh
+JOIN djmdHistory h ON h.ID = sh.HistoryID
+LEFT JOIN djmdContent c ON c.ID = sh.ContentID
+LEFT JOIN djmdArtist a ON a.ID = c.ArtistID
+LEFT JOIN djmdKey k ON k.ID = c.KeyID
+WHERE IFNULL(h.Attribute, 0) != 1
+  AND IFNULL(h.rb_local_deleted, 0) = 0
+ORDER BY sh.created_at DESC, sh.TrackNo DESC
+LIMIT 50
+''');
+      session = _mapHistoryRows(fallback);
+    }
     List<HistoryTrack> recent = const [];
     try {
       final since = DateTime.now().subtract(const Duration(hours: 12));
@@ -320,7 +347,21 @@ LIMIT 1
     _dbPath = path;
 
     _key ??= rekordboxSqlCipherKey();
+    final preferCopy = Platform.isWindows;
     Object? directError;
+    Object? copyError;
+
+    if (preferCopy) {
+      try {
+        final copyPath = copySqliteForRead(path, 'rekordbox_master_copy.db');
+        _db = _openEncrypted(copyPath);
+        _openedViaCopy = true;
+        return;
+      } catch (error) {
+        copyError = error;
+      }
+    }
+
     try {
       _db = _openEncrypted(path);
       _openedViaCopy = false;
@@ -334,30 +375,46 @@ LIMIT 1
       final copyPath = copySqliteForRead(path, 'rekordbox_master_copy.db');
       _db = _openEncrypted(copyPath);
       _openedViaCopy = true;
-    } catch (copyError) {
+    } catch (error) {
       throw StateError(
-        '${toolI18n.text('errRbOpen')}\n$path\n$directError\n$copyError',
+        '${toolI18n.text('errRbOpen')}\n$path\n'
+        '${directError ?? copyError}\n$error',
       );
     }
   }
 
   Database _openEncrypted(String path) {
-    final db = sqlite3.open(path, mode: OpenMode.readOnly);
-    try {
-      db.execute("PRAGMA cipher = 'sqlcipher'");
-      db.execute('PRAGMA legacy = 4');
-      db.execute("PRAGMA key = '$_key'");
-      db.execute('PRAGMA query_only = ON');
-      db.select('SELECT count(*) FROM sqlite_master');
-      // Sanity: History-Tabellen müssen existieren.
-      db.select(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='djmdSongHistory' LIMIT 1",
+    return withSqliteRetry(() {
+      final uri = Uri.file(File(path).absolute.path).replace(
+        queryParameters: const {'mode': 'ro'},
       );
-      return db;
-    } catch (error) {
-      db.close();
-      rethrow;
-    }
+      Database db;
+      try {
+        db = sqlite3.open(uri.toString(), mode: OpenMode.readOnly, uri: true);
+      } catch (_) {
+        db = sqlite3.open(path, mode: OpenMode.readOnly);
+      }
+      try {
+        // sqlite3mc: SQLCipher-4-Kompatibilität für Rekordbox master.db
+        db.execute("PRAGMA cipher = 'sqlcipher'");
+        db.execute('PRAGMA legacy = 4');
+        try {
+          db.execute('PRAGMA cipher_compatibility = 4');
+        } catch (_) {}
+        db.execute("PRAGMA key = '$_key'");
+        db.execute('PRAGMA query_only = ON');
+        db.execute('PRAGMA read_uncommitted = 1');
+        db.select('SELECT count(*) FROM sqlite_master');
+        // Sanity: History-Tabellen müssen existieren.
+        db.select(
+          "SELECT 1 FROM sqlite_master WHERE type='table' AND name='djmdSongHistory' LIMIT 1",
+        );
+        return db;
+      } catch (error) {
+        db.close();
+        rethrow;
+      }
+    });
   }
 }
 

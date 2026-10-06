@@ -294,7 +294,8 @@ List<String> _seratoSqliteCandidates() {
 
 File? _latestSessionFile(String folder) {
   if (folder.isEmpty) return null;
-  final dir = Directory('$folder/History/Sessions');
+  final sep = Platform.pathSeparator;
+  final dir = Directory('$folder${sep}History${sep}Sessions');
   if (!dir.existsSync()) return null;
   File? best;
   DateTime? bestTime;
