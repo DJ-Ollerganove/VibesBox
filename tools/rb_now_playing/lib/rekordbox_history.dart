@@ -434,12 +434,46 @@ LIMIT 1
 
     _key ??= rekordboxSqlCipherKey();
     Object? directError;
+    Object? copyError;
 
-    // MAC_LIVE_OPEN: live open first (WAL), copy only on lock.
-    // Copy = DB+WAL without live SHM (dj_sqlite.copySqliteForRead).
+    // WIN_WAL_COPY: Unter Windows gelingt live open oft OHNE WAL zu sehen
+    // (hist=0, lib voll). Deshalb immer frischer Snapshot DB+WAL (ohne Live-SHM).
+    // Mac: live first (sieht WAL), Kopie nur bei Lock.
+    if (Platform.isWindows) {
+      try {
+        final copyPath = copySqliteForRead(path, 'rekordbox_master_copy.db');
+        _db = _openEncrypted(copyPath);
+        _openedViaCopy = true;
+        return;
+      } catch (error) {
+        copyError = error;
+      }
+    }
+
     try {
       _db = _openEncrypted(path);
       _openedViaCopy = false;
+      // Windows-Fallback nach fehlgeschlagener Kopie: wenn live hist=0 aber
+      // WAL existiert, Kopie nochmal versuchen (Lock war kurz).
+      if (Platform.isWindows) {
+        final wal = File('$path-wal');
+        final liveHist = _count(_db!, 'djmdSongHistory');
+        if (liveHist == 0 && wal.existsSync() && wal.lengthSync() > 0) {
+          try {
+            final copyPath =
+                copySqliteForRead(path, 'rekordbox_master_copy.db');
+            final copyDb = _openEncrypted(copyPath);
+            final copyHist = _count(copyDb, 'djmdSongHistory');
+            if (copyHist > liveHist) {
+              _db!.close();
+              _db = copyDb;
+              _openedViaCopy = true;
+              return;
+            }
+            copyDb.close();
+          } catch (_) {}
+        }
+      }
       return;
     } catch (error) {
       directError = error;
@@ -451,7 +485,8 @@ LIMIT 1
       _openedViaCopy = true;
     } catch (error) {
       throw StateError(
-        '${toolI18n.text('errRbOpen')}\n$path\n$directError\n$error',
+        '${toolI18n.text('errRbOpen')}\n$path\n'
+        '${copyError ?? directError}\n$error',
       );
     }
   }
