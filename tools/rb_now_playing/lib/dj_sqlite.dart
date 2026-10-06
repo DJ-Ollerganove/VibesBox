@@ -79,11 +79,17 @@ String copySqliteForRead(String path, String copyName) {
         dst.deleteSync();
       }
     } catch (_) {
-      // Nie WAL/SHM einer alten Kopie mit neuer Hauptdatei mischen.
       try {
         if (dst.existsSync()) dst.deleteSync();
       } catch (_) {}
     }
+  }
+  final srcWal = File('$path-wal');
+  final dstWal = File('${copy.path}-wal');
+  if (srcWal.existsSync() &&
+      srcWal.lengthSync() > 0 &&
+      (!dstWal.existsSync() || dstWal.lengthSync() == 0)) {
+    throw StateError('WAL-Kopie fehlgeschlagen: $path-wal');
   }
   return copy.path;
 }
@@ -136,14 +142,19 @@ bool _isTransientIoOrLock(Object error) {
 }
 
 Database _openReadonlyUri(String path) {
-  // URI mode: Windows-Pfade ohne Leading-Slash korrekt als file:///C:/...
-  final uri = Uri.file(File(path).absolute.path).replace(
-    queryParameters: const {'mode': 'ro'},
-  );
+  // WAL: Reader braucht oft Schreibzugriff auf -shm, sonst nur checkpointed Stand
+  // (History bleibt dann leer, Library wirkt voll).
   try {
-    return sqlite3.open(uri.toString(), mode: OpenMode.readOnly, uri: true);
+    return sqlite3.open(path, mode: OpenMode.readWrite);
   } catch (_) {
-    return sqlite3.open(path, mode: OpenMode.readOnly);
+    final uri = Uri.file(File(path).absolute.path).replace(
+      queryParameters: const {'mode': 'ro'},
+    );
+    try {
+      return sqlite3.open(uri.toString(), mode: OpenMode.readOnly, uri: true);
+    } catch (_) {
+      return sqlite3.open(path, mode: OpenMode.readOnly);
+    }
   }
 }
 

@@ -125,6 +125,16 @@ class RekordboxHistoryReader {
       session = _mapHistoryRows(_selectHistoryAny(db, limit: 50));
     }
 
+    // History-Tabelle oft leer, solange Rekordbox nur in WAL schreibt
+    // oder noch keine History-Session angelegt hat → zuletzt geänderte Tracks.
+    var fromLibrary = false;
+    if (session.$1.isEmpty && contentCount > 0) {
+      try {
+        session = _mapHistoryRows(_selectLatestLibrary(db, limit: 20));
+        fromLibrary = session.$1.isNotEmpty;
+      } catch (_) {}
+    }
+
     List<HistoryTrack> recent = const [];
     try {
       final since = DateTime.now().subtract(const Duration(hours: 12));
@@ -157,10 +167,12 @@ LIMIT 120
     final emptyHint = session.$1.isEmpty
         ? (songCount == 0
             ? (contentCount > 0
-                ? 'History-Tabelle leer – Track auf Deck laden (nicht nur Preview)'
+                ? 'History-Tabelle leer (WAL nicht lesbar oder keine Session)'
                 : 'DB ohne Tracks – falscher master.db Pfad?')
             : 'History-Zeilen=$songCount aber Query leer')
-        : null;
+        : (fromLibrary
+            ? 'History leer – zeige zuletzt geänderte Library-Tracks'
+            : null);
     final debug = [
       'hist=$songCount',
       'lib=$contentCount',
@@ -264,6 +276,31 @@ LIMIT $limit
     } catch (_) {
       return _selectHistoryAny(db, limit: limit);
     }
+  }
+
+  ResultSet _selectLatestLibrary(Database db, {required int limit}) {
+    final order = sqliteHasColumn(db, 'djmdContent', 'updated_at')
+        ? 'c.updated_at DESC, c.created_at DESC'
+        : 'c.ID DESC';
+    return db.select('''
+SELECT
+  0 AS trackNo,
+  c.updated_at AS playedAt,
+  'Library' AS historyName,
+  c.Title AS title,
+  a.Name AS artist,
+  c.BPM AS bpm,
+  k.ScaleName AS musicalKey,
+  c.Length AS lengthSec,
+  c.FolderPath AS location
+FROM djmdContent c
+LEFT JOIN djmdArtist a ON a.ID = c.ArtistID
+LEFT JOIN djmdKey k ON k.ID = c.KeyID
+WHERE IFNULL(c.rb_local_deleted, 0) = 0
+  AND IFNULL(c.Title, '') != ''
+ORDER BY $order
+LIMIT $limit
+''');
   }
 
   ResultSet _selectHistoryAny(Database db, {required int limit}) {
@@ -432,15 +469,26 @@ LIMIT 1
     _dbPath = path;
 
     _key ??= rekordboxSqlCipherKey();
-    Object? directError;
+    Object? lastError;
 
-    // Live öffnen (WAL). Kopie nur bei Exclusive-Lock.
+    // Windows: Snapshot inkl. WAL zuerst – Readonly sieht oft keine WAL-History.
+    if (Platform.isWindows) {
+      try {
+        final copyPath = copySqliteForRead(path, 'rekordbox_master_copy.db');
+        _db = _openEncrypted(copyPath);
+        _openedViaCopy = true;
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
     try {
       _db = _openEncrypted(path);
       _openedViaCopy = false;
       return;
     } catch (error) {
-      directError = error;
+      lastError = error;
     }
 
     try {
@@ -449,22 +497,27 @@ LIMIT 1
       _openedViaCopy = true;
     } catch (error) {
       throw StateError(
-        '${toolI18n.text('errRbOpen')}\n$path\n$directError\n$error',
+        '${toolI18n.text('errRbOpen')}\n$path\n$lastError\n$error',
       );
     }
   }
 
   Database _openEncrypted(String path) {
     return withSqliteRetry(() {
-      // WNP-Reihenfolge: URI mode=ro, dann key + cipher_compatibility.
-      final uri = Uri.file(File(path).absolute.path).replace(
-        queryParameters: const {'mode': 'ro'},
-      );
-      Database db;
+      Database? db;
+      Object? openError;
       try {
-        db = sqlite3.open(uri.toString(), mode: OpenMode.readOnly, uri: true);
-      } catch (_) {
-        db = sqlite3.open(path, mode: OpenMode.readOnly);
+        db = sqlite3.open(path, mode: OpenMode.readWrite);
+      } catch (error) {
+        openError = error;
+        try {
+          final uri = Uri.file(File(path).absolute.path).replace(
+            queryParameters: const {'mode': 'ro'},
+          );
+          db = sqlite3.open(uri.toString(), mode: OpenMode.readOnly, uri: true);
+        } catch (_) {
+          db = sqlite3.open(path, mode: OpenMode.readOnly);
+        }
       }
       try {
         db.execute("PRAGMA cipher = 'sqlcipher'");
@@ -474,18 +527,14 @@ LIMIT 1
         } catch (_) {}
         db.execute('PRAGMA key="$_key"');
         db.execute('PRAGMA read_uncommitted = 1');
-        // query_only erst nach erfolgreichem Decrypt-Check
         db.select('SELECT count(*) FROM sqlite_master');
         db.select(
           "SELECT 1 FROM sqlite_master WHERE type='table' AND name='djmdSongHistory' LIMIT 1",
         );
-        try {
-          db.execute('PRAGMA query_only = ON');
-        } catch (_) {}
         return db;
       } catch (error) {
         db.close();
-        rethrow;
+        throw StateError('$error${openError == null ? '' : '\n$openError'}');
       }
     });
   }
