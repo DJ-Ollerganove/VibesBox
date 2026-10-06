@@ -348,6 +348,8 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
         _historyFp = historyFp;
         setState(() => _error = null);
       }
+      // Song nur pushen wenn Sync-Senden an ist. Presence darf nowPlaying
+      // nicht mehr löschen (siehe pushPresence fieldMask).
       if (_wishboard.sendRecognition) {
         unawaited(widget.session.pushLive(effective));
       } else {
