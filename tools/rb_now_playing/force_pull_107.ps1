@@ -1,7 +1,4 @@
 #Requires -Version 5.1
-<#
-.SYNOPSIS
-  Alias: weiterleiten auf force_pull_110.ps1 (nur 1.0.10).
-#>
+<# Alias auf 1.0.11 #>
 $ErrorActionPreference = 'Stop'
-& (Join-Path $PSScriptRoot 'force_pull_110.ps1')
+& (Join-Path $PSScriptRoot 'force_pull_111.ps1')
