@@ -21,6 +21,8 @@
 [CmdletBinding()]
 param(
   [switch]$SkipFlutterBuild,
+  # Ohne flutter clean - deutlich schneller bei kleinen Aenderungen.
+  [switch]$Fast,
   [switch]$ZipOnly,
   [string]$FlutterBat = "$env:USERPROFILE\Downloads\flutter_windows_3.38.4-stable\flutter\bin\flutter.bat"
 )
