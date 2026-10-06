@@ -23,60 +23,66 @@ class ToolBackdrop extends StatelessWidget {
         const _FrozenBackdrop(),
         child,
         const _LiveFrame(),
-        // Nur die Titelleiste – kein Vollflächen-Stack (sonst Hover-Overlay
-        // vom Close-Button über die ganze App).
-        if (!kIsWeb && Platform.isWindows)
-          const Positioned(
+        // Getrennt positioniert: keine volle Titelleisten-Row (die wurde
+        // beim Hover weiß/grau). Nur unsichtbare Drag-Zone + kleines X.
+        if (!kIsWeb && Platform.isWindows) ...[
+          Positioned(
             top: 0,
             left: 0,
-            right: 0,
-            height: 36,
-            child: _WindowsFramelessChrome(),
+            right: 40,
+            height: 28,
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onPanStart: (_) => WindowChrome.startDrag(),
+            ),
           ),
+          const Positioned(
+            top: 4,
+            right: 6,
+            child: _WindowsCloseButton(),
+          ),
+        ],
       ],
     );
   }
 }
 
-/// Drag-Zone + Close, weil Windows keine Traffic-Lights wie macOS hat.
-class _WindowsFramelessChrome extends StatelessWidget {
-  const _WindowsFramelessChrome();
+/// Close ohne Material/Tooltip/IconButton – die erzeugen den weißen Hover-Streifen.
+class _WindowsCloseButton extends StatefulWidget {
+  const _WindowsCloseButton();
+
+  @override
+  State<_WindowsCloseButton> createState() => _WindowsCloseButtonState();
+}
+
+class _WindowsCloseButtonState extends State<_WindowsCloseButton> {
+  bool _hover = false;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onPanStart: (_) => WindowChrome.startDrag(),
-            child: const SizedBox.expand(),
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => WindowChrome.close(),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 80),
+          width: 28,
+          height: 28,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: _hover ? const Color(0x55F44336) : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: const Icon(
+            Icons.close,
+            color: Color(0xFFF44336),
+            size: 16,
           ),
         ),
-        // Kein IconButton/Material: Hover-Splash würde sonst grau/weiß flashen.
-        Tooltip(
-          message: toolI18n.text('close'),
-          waitDuration: const Duration(milliseconds: 600),
-          child: MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () => WindowChrome.close(),
-              child: const SizedBox(
-                width: 36,
-                height: 36,
-                child: Center(
-                  child: Icon(
-                    Icons.close,
-                    color: Color(0xFFF44336),
-                    size: 18,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
+      ),
     );
   }
 }

@@ -375,6 +375,16 @@ void Win32Window::ApplyFramelessChrome(HWND const window) {
   COLORREF border = DWMWA_COLOR_NONE;
   DwmSetWindowAttribute(window, DWMWA_BORDER_COLOR, &border, sizeof(border));
 
+  // Keine weiße Caption-Leiste beim Hover oben rechts (Win11 DWM).
+#ifndef DWMWA_CAPTION_COLOR
+#define DWMWA_CAPTION_COLOR 35
+#endif
+#ifndef DWMWA_COLOR_NONE
+#define DWMWA_COLOR_NONE 0xFFFFFFFE
+#endif
+  COLORREF caption = DWMWA_COLOR_NONE;
+  DwmSetWindowAttribute(window, DWMWA_CAPTION_COLOR, &caption, sizeof(caption));
+
   // 1px Bottom-Margin: Schatten ohne sichtbaren Frame (wie window_manager).
   MARGINS margins = {0, 0, 0, 1};
   DwmExtendFrameIntoClientArea(window, &margins);
