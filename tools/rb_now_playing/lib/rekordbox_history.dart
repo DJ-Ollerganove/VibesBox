@@ -125,15 +125,8 @@ class RekordboxHistoryReader {
       session = _mapHistoryRows(_selectHistoryAny(db, limit: 50));
     }
 
-    // History-Tabelle oft leer, solange Rekordbox nur in WAL schreibt
-    // oder noch keine History-Session angelegt hat → zuletzt geänderte Tracks.
-    var fromLibrary = false;
-    if (session.$1.isEmpty && contentCount > 0) {
-      try {
-        session = _mapHistoryRows(_selectLatestLibrary(db, limit: 20));
-        fromLibrary = session.$1.isNotEmpty;
-      } catch (_) {}
-    }
+    // Kein Library-Fallback: updated_at ändert sich schon beim Laden aufs Deck.
+    // Now-Playing nur aus djmdSongHistory (wie Mac: erst nach Play).
 
     List<HistoryTrack> recent = const [];
     try {
@@ -167,12 +160,10 @@ LIMIT 120
     final emptyHint = session.$1.isEmpty
         ? (songCount == 0
             ? (contentCount > 0
-                ? 'History-Tabelle leer (WAL nicht lesbar oder keine Session)'
+                ? 'Warte auf Play (History noch leer – Laden allein zählt nicht)'
                 : 'DB ohne Tracks – falscher master.db Pfad?')
             : 'History-Zeilen=$songCount aber Query leer')
-        : (fromLibrary
-            ? 'History leer – zeige zuletzt geänderte Library-Tracks'
-            : null);
+        : null;
     final debug = [
       'hist=$songCount',
       'lib=$contentCount',
@@ -276,31 +267,6 @@ LIMIT $limit
     } catch (_) {
       return _selectHistoryAny(db, limit: limit);
     }
-  }
-
-  ResultSet _selectLatestLibrary(Database db, {required int limit}) {
-    final order = sqliteHasColumn(db, 'djmdContent', 'updated_at')
-        ? 'c.updated_at DESC, c.created_at DESC'
-        : 'c.ID DESC';
-    return db.select('''
-SELECT
-  0 AS trackNo,
-  c.updated_at AS playedAt,
-  'Library' AS historyName,
-  c.Title AS title,
-  a.Name AS artist,
-  c.BPM AS bpm,
-  k.ScaleName AS musicalKey,
-  c.Length AS lengthSec,
-  c.FolderPath AS location
-FROM djmdContent c
-LEFT JOIN djmdArtist a ON a.ID = c.ArtistID
-LEFT JOIN djmdKey k ON k.ID = c.KeyID
-WHERE IFNULL(c.rb_local_deleted, 0) = 0
-  AND IFNULL(c.Title, '') != ''
-ORDER BY $order
-LIMIT $limit
-''');
   }
 
   ResultSet _selectHistoryAny(Database db, {required int limit}) {
