@@ -2720,7 +2720,7 @@ class _DjHistoryPanel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            '${toolI18n.text('history')} · $software · $status',
+            '${toolI18n.text('history')} · $software · $status · v$kSyncToolVersion',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(
