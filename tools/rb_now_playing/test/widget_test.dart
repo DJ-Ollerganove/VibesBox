@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rb_now_playing/dj_library_prefs.dart';
+import 'package:rb_now_playing/dj_process_match.dart';
 import 'package:rb_now_playing/dj_sqlite.dart';
 import 'package:rb_now_playing/djay_library.dart';
 import 'package:rb_now_playing/engine_dj_library.dart';
@@ -244,6 +245,20 @@ void main() {
     expect(toDragLocation('streaming://tidal/123'), 'tidal:tracks:123');
     expect(toDragLocation('https://tidal.com/browse/track/99'), 'tidal:tracks:99');
     expect(toDragLocation('/Music/a.mp3'), '/Music/a.mp3');
+  });
+
+  test('erkennt integrierte DJ-Prozessnamen', () {
+    expect(isIntegratedDjProcessName('rekordbox.exe'), isTrue);
+    expect(isIntegratedDjProcessName('rekordbox Agent'), isFalse);
+    expect(isIntegratedDjProcessName('Serato DJ Pro.exe'), isTrue);
+    expect(isIntegratedDjProcessName('mixxx.exe'), isTrue);
+    expect(isIntegratedDjProcessName('Traktor.exe'), isTrue);
+    expect(isIntegratedDjProcessName('virtualdj.exe'), isTrue);
+    expect(isIntegratedDjProcessName('djay Pro.exe'), isTrue);
+    expect(isIntegratedDjProcessName('Engine DJ.exe'), isTrue);
+    expect(isIntegratedDjProcessName('Engine.exe'), isTrue);
+    expect(isIntegratedDjProcessName('VibesBoxSync.exe'), isFalse);
+    expect(isIntegratedDjProcessName('chrome.exe'), isFalse);
   });
 
   test('erkennt die DJ-Systeme mit Bibliothek und History', () {
