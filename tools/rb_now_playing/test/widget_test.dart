@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rb_now_playing/dj_library_prefs.dart';
+import 'package:rb_now_playing/dj_sqlite.dart';
 import 'package:rb_now_playing/djay_library.dart';
 import 'package:rb_now_playing/engine_dj_library.dart';
 import 'package:rb_now_playing/library_match.dart';
@@ -312,6 +313,41 @@ void main() {
       formatToolDevice('windows', '"Windows 10 Pro" 10.0 (Build 19045)'),
       'Windows 10',
     );
+  });
+
+  test('erkennt Windows-Datei-Locks als transient', () {
+    expect(
+      isTransientSqliteLockError(
+        const FileSystemException(
+          'copy failed',
+          r'C:\Pioneer\master.db',
+          OSError('Sharing violation', 32),
+        ),
+      ),
+      isTrue,
+    );
+    expect(
+      isTransientSqliteLockError(StateError('database is locked')),
+      isTrue,
+    );
+    expect(
+      isTransientSqliteLockError(StateError('no such table')),
+      isFalse,
+    );
+    var tries = 0;
+    final value = withSqliteRetry(() {
+      tries++;
+      if (tries < 3) {
+        throw const FileSystemException(
+          'busy',
+          'x',
+          OSError('Sharing violation', 32),
+        );
+      }
+      return 42;
+    }, maxAttempts: 5, baseDelay: Duration.zero);
+    expect(value, 42);
+    expect(tries, 3);
   });
 
   test('legt Bibliothekscache je DJ-Software an', () {
