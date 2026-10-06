@@ -23,7 +23,16 @@ class ToolBackdrop extends StatelessWidget {
         const _FrozenBackdrop(),
         child,
         const _LiveFrame(),
-        if (!kIsWeb && Platform.isWindows) const _WindowsFramelessChrome(),
+        // Nur die Titelleiste – kein Vollflächen-Stack (sonst Hover-Overlay
+        // vom Close-Button über die ganze App).
+        if (!kIsWeb && Platform.isWindows)
+          const Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 36,
+            child: _WindowsFramelessChrome(),
+          ),
       ],
     );
   }
@@ -35,28 +44,36 @@ class _WindowsFramelessChrome extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
+    return Row(
       children: [
-        Positioned(
-          top: 0,
-          left: 0,
-          right: 40,
-          height: 28,
+        Expanded(
           child: GestureDetector(
             behavior: HitTestBehavior.translucent,
             onPanStart: (_) => WindowChrome.startDrag(),
+            child: const SizedBox.expand(),
           ),
         ),
-        Positioned(
-          top: 4,
-          right: 8,
-          child: IconButton(
-            tooltip: toolI18n.text('close'),
-            visualDensity: VisualDensity.compact,
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-            onPressed: () => WindowChrome.close(),
-            icon: const Icon(Icons.close, color: Color(0xFFF44336), size: 18),
+        // Kein IconButton/Material: Hover-Splash würde sonst grau/weiß flashen.
+        Tooltip(
+          message: toolI18n.text('close'),
+          waitDuration: const Duration(milliseconds: 600),
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => WindowChrome.close(),
+              child: const SizedBox(
+                width: 36,
+                height: 36,
+                child: Center(
+                  child: Icon(
+                    Icons.close,
+                    color: Color(0xFFF44336),
+                    size: 18,
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       ],
