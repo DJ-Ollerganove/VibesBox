@@ -2,7 +2,7 @@ import 'dart:io';
 
 import 'package:sqlite3/sqlite3.dart';
 
-/// Readonly SQLite with copy-on-lock and automatic copy refresh per poll.
+/// Readonly SQLite with live open first and copy-on-lock fallback.
 class ReadonlySqlite {
   Database? _db;
   String? _sourcePath;
@@ -10,38 +10,27 @@ class ReadonlySqlite {
   bool openedViaCopy = false;
 
   Database ensure(String path, String copyName) {
-    // Windows: immer Snapshot – Exclusive Locks + WAL-Sharing sind unzuverlässig.
-    // Andere Plattformen: Direktverbindung halten, Kopie nur bei Lock / Refresh.
-    final preferCopy = Platform.isWindows;
-    if (!preferCopy &&
-        _db != null &&
+    // Live-Direktverbindung sieht WAL-Updates der DJ-Software in Echtzeit
+    // (Mac und Windows – wie what's-now-playing). Kopie nur bei Lock.
+    if (_db != null &&
         _sourcePath == path &&
         !openedViaCopy) {
       return _db!;
     }
-    // Kopie oder anderer Pfad: neu öffnen (Kopie sonst veraltet).
+    // Kopie ist sofort veraltet → jeden Poll neu.
     close();
     _sourcePath = path;
     _copyName = copyName;
-    if (preferCopy) {
-      try {
-        final copy = copySqliteForRead(path, copyName);
-        _db = openSqliteDirect(copy);
-        openedViaCopy = true;
-        return _db!;
-      } catch (_) {
-        // Fall back to direct open (SQLite share flags often allow it).
-      }
-    }
     try {
       _db = openSqliteDirect(path);
       openedViaCopy = false;
+      return _db!;
     } catch (_) {
       final copy = copySqliteForRead(path, copyName);
       _db = openSqliteDirect(copy);
       openedViaCopy = true;
+      return _db!;
     }
-    return _db!;
   }
 
   void close() {
@@ -67,14 +56,6 @@ Database openSqliteDirect(String path) {
 }
 
 Database openSqliteReadonly(String path, String copyName) {
-  if (Platform.isWindows) {
-    try {
-      final copy = copySqliteForRead(path, copyName);
-      return openSqliteDirect(copy);
-    } catch (_) {
-      return openSqliteDirect(path);
-    }
-  }
   try {
     return openSqliteDirect(path);
   } catch (_) {
@@ -104,7 +85,10 @@ String copySqliteForRead(String path, String copyName) {
         dst.deleteSync();
       }
     } catch (_) {
-      // WAL/SHM optional – Haupt-DB reicht oft; nächster Poll refresht.
+      // Nie WAL/SHM einer alten Kopie mit neuer Hauptdatei mischen.
+      try {
+        if (dst.existsSync()) dst.deleteSync();
+      } catch (_) {}
     }
   }
   return copy.path;

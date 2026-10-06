@@ -350,6 +350,33 @@ void main() {
     expect(tries, 3);
   });
 
+  test('SQLite-Kopie entfernt verwaiste WAL und öffnet live zuerst', () {
+    final dir = Directory.systemTemp.createTempSync('sqlcopyvb');
+    final src = File('${dir.path}/master.db');
+    final db = sqlite3.open(src.path);
+    db.execute('CREATE TABLE t (id INTEGER); INSERT INTO t VALUES (1);');
+    db.execute('INSERT INTO t VALUES (2);');
+    db.close();
+    // Simulierte WAL neben der Hauptdatei (wie bei laufendem Rekordbox).
+    File('${src.path}-wal').writeAsBytesSync(const [1, 2, 3, 4]);
+
+    final copyPath = copySqliteForRead(src.path, 'test_master_copy.db');
+    expect(File(copyPath).existsSync(), isTrue);
+    expect(File('$copyPath-wal').existsSync(), isTrue);
+
+    // Quelle ohne WAL → Ziel-WAL löschen (keine Mischung alt/neu).
+    File('${src.path}-wal').deleteSync();
+    final copyPath2 = copySqliteForRead(src.path, 'test_master_copy.db');
+    expect(File('$copyPath2-wal').existsSync(), isFalse);
+
+    final live = ReadonlySqlite();
+    final opened = live.ensure(src.path, 'unused_copy.db');
+    expect(live.openedViaCopy, isFalse);
+    expect(opened.select('SELECT count(*) AS n FROM t').first['n'], 2);
+    live.close();
+    dir.deleteSync(recursive: true);
+  });
+
   test('legt Bibliothekscache je DJ-Software an', () {
     expect(libraryCacheFileName('rekordbox'), 'library_rekordbox.json');
     expect(libraryCacheFileName('serato'), 'library_serato.json');

@@ -43,6 +43,8 @@ const toolPacks = <String, Map<String, String>>{
     'noSetlist': 'Keine DJ-Setliste für diese Party.',
     'recOff': 'Song-Vorschläge sind aus.',
     'nothingPlaying': 'Aktuell wird kein Song gespielt.',
+    'pickDjSoftware':
+        'Keine DJ-Software gewählt. Unter Einstellungen z. B. Rekordbox auswählen.',
     'followups': 'Folgevorschläge zum laufenden Song',
     'newSuggestions': 'Neue Vorschläge',
     'noSuggestions': 'Keine Vorschläge.',
@@ -180,6 +182,8 @@ const toolPacks = <String, Map<String, String>>{
     'noSetlist': 'No DJ setlist for this party.',
     'recOff': 'Song suggestions are off.',
     'nothingPlaying': 'No song is playing right now.',
+    'pickDjSoftware':
+        'No DJ software selected. Choose e.g. Rekordbox in Settings.',
     'followups': 'Follow-up tracks for the current song',
     'newSuggestions': 'New suggestions',
     'noSuggestions': 'No suggestions.',
@@ -317,6 +321,8 @@ const toolPacks = <String, Map<String, String>>{
     'noSetlist': 'No hay setlist de DJ para esta fiesta.',
     'recOff': 'Las sugerencias de canciones están desactivadas.',
     'nothingPlaying': 'Ahora mismo no suena ninguna canción.',
+    'pickDjSoftware':
+        'No hay software de DJ seleccionado. Elige p. ej. Rekordbox en Ajustes.',
     'followups': 'Siguientes temas para la canción actual',
     'newSuggestions': 'Nuevas sugerencias',
     'noSuggestions': 'Sin sugerencias.',
@@ -454,6 +460,8 @@ const toolPacks = <String, Map<String, String>>{
     'noSetlist': 'Pas de setlist DJ pour cette soirée.',
     'recOff': 'Les suggestions de titres sont désactivées.',
     'nothingPlaying': 'Aucun titre ne joue pour le moment.',
+    'pickDjSoftware':
+        'Aucun logiciel DJ sélectionné. Choisis p. ex. Rekordbox dans Réglages.',
     'followups': 'Titres suivants pour le morceau en cours',
     'newSuggestions': 'Nouvelles suggestions',
     'noSuggestions': 'Aucune suggestion.',
@@ -591,6 +599,8 @@ const toolPacks = <String, Map<String, String>>{
     'noSetlist': 'Nessuna scaletta DJ per questa festa.',
     'recOff': 'I suggerimenti brani sono disattivati.',
     'nothingPlaying': 'In questo momento non suona nessun brano.',
+    'pickDjSoftware':
+        'Nessun software DJ selezionato. Scegli ad es. Rekordbox nelle Impostazioni.',
     'followups': 'Brani successivi a quello in riproduzione',
     'newSuggestions': 'Nuovi suggerimenti',
     'noSuggestions': 'Nessun suggerimento.',
@@ -728,6 +738,8 @@ const toolPacks = <String, Map<String, String>>{
     'noSetlist': 'Sem setlist de DJ para esta festa.',
     'recOff': 'As sugestões de músicas estão desligadas.',
     'nothingPlaying': 'Neste momento não há nenhuma música a tocar.',
+    'pickDjSoftware':
+        'Nenhum software de DJ selecionado. Escolhe p. ex. Rekordbox nas Definições.',
     'followups': 'Sugestões seguintes à música atual',
     'newSuggestions': 'Novas sugestões',
     'noSuggestions': 'Sem sugestões.',
@@ -865,6 +877,8 @@ const toolPacks = <String, Map<String, String>>{
     'noSetlist': 'Geen DJ-setlist voor deze party.',
     'recOff': 'Song-suggesties staan uit.',
     'nothingPlaying': 'Er speelt nu geen nummer.',
+    'pickDjSoftware':
+        'Geen DJ-software gekozen. Kies bijv. Rekordbox in Instellingen.',
     'followups': 'Vervolgsuggesties bij het huidige nummer',
     'newSuggestions': 'Nieuwe suggesties',
     'noSuggestions': 'Geen suggesties.',
@@ -1002,6 +1016,8 @@ const toolPacks = <String, Map<String, String>>{
     'noSetlist': 'Brak setlisty DJ dla tej imprezy.',
     'recOff': 'Propozycje utworów są wyłączone.',
     'nothingPlaying': 'Teraz nic nie gra.',
+    'pickDjSoftware':
+        'Nie wybrano oprogramowania DJ. Wybierz np. Rekordbox w Ustawieniach.',
     'followups': 'Kolejne propozycje do bieżącego utworu',
     'newSuggestions': 'Nowe propozycje',
     'noSuggestions': 'Brak propozycji.',
@@ -1139,6 +1155,8 @@ const toolPacks = <String, Map<String, String>>{
     'noSetlist': 'Žádný DJ setlist pro tuto party.',
     'recOff': 'Návrhy skladeb jsou vypnuté.',
     'nothingPlaying': 'Teď nehraje žádná skladba.',
+    'pickDjSoftware':
+        'Není vybrán DJ software. V nastavení zvol např. Rekordbox.',
     'followups': 'Další návrhy k právě hrající skladbě',
     'newSuggestions': 'Nové návrhy',
     'noSuggestions': 'Žádné návrhy.',
@@ -1276,6 +1294,8 @@ const toolPacks = <String, Map<String, String>>{
     'noSetlist': 'Bu parti için DJ setlist yok.',
     'recOff': 'Şarkı önerileri kapalı.',
     'nothingPlaying': 'Şu an çalan şarkı yok.',
+    'pickDjSoftware':
+        'DJ yazılımı seçilmedi. Ayarlardan örn. Rekordbox seç.',
     'followups': 'Çalan şarkı için sonraki öneriler',
     'newSuggestions': 'Yeni öneriler',
     'noSuggestions': 'Öneri yok.',
@@ -1413,6 +1433,8 @@ const toolPacks = <String, Map<String, String>>{
     'noSetlist': 'Нет DJ-сетлиста для этой вечеринки.',
     'recOff': 'Предложения треков выключены.',
     'nothingPlaying': 'Сейчас ничего не играет.',
+    'pickDjSoftware':
+        'DJ-программа не выбрана. Выберите например Rekordbox в настройках.',
     'followups': 'Следующие предложения к текущему треку',
     'newSuggestions': 'Новые предложения',
     'noSuggestions': 'Нет предложений.',
@@ -1550,6 +1572,8 @@ const toolPacks = <String, Map<String, String>>{
     'noSetlist': 'Немає DJ-сетліста для цієї вечірки.',
     'recOff': 'Пропозиції треків вимкнено.',
     'nothingPlaying': 'Зараз нічого не грає.',
+    'pickDjSoftware':
+        'DJ-програму не вибрано. Оберіть напр. Rekordbox у налаштуваннях.',
     'followups': 'Наступні пропозиції до поточного треку',
     'newSuggestions': 'Нові пропозиції',
     'noSuggestions': 'Немає пропозицій.',
@@ -1687,6 +1711,8 @@ const toolPacks = <String, Map<String, String>>{
     'noSetlist': 'Δεν υπάρχει DJ setlist για αυτό το πάρτι.',
     'recOff': 'Οι προτάσεις τραγουδιών είναι απενεργοποιημένες.',
     'nothingPlaying': 'Αυτή τη στιγμή δεν παίζει κανένα τραγούδι.',
+    'pickDjSoftware':
+        'Δεν επιλέχθηκε λογισμικό DJ. Επίλεξε π.χ. Rekordbox στις Ρυθμίσεις.',
     'followups': 'Επόμενες προτάσεις για το τρέχον τραγούδι',
     'newSuggestions': 'Νέες προτάσεις',
     'noSuggestions': 'Καμία πρόταση.',
@@ -1824,6 +1850,8 @@ const toolPacks = <String, Map<String, String>>{
     'noSetlist': 'لا توجد قائمة DJ لهذه الحفلة.',
     'recOff': 'اقتراحات الأغاني متوقفة.',
     'nothingPlaying': 'لا تُشغَّل أي أغنية الآن.',
+    'pickDjSoftware':
+        'لم يتم اختيار برنامج DJ. اختر مثلاً Rekordbox من الإعدادات.',
     'followups': 'اقتراحات تالية للأغنية الحالية',
     'newSuggestions': 'اقتراحات جديدة',
     'noSuggestions': 'لا توجد اقتراحات.',
@@ -1961,6 +1989,8 @@ const toolPacks = <String, Map<String, String>>{
     'noSetlist': 'इस पार्टी के लिए कोई DJ सेटलिस्ट नहीं।',
     'recOff': 'गाने के सुझाव बंद हैं।',
     'nothingPlaying': 'अभी कोई गाना नहीं बज रहा।',
+    'pickDjSoftware':
+        'कोई DJ सॉफ़्टवेयर चुना नहीं है। सेटिंग्स में जैसे Rekordbox चुनें।',
     'followups': 'चालू गाने के अगले सुझाव',
     'newSuggestions': 'नए सुझाव',
     'noSuggestions': 'कोई सुझाव नहीं।',
@@ -2098,6 +2128,8 @@ const toolPacks = <String, Map<String, String>>{
     'noSetlist': 'このパーティーのDJセットリストはありません。',
     'recOff': '曲の候補はオフです。',
     'nothingPlaying': 'いま曲は再生されていません。',
+    'pickDjSoftware':
+        'DJソフトが選ばれていません。設定でRekordboxなどを選択してください。',
     'followups': '再生中の曲の次候補',
     'newSuggestions': '新しい候補',
     'noSuggestions': '候補はありません。',
@@ -2235,6 +2267,8 @@ const toolPacks = <String, Map<String, String>>{
     'noSetlist': '此派对没有 DJ 歌单。',
     'recOff': '歌曲推荐已关闭。',
     'nothingPlaying': '当前没有正在播放的歌曲。',
+    'pickDjSoftware':
+        '未选择 DJ 软件。请在设置中选择 Rekordbox 等。',
     'followups': '当前歌曲的后续推荐',
     'newSuggestions': '新推荐',
     'noSuggestions': '暂无推荐。',
@@ -2372,6 +2406,8 @@ const toolPacks = <String, Map<String, String>>{
     'noSetlist': 'ไม่มีเซ็ตลิสต์ DJ สำหรับปาร์ตี้นี้',
     'recOff': 'คำแนะนำเพลงปิดอยู่',
     'nothingPlaying': 'ตอนนี้ไม่มีเพลงที่กำลังเล่น',
+    'pickDjSoftware':
+        'ยังไม่ได้เลือกซอฟต์แวร์ DJ เลือกเช่น Rekordbox ในการตั้งค่า',
     'followups': 'คำแนะนำถัดไปสำหรับเพลงที่กำลังเล่น',
     'newSuggestions': 'คำแนะนำใหม่',
     'noSuggestions': 'ไม่มีคำแนะนำ',
@@ -2509,6 +2545,8 @@ const toolPacks = <String, Map<String, String>>{
     'noSetlist': 'Không có setlist DJ cho tiệc này.',
     'recOff': 'Gợi ý bài hát đang tắt.',
     'nothingPlaying': 'Hiện không có bài nào đang phát.',
+    'pickDjSoftware':
+        'Chưa chọn phần mềm DJ. Hãy chọn ví dụ Rekordbox trong Cài đặt.',
     'followups': 'Gợi ý tiếp theo cho bài đang phát',
     'newSuggestions': 'Gợi ý mới',
     'noSuggestions': 'Không có gợi ý.',
@@ -2646,6 +2684,8 @@ const toolPacks = <String, Map<String, String>>{
     'noSetlist': 'Asnjë setlist DJ për këtë parti.',
     'recOff': 'Sugjerimet e këngëve janë fikur.',
     'nothingPlaying': 'Tani nuk po luan asnjë këngë.',
+    'pickDjSoftware':
+        'Nuk është zgjedhur softuer DJ. Zgjidh p.sh. Rekordbox te Cilësimet.',
     'followups': 'Sugjerime vijuese për këngën aktuale',
     'newSuggestions': 'Sugjerime të reja',
     'noSuggestions': 'Asnjë sugjerim.',

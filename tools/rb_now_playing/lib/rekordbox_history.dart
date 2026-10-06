@@ -97,9 +97,8 @@ class RekordboxHistoryReader {
   String? get dbPath => _dbPath;
 
   HistorySnapshot read() {
-    // Direkt geöffnete DB sieht WAL-Updates von Rekordbox.
+    // Direkt geöffnete DB sieht WAL-Updates von Rekordbox (Echtzeit).
     // Kopie muss pro Poll erneuert werden, sonst bleibt sie stehen.
-    // Windows: immer Snapshot (siehe _ensureOpen).
     if (_db != null && _openedViaCopy) {
       close();
     }
@@ -136,8 +135,7 @@ LIMIT 50
 ''');
 
     var session = _mapHistoryRows(rows);
-    // Fallback: global neuester History-Eintrag (wie what's-now-playing),
-    // falls die Session-Subquery leer bleibt.
+    // Fallback: global neuester History-Eintrag (wie what's-now-playing).
     if (session.$1.isEmpty) {
       final fallback = db.select('''
 SELECT
@@ -161,6 +159,29 @@ ORDER BY sh.created_at DESC, sh.TrackNo DESC
 LIMIT 50
 ''');
       session = _mapHistoryRows(fallback);
+    }
+    // Letzter Fallback ohne Attribute-Filter (WNP-Query-Stil).
+    if (session.$1.isEmpty) {
+      final raw = db.select('''
+SELECT
+  sh.TrackNo AS trackNo,
+  sh.created_at AS playedAt,
+  h.Name AS historyName,
+  c.Title AS title,
+  a.Name AS artist,
+  c.BPM AS bpm,
+  k.ScaleName AS musicalKey,
+  c.Length AS lengthSec,
+  c.FolderPath AS location
+FROM djmdSongHistory sh
+LEFT JOIN djmdHistory h ON h.ID = sh.HistoryID
+LEFT JOIN djmdContent c ON c.ID = sh.ContentID
+LEFT JOIN djmdArtist a ON a.ID = c.ArtistID
+LEFT JOIN djmdKey k ON k.ID = c.KeyID
+ORDER BY sh.created_at DESC, sh.TrackNo DESC
+LIMIT 50
+''');
+      session = _mapHistoryRows(raw);
     }
     List<HistoryTrack> recent = const [];
     try {
@@ -347,21 +368,10 @@ LIMIT 1
     _dbPath = path;
 
     _key ??= rekordboxSqlCipherKey();
-    final preferCopy = Platform.isWindows;
     Object? directError;
-    Object? copyError;
 
-    if (preferCopy) {
-      try {
-        final copyPath = copySqliteForRead(path, 'rekordbox_master_copy.db');
-        _db = _openEncrypted(copyPath);
-        _openedViaCopy = true;
-        return;
-      } catch (error) {
-        copyError = error;
-      }
-    }
-
+    // Wie Mac / what's-now-playing: live öffnen (WAL in Echtzeit).
+    // Kopie nur wenn Rekordbox die Datei exklusiv sperrt.
     try {
       _db = _openEncrypted(path);
       _openedViaCopy = false;
@@ -370,15 +380,13 @@ LIMIT 1
       directError = error;
     }
 
-    // Rekordbox hält master.db oft exklusiv — Kopie inkl. WAL lesen.
     try {
       final copyPath = copySqliteForRead(path, 'rekordbox_master_copy.db');
       _db = _openEncrypted(copyPath);
       _openedViaCopy = true;
     } catch (error) {
       throw StateError(
-        '${toolI18n.text('errRbOpen')}\n$path\n'
-        '${directError ?? copyError}\n$error',
+        '${toolI18n.text('errRbOpen')}\n$path\n$directError\n$error',
       );
     }
   }
@@ -395,13 +403,13 @@ LIMIT 1
         db = sqlite3.open(path, mode: OpenMode.readOnly);
       }
       try {
-        // sqlite3mc: SQLCipher-4-Kompatibilität für Rekordbox master.db
+        // sqlite3mc: SQLCipher-4 wie what's-now-playing / pyrekordbox
         db.execute("PRAGMA cipher = 'sqlcipher'");
         db.execute('PRAGMA legacy = 4');
         try {
           db.execute('PRAGMA cipher_compatibility = 4');
         } catch (_) {}
-        db.execute("PRAGMA key = '$_key'");
+        db.execute('PRAGMA key="$_key"');
         db.execute('PRAGMA query_only = ON');
         db.execute('PRAGMA read_uncommitted = 1');
         db.select('SELECT count(*) FROM sqlite_master');

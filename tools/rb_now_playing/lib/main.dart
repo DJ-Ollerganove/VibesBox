@@ -215,7 +215,7 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
   void _armIfAllowed() {
     if (_armed) return;
     if (!_gateReady || !_consentOk || _policy.blocks) return;
-    if (!widget.session.isConnected) return;
+    // History lokal pollen (wie auf dem Mac) – VibesBox-Connect nur für Push.
     _armed = true;
     unawaited(_startLibrary());
     unawaited(_startTidal());
@@ -301,16 +301,21 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     if (track == null) return true;
     final now = DateTime.now();
     final identity = track.identity;
-    if (identity != _seenIdentity) {
+    final firstSight = identity != _seenIdentity;
+    if (firstSight) {
       _seenIdentity = identity;
       _seenAt = now;
     }
-    var age = _seenAt == null ? Duration.zero : now.difference(_seenAt!);
-    final playedAt = track.playedAt;
-    if (playedAt != null) {
-      final fromPlayed = now.difference(playedAt);
-      if (fromPlayed > age) age = fromPlayed;
+    // Frisch geladener Track immer zeigen. Nur beim ersten Auftauchen eines
+    // alten History-Eintrags (App-Start) über playedAt ausblenden.
+    if (firstSight) {
+      final playedAt = track.playedAt;
+      if (playedAt != null && now.difference(playedAt) >= _idleAfter) {
+        return true;
+      }
+      return false;
     }
+    final age = _seenAt == null ? Duration.zero : now.difference(_seenAt!);
     return age >= _idleAfter;
   }
 
@@ -1229,6 +1234,8 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                   const SizedBox(height: 4),
                   if (_error != null)
                     _ErrorCard(message: _error!)
+                  else if (_armed && _source == null)
+                    _ErrorCard(message: toolI18n.text('pickDjSoftware'))
                   else
                     _NowPlayingCard(
                       hit: _shownHit,
