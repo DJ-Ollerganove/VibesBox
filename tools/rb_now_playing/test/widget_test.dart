@@ -316,7 +316,7 @@ void main() {
     expect(compareSyncVersions('1.0.1', '1.0.2') < 0, isTrue);
     expect(compareSyncVersions('1.0.1+1', '1.0.1'), 0);
     expect(compareSyncVersions('1.0.2', '1.0.1') > 0, isTrue);
-    expect(kSyncToolVersion, '1.0.10');
+    expect(kSyncToolVersion, '1.0.11');
     expect(formatToolDevice('macos', 'Version 26.6.2 (Build 25G83)'), 'macOS 26.6.2');
     expect(formatToolDevice('windows', '10.0.22631'), 'Windows 11');
     expect(formatToolDevice('windows', '10.0.19045'), 'Windows 10');

@@ -1,11 +1,11 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Ein Zug: alte Sync-App VERWERFEN, hart auf 1.0.10, neu bauen, installieren.
+  Ein Zug: alte Sync-App VERWERFEN, hart auf 1.0.11, neu bauen, installieren.
 
 .DESCRIPTION
   Default-Branch: cursor/windows-sync-all-in-one-b710
-  Deinstalliert jede alte VibesBox Sync, hard-reset auf Origin, baut nur 1.0.10.
+  Deinstalliert jede alte VibesBox Sync, hard-reset auf Origin, baut nur 1.0.11.
 
 .NOTES
   Nur ASCII in dieser Datei (Windows PowerShell 5.1).
@@ -25,7 +25,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ExpectVersion = '1.0.10'
+$ExpectVersion = '1.0.11'
 $ToolRoot = $PSScriptRoot
 $RepoRoot = Resolve-Path (Join-Path $ToolRoot '..\..')
 
@@ -72,7 +72,7 @@ function Remove-LeftoverInstallDirs {
 }
 
 function Uninstall-VibesBoxSync {
-  Write-Step "Alte Installation VERWERFEN (alles vor 1.0.10)"
+  Write-Step "Alte Installation VERWERFEN (alles vor 1.0.11)"
   Clear-DjWatchRunKey
 
   $candidates = @(
@@ -192,22 +192,25 @@ if (-not (Test-Path '.\windows\runner\dj_watchdog.cpp')) {
   throw 'dj_watchdog.cpp fehlt. Falscher Branch/Stand.'
 }
 if ($mainDart -notlike '*_DjHistoryPanel*' -or $mainDart -notlike '*_liveHistory*') {
-  throw 'main.dart ohne History-Panel. Brauche Song-Detection-Merge (v1.0.10).'
+  throw 'main.dart ohne History-Panel. Brauche Song-Detection-Merge (v1.0.11).'
 }
 if ($rbHist -notlike '*ORDER BY sh.created_at DESC*') {
   throw 'rekordbox_history.dart ohne Live-Latest-Query. Falscher Stand.'
 }
 if ($rbHist -like '*_selectLatestLibrary*' -or $rbHist -like '*fromLibrary*') {
-  throw 'rekordbox_history.dart hat noch Library-Fallback (Load=Play). Brauche 1.0.10.'
+  throw 'rekordbox_history.dart hat noch Library-Fallback (Load=Play). Brauche 1.0.11.'
 }
-if ($rbHist -notlike '*Warte auf Play*') {
-  throw 'rekordbox_history.dart ohne Play-only Hinweis. Falscher Stand.'
+if ($rbHist -notlike '*Warte auf Play*' -and $rbHist -notlike '*_pollPlayCountBump*') {
+  throw 'rekordbox_history.dart ohne Play-Erkennung. Falscher Stand.'
+}
+if ($rbHist -notlike '*_pollPlayCountBump*' -or $rbHist -notlike '*Platform.isWindows*') {
+  throw 'rekordbox_history.dart ohne Windows-WAL-Copy/PlayCount (brauche 1.0.11).'
 }
 $toolVer = Get-Content -Raw -Encoding UTF8 '.\lib\tool_version.dart'
 if ($toolVer -notlike "*kSyncToolVersion = '$ExpectVersion'*") {
   throw ("tool_version.dart ist nicht $ExpectVersion - alte Version verworfen.")
 }
-Write-Host "Quellcode OK (nur 1.0.10, Play-only, History-Panel)." -ForegroundColor Green
+Write-Host "Quellcode OK (nur 1.0.11, Play-only, History-Panel)." -ForegroundColor Green
 
 Write-Step "Flutter + Installer bauen"
 $buildArgs = @{ FlutterBat = $FlutterBat }
@@ -243,7 +246,7 @@ if (-not $SkipInstall) {
   if ($inst.ExitCode -ne 0 -and $inst.ExitCode -ne $null) {
     throw ("Setup ExitCode: {0}" -f $inst.ExitCode)
   }
-  Write-Host "Installation fertig (nur 1.0.10)." -ForegroundColor Green
+  Write-Host "Installation fertig (nur 1.0.11)." -ForegroundColor Green
 }
 
 $installed = @(
@@ -260,7 +263,7 @@ if ($installed) {
 }
 
 if (-not $NoStart) {
-  Write-Step "Starte VibesBox Sync 1.0.10"
+  Write-Step "Starte VibesBox Sync 1.0.11"
   if ($installed) {
     Start-Process -FilePath $installed
   } else {
@@ -272,7 +275,7 @@ if (-not $NoStart) {
 Write-Host ""
 Write-Host "====================================================" -ForegroundColor Green
 Write-Host ("NEUER BUILD  Branch={0}  Version={1}" -f $Branch, $AppVersion) -ForegroundColor Green
-Write-Host "Alte Versionen verworfen. Panel muss v1.0.10 zeigen." -ForegroundColor Yellow
+Write-Host "Alte Versionen verworfen. Panel muss v1.0.11 zeigen." -ForegroundColor Yellow
 Write-Host "Features: Play-only History + rahmenlos + DJ-Autostart" -ForegroundColor Green
 Write-Host "====================================================" -ForegroundColor Green
 if (Test-Path $setup) {

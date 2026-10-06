@@ -96,6 +96,10 @@ class RekordboxHistoryReader {
   String? _key;
   String? overrideDbPath;
   var _openedViaCopy = false;
+  /// Baseline für DJPlayCount – nur Anstieg = echtes Play (nicht Deck-Load).
+  Map<String, int>? _playCountBaseline;
+  String? _playCountDbPath;
+  HistoryTrack? _lastPlayBump;
 
   String? get dbPath => _dbPath;
 
@@ -125,8 +129,21 @@ class RekordboxHistoryReader {
       session = _mapHistoryRows(_selectHistoryAny(db, limit: 50));
     }
 
-    // Kein Library-Fallback: updated_at ändert sich schon beim Laden aufs Deck.
-    // Now-Playing nur aus djmdSongHistory (wie Mac: erst nach Play).
+    // History oft noch leer / unter Windows nur in WAL: PlayCount-Anstieg
+    // (Laden aufs Deck erhöht den Zähler nicht – wie Mac erst nach Play).
+    var fromPlayCount = false;
+    if (session.$1.isEmpty) {
+      final bump = _pollPlayCountBump(db, path);
+      if (bump != null) {
+        session = ([bump], 'Play');
+        fromPlayCount = true;
+      } else if (_lastPlayBump != null) {
+        session = ([_lastPlayBump!], 'Play');
+        fromPlayCount = true;
+      }
+    } else {
+      _lastPlayBump = null;
+    }
 
     List<HistoryTrack> recent = const [];
     try {
@@ -160,10 +177,10 @@ LIMIT 120
     final emptyHint = session.$1.isEmpty
         ? (songCount == 0
             ? (contentCount > 0
-                ? 'Warte auf Play (History noch leer – Laden allein zählt nicht)'
+                ? 'Warte auf Play (History/PlayCount – Laden allein zählt nicht)'
                 : 'DB ohne Tracks – falscher master.db Pfad?')
             : 'History-Zeilen=$songCount aber Query leer')
-        : null;
+        : (fromPlayCount ? 'via PlayCount (Play, nicht Load)' : null);
     final debug = [
       'hist=$songCount',
       'lib=$contentCount',
@@ -180,6 +197,77 @@ LIMIT 120
       readAt: DateTime.now(),
       debugNote: debug,
     );
+  }
+
+  /// Erkennt echtes Play über steigenden DJPlayCount (nicht Deck-Load).
+  HistoryTrack? _pollPlayCountBump(Database db, String dbPath) {
+    if (_playCountDbPath != dbPath) {
+      _playCountDbPath = dbPath;
+      _playCountBaseline = null;
+      _lastPlayBump = null;
+    }
+    try {
+      final rows = db.select('''
+SELECT
+  c.ID AS id,
+  IFNULL(c.DJPlayCount, 0) AS playCount,
+  c.Title AS title,
+  a.Name AS artist,
+  c.BPM AS bpm,
+  k.ScaleName AS musicalKey,
+  c.Length AS lengthSec,
+  c.FolderPath AS location,
+  c.updated_at AS updatedAt
+FROM djmdContent c
+LEFT JOIN djmdArtist a ON a.ID = c.ArtistID
+LEFT JOIN djmdKey k ON k.ID = c.KeyID
+WHERE IFNULL(c.rb_local_deleted, 0) = 0
+  AND IFNULL(c.Title, '') != ''
+  AND IFNULL(c.DJPlayCount, 0) > 0
+ORDER BY c.updated_at DESC
+LIMIT 80
+''');
+      final current = <String, int>{};
+      for (final row in rows) {
+        final id = _asString(row['id']);
+        if (id == null) continue;
+        current[id] = _asInt(row['playCount']) ?? 0;
+      }
+      final baseline = _playCountBaseline;
+      if (baseline == null) {
+        _playCountBaseline = current;
+        return null;
+      }
+      HistoryTrack? best;
+      var bestDelta = 0;
+      for (final row in rows) {
+        final id = _asString(row['id']);
+        if (id == null) continue;
+        final pc = _asInt(row['playCount']) ?? 0;
+        final prev = baseline[id] ?? pc;
+        final delta = pc - prev;
+        if (delta <= 0) continue;
+        if (delta < bestDelta) continue;
+        bestDelta = delta;
+        best = HistoryTrack(
+          trackNo: 0,
+          title: _asString(row['title']) ?? toolI18n.text('unknownTitle'),
+          artist: _asString(row['artist']) ?? toolI18n.text('unknownArtist'),
+          playedAt: _parseRekordboxTime(_asString(row['updatedAt'])) ??
+              DateTime.now(),
+          historyName: 'Play',
+          bpm: _asBpm(row['bpm']),
+          musicalKey: _asString(row['musicalKey']),
+          length: _asLength(row['lengthSec']),
+          location: _asString(row['location']),
+        );
+      }
+      _playCountBaseline = {...baseline, ...current};
+      if (best != null) _lastPlayBump = best;
+      return best;
+    } catch (_) {
+      return null;
+    }
   }
 
   int _count(Database db, String table) {
@@ -436,9 +524,22 @@ LIMIT 1
 
     _key ??= rekordboxSqlCipherKey();
     Object? directError;
+    Object? copyError;
 
-    // Wie Mac: zuerst live die master.db öffnen (sieht WAL).
-    // Kopie nur wenn Exklusiv-Lock – kein Windows-Sonderweg mehr.
+    // Windows: immer frischer Snapshot inkl. WAL – Direct-Open sieht hier
+    // oft nur den checkpointed Stand (hist=0, lib voll).
+    if (Platform.isWindows) {
+      try {
+        final copyPath = copySqliteForRead(path, 'rekordbox_master_copy.db');
+        _db = _openEncrypted(copyPath);
+        _openedViaCopy = true;
+        return;
+      } catch (error) {
+        copyError = error;
+      }
+    }
+
+    // Mac / Fallback: live öffnen (sieht WAL), sonst Kopie.
     try {
       _db = _openEncrypted(path);
       _openedViaCopy = false;
@@ -453,14 +554,15 @@ LIMIT 1
       _openedViaCopy = true;
     } catch (error) {
       throw StateError(
-        '${toolI18n.text('errRbOpen')}\n$path\n$directError\n$error',
+        '${toolI18n.text('errRbOpen')}\n$path\n'
+        '${directError ?? copyError}\n$error',
       );
     }
   }
 
   Database _openEncrypted(String path) {
     return withSqliteRetry(() {
-      // Wie Mac/WNP: normal öffnen (nicht mode=ro), damit WAL/SHM lesbar ist.
+      // Normal öffnen (nicht mode=ro), damit WAL/SHM lesbar ist.
       final db = sqlite3.open(path);
       try {
         db.execute("PRAGMA cipher = 'sqlcipher'");
