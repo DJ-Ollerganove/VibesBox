@@ -5,16 +5,17 @@
   installieren und starten.
 
 .DESCRIPTION
-  Default-Branch: cursor/windows-song-detection-b710
-  (History-Echtzeit + History-Panel + gemergte all-in-one Features).
+  Default-Branch: cursor/windows-sync-all-in-one-b710
+  (History-Echtzeit + History-Panel + Frameless + DJ-Autostart, v1.0.6).
 
 .NOTES
   Nur ASCII in dieser Datei (Windows PowerShell 5.1).
+  Bricht ab, wenn pubspec nicht 1.0.6 ist (alte 1.0.5-Builds verhindern).
 #>
 
 [CmdletBinding()]
 param(
-  [string]$Branch = 'cursor/windows-song-detection-b710',
+  [string]$Branch = 'cursor/windows-sync-all-in-one-b710',
   [switch]$SkipUninstall,
   [switch]$SkipInstall,
   [switch]$NoStart,
@@ -94,6 +95,29 @@ Set-Location $ToolRoot
 
 Write-Host ("Aktueller Branch: {0}" -f (git rev-parse --abbrev-ref HEAD))
 Write-Host ("Commit: {0}" -f (git rev-parse --short HEAD))
+
+# Sofort nach Pull: Version pruefen, BEVOR gebaut wird.
+$pubspecEarly = Get-Content -Raw -Encoding UTF8 '.\pubspec.yaml'
+if ($pubspecEarly -notmatch '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)') {
+  throw 'Version in pubspec.yaml nicht lesbar (nach git pull).'
+}
+$verEarly = $Matches[1]
+Write-Host ("pubspec nach pull: {0}" -f $verEarly) -ForegroundColor Yellow
+if ($verEarly -ne '1.0.6') {
+  throw @"
+FALSCHE VERSION nach git pull: $verEarly (erwartet 1.0.6).
+Du bist nicht auf dem Merge-Stand. Bitte EXAKT:
+
+  cd C:\Users\Ollerganove\dev\VibesBox
+  git fetch origin
+  git checkout cursor/windows-sync-all-in-one-b710
+  git pull origin cursor/windows-sync-all-in-one-b710
+  Get-Content tools\rb_now_playing\pubspec.yaml | Select-String '^version:'
+
+Muss zeigen: version: 1.0.6+1
+Dann erst: cd tools\rb_now_playing ; .\run_windows_new.ps1
+"@
+}
 
 $session = Get-Content -Raw -Encoding UTF8 '.\lib\tool_session.dart'
 $main = Get-Content -Raw -Encoding UTF8 '.\windows\runner\main.cpp'
