@@ -291,8 +291,7 @@ class ToolSession extends ChangeNotifier {
     _enqueueLive(() async {
       try {
         await _ensureFreshToken();
-        // Nur Presence – nowPlaying NICHT auf null setzen (sonst löscht
-        // Windows/Mac den Song auf dem Handy, solange syncSend noch false ist).
+        // PRESENCE_NO_WIPE: do not set nowPlaying=null (keeps phone track).
         await _rest.setLiveDoc(
           idToken: _idToken!,
           ownerUid: _ownerUid!,

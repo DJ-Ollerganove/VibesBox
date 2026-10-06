@@ -203,20 +203,20 @@ if ($rbHist -like '*_selectLatestLibrary*' -or $rbHist -like '*fromLibrary*') {
 if ($rbHist -like '*_pollPlayCountBump*' -or $rbHist -like '*_selectLatestLibrary*') {
   throw 'rekordbox_history.dart hat wieder Fallbacks – brauche sauberes 1.0.13.'
 }
-if ($rbHist -notlike '*Wie Mac: live öffnen*') {
-  throw 'rekordbox_history.dart ohne Mac-Live-Open (brauche 1.0.13).'
+if ($rbHist -notlike '*MAC_LIVE_OPEN*') {
+  throw 'rekordbox_history.dart ohne MAC_LIVE_OPEN (brauche 1.0.13).'
 }
 $djSql = Get-Content -Raw -Encoding UTF8 '.\lib\dj_sqlite.dart'
-if ($djSql -notlike '*Live -shm verwerfen*' -and $djSql -notlike '*-shm nie*') {
-  throw 'dj_sqlite.dart ohne SHM-Fix – brauche 1.0.13.'
+if ($djSql -notlike '*-shm nie*' -and $djSql -notlike '*Live -shm*') {
+  throw 'dj_sqlite.dart ohne SHM-Fix (brauche 1.0.13).'
 }
 $rest = Get-Content -Raw -Encoding UTF8 '.\lib\tool_rest.dart'
 if ($rest -notlike '*fieldMask*') {
-  throw 'tool_rest.dart ohne fieldMask – Presence würde Songs löschen.'
+  throw 'tool_rest.dart ohne fieldMask (brauche 1.0.13).'
 }
 $sessionDart = Get-Content -Raw -Encoding UTF8 '.\lib\tool_session.dart'
-if ($sessionDart -notlike '*nowPlaying NICHT*') {
-  throw 'tool_session.dart Presence löscht noch nowPlaying – brauche 1.0.13.'
+if ($sessionDart -notlike '*PRESENCE_NO_WIPE*') {
+  throw 'tool_session.dart ohne PRESENCE_NO_WIPE (brauche 1.0.13).'
 }
 Write-Host "Quellcode OK (nur 1.0.13, Play-only, History-Panel)." -ForegroundColor Green
 
