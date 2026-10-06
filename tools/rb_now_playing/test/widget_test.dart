@@ -365,19 +365,22 @@ void main() {
     expect(tries, 3);
   });
 
-  test('SQLite-Kopie entfernt verwaiste WAL und öffnet live zuerst', () {
+  test('SQLite-Kopie nimmt WAL mit und lässt Live-SHM weg', () {
     final dir = Directory.systemTemp.createTempSync('sqlcopyvb');
     final src = File('${dir.path}/master.db');
     final db = sqlite3.open(src.path);
     db.execute('CREATE TABLE t (id INTEGER); INSERT INTO t VALUES (1);');
     db.execute('INSERT INTO t VALUES (2);');
     db.close();
-    // Simulierte WAL neben der Hauptdatei (wie bei laufendem Rekordbox).
+    // Simulierte WAL/SHM neben der Hauptdatei (wie bei laufendem Rekordbox).
     File('${src.path}-wal').writeAsBytesSync(const [1, 2, 3, 4]);
+    File('${src.path}-shm').writeAsBytesSync(const [9, 9, 9, 9]);
 
     final copyPath = copySqliteForRead(src.path, 'test_master_copy.db');
     expect(File(copyPath).existsSync(), isTrue);
     expect(File('$copyPath-wal').existsSync(), isTrue);
+    // Live-SHM darf nicht mit – sonst oft hist=0 unter Windows.
+    expect(File('$copyPath-shm').existsSync(), isFalse);
 
     // Quelle ohne WAL → Ziel-WAL löschen (keine Mischung alt/neu).
     File('${src.path}-wal').deleteSync();
