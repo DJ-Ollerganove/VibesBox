@@ -271,6 +271,8 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
       }
     }
     if (mounted) setState(() {});
+    // Sofort History lesen, nicht auf den nächsten Timer warten.
+    if (_armed) _refresh();
   }
 
   void _scheduleLibrarySync() {
