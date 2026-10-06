@@ -7,7 +7,7 @@
 #define MyAppExeName "VibesBoxSync.exe"
 #define MyAppPublisher "VibesBox"
 #define MyAppURL "https://vibesbox.app"
-#define MyAppVersion "1.0.4"
+#define MyAppVersion "1.0.5"
 
 [Setup]
 AppId={{A7C3E9B1-4D2F-4F8A-9C11-6E2B8D0F4A71}
