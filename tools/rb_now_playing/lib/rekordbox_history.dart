@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:sqlite3/sqlite3.dart';
 
+import 'dj_sqlite.dart';
 import 'library_match.dart';
 import 'rekordbox_cipher.dart';
 import 'tool_i18n.dart';
@@ -17,6 +18,7 @@ class HistoryTrack {
     required this.bpm,
     required this.musicalKey,
     required this.length,
+    this.location,
   });
 
   final int trackNo;
@@ -27,6 +29,8 @@ class HistoryTrack {
   final double? bpm;
   final String? musicalKey;
   final Duration? length;
+  /// Lokaler Dateipfad oder Streaming-URI (wenn bekannt).
+  final String? location;
 
   String get identity => '$trackNo|$title|$artist|${playedAt?.toUtc().toIso8601String()}';
 }
@@ -38,6 +42,7 @@ class HistorySnapshot {
     required this.tracks,
     this.recent = const [],
     required this.readAt,
+    this.debugNote,
   });
 
   final String dbPath;
@@ -46,6 +51,8 @@ class HistorySnapshot {
   /// Gespielte Titel der letzten 12 Stunden, auch aus älteren Playlists.
   final List<HistoryTrack> recent;
   final DateTime readAt;
+  /// Diagnose für die UI: Zähler, Open-Modus, leere-History-Hinweis.
+  final String? debugNote;
 
   HistoryTrack? get nowPlaying => tracks.isEmpty ? null : tracks.first;
 }
@@ -88,39 +95,37 @@ class RekordboxHistoryReader {
   String? _dbPath;
   String? _key;
   String? overrideDbPath;
+  var _openedViaCopy = false;
 
   String? get dbPath => _dbPath;
 
   HistorySnapshot read() {
+    // Wie what's-now-playing: JEDEN Poll neue Connection.
+    close();
     _ensureOpen();
     final db = _db!;
-    final rows = db.select('''
-SELECT
-  sh.TrackNo AS trackNo,
-  sh.created_at AS playedAt,
-  h.Name AS historyName,
-  c.Title AS title,
-  a.Name AS artist,
-  c.BPM AS bpm,
-  k.ScaleName AS musicalKey,
-  c.Length AS lengthSec
-FROM djmdSongHistory sh
-JOIN djmdHistory h ON h.ID = sh.HistoryID
-LEFT JOIN djmdContent c ON c.ID = sh.ContentID
-LEFT JOIN djmdArtist a ON a.ID = c.ArtistID
-LEFT JOIN djmdKey k ON k.ID = c.KeyID
-WHERE h.ID = (
-  SELECT ID FROM djmdHistory
-  WHERE IFNULL(Attribute, 0) = 0
-    AND IFNULL(rb_local_deleted, 0) = 0
-  ORDER BY DateCreated DESC
-  LIMIT 1
-)
-ORDER BY sh.TrackNo DESC
-LIMIT 50
-''');
+    final path = _dbPath ?? '';
+    final wal = File('$path-wal');
+    final songCount = _count(db, 'djmdSongHistory');
+    final contentCount = _count(db, 'djmdContent');
+    final via = _openedViaCopy ? 'copy' : 'direct';
+    final walNote = wal.existsSync()
+        ? 'WAL ${(wal.lengthSync() / 1024).round()}kb'
+        : 'kein-WAL';
 
-    final session = _mapHistoryRows(rows);
+    // Nur djmdSongHistory – wie Mac. Kein Library-/PlayCount-Fallback.
+    var session = _mapHistoryRows(_selectLatestHistory(db, limit: 1));
+    if (session.$1.isNotEmpty) {
+      final hid = _latestHistoryId(db);
+      if (hid != null) {
+        final full = _mapHistoryRows(_selectHistoryForId(db, hid, limit: 50));
+        if (full.$1.isNotEmpty) session = full;
+      }
+    }
+    if (session.$1.isEmpty && songCount > 0) {
+      session = _mapHistoryRows(_selectHistoryAny(db, limit: 50));
+    }
+
     List<HistoryTrack> recent = const [];
     try {
       final since = DateTime.now().subtract(const Duration(hours: 12));
@@ -133,14 +138,14 @@ SELECT
   a.Name AS artist,
   c.BPM AS bpm,
   k.ScaleName AS musicalKey,
-  c.Length AS lengthSec
+  c.Length AS lengthSec,
+  c.FolderPath AS location
 FROM djmdSongHistory sh
-JOIN djmdHistory h ON h.ID = sh.HistoryID
+LEFT JOIN djmdHistory h ON h.ID = sh.HistoryID
 LEFT JOIN djmdContent c ON c.ID = sh.ContentID
 LEFT JOIN djmdArtist a ON a.ID = c.ArtistID
 LEFT JOIN djmdKey k ON k.ID = c.KeyID
-WHERE IFNULL(h.Attribute, 0) = 0
-  AND IFNULL(h.rb_local_deleted, 0) = 0
+WHERE IFNULL(h.rb_local_deleted, 0) = 0
   AND sh.created_at >= ?
 ORDER BY sh.created_at DESC
 LIMIT 120
@@ -150,13 +155,137 @@ LIMIT 120
       recent = const [];
     }
 
+    final emptyHint = session.$1.isEmpty
+        ? (songCount == 0
+            ? (contentCount > 0
+                ? 'Warte auf Play (djmdSongHistory noch leer)'
+                : 'DB ohne Tracks – falscher master.db Pfad?')
+            : 'History-Zeilen=$songCount aber Query leer')
+        : null;
+    final debug = [
+      'hist=$songCount',
+      'lib=$contentCount',
+      via,
+      walNote,
+      if (emptyHint != null) emptyHint,
+    ].join(' · ');
+
     return HistorySnapshot(
-      dbPath: _dbPath!,
+      dbPath: path,
       historyName: session.$2,
       tracks: session.$1,
       recent: recent,
       readAt: DateTime.now(),
+      debugNote: debug,
     );
+  }
+
+  int _count(Database db, String table) {
+    try {
+      final n = db.select('SELECT count(*) AS n FROM "$table"').first['n'];
+      return _asInt(n) ?? 0;
+    } catch (_) {
+      return -1;
+    }
+  }
+
+  String? _latestHistoryId(Database db) {
+    for (final sql in const [
+      'SELECT sh.HistoryID AS hid FROM djmdSongHistory sh ORDER BY sh.created_at DESC, sh.TrackNo DESC LIMIT 1',
+      'SELECT sh.HistoryID AS hid FROM djmdSongHistory sh ORDER BY sh.ID DESC LIMIT 1',
+      'SELECT sh.HistoryID AS hid FROM djmdSongHistory sh LIMIT 1',
+    ]) {
+      try {
+        final rows = db.select(sql);
+        if (rows.isEmpty) continue;
+        final hid = rows.first['hid']?.toString();
+        if (hid != null && hid.isNotEmpty) return hid;
+      } catch (_) {
+        continue;
+      }
+    }
+    return null;
+  }
+
+  ResultSet _selectLatestHistory(Database db, {required int limit}) {
+    for (final order in const [
+      'sh.created_at DESC, sh.TrackNo DESC',
+      'sh.ID DESC',
+      'sh.rowid DESC',
+    ]) {
+      try {
+        return db.select('''
+SELECT
+  sh.TrackNo AS trackNo,
+  sh.created_at AS playedAt,
+  h.Name AS historyName,
+  c.Title AS title,
+  a.Name AS artist,
+  c.BPM AS bpm,
+  k.ScaleName AS musicalKey,
+  c.Length AS lengthSec,
+  c.FolderPath AS location
+FROM djmdSongHistory sh
+LEFT JOIN djmdHistory h ON h.ID = sh.HistoryID
+LEFT JOIN djmdContent c ON c.ID = sh.ContentID
+LEFT JOIN djmdArtist a ON a.ID = c.ArtistID
+LEFT JOIN djmdKey k ON k.ID = c.KeyID
+ORDER BY $order
+LIMIT $limit
+''');
+      } catch (_) {
+        continue;
+      }
+    }
+    return _selectHistoryAny(db, limit: limit);
+  }
+
+  ResultSet _selectHistoryForId(Database db, String hid, {required int limit}) {
+    try {
+      return db.select('''
+SELECT
+  sh.TrackNo AS trackNo,
+  sh.created_at AS playedAt,
+  h.Name AS historyName,
+  c.Title AS title,
+  a.Name AS artist,
+  c.BPM AS bpm,
+  k.ScaleName AS musicalKey,
+  c.Length AS lengthSec,
+  c.FolderPath AS location
+FROM djmdSongHistory sh
+LEFT JOIN djmdHistory h ON h.ID = sh.HistoryID
+LEFT JOIN djmdContent c ON c.ID = sh.ContentID
+LEFT JOIN djmdArtist a ON a.ID = c.ArtistID
+LEFT JOIN djmdKey k ON k.ID = c.KeyID
+WHERE sh.HistoryID = ?
+ORDER BY sh.TrackNo DESC
+LIMIT $limit
+''', [hid]);
+    } catch (_) {
+      return _selectHistoryAny(db, limit: limit);
+    }
+  }
+
+  ResultSet _selectHistoryAny(Database db, {required int limit}) {
+    return db.select('''
+SELECT
+  sh.TrackNo AS trackNo,
+  sh.created_at AS playedAt,
+  h.Name AS historyName,
+  c.Title AS title,
+  a.Name AS artist,
+  c.BPM AS bpm,
+  k.ScaleName AS musicalKey,
+  c.Length AS lengthSec,
+  c.FolderPath AS location
+FROM djmdSongHistory sh
+LEFT JOIN djmdHistory h ON h.ID = sh.HistoryID
+LEFT JOIN djmdContent c ON c.ID = sh.ContentID
+LEFT JOIN djmdArtist a ON a.ID = c.ArtistID
+LEFT JOIN djmdKey k ON k.ID = c.KeyID
+LIMIT $limit
+''');
   }
 
   (List<HistoryTrack>, String?) _mapHistoryRows(ResultSet rows) {
@@ -174,6 +303,7 @@ LIMIT 120
           bpm: _asBpm(row['bpm']),
           musicalKey: _asString(row['musicalKey']),
           length: _asLength(row['lengthSec']),
+          location: _asString(row['location']),
         ),
       );
     }
@@ -294,39 +424,104 @@ LIMIT 1
   void close() {
     _db?.close();
     _db = null;
+    _openedViaCopy = false;
   }
 
   void _ensureOpen() {
     final path = locateMasterDb(override: overrideDbPath);
-    if (path != _dbPath) {
-      close();
-      _dbPath = path;
-    }
-    if (_db != null) return;
+    close();
+    _dbPath = path;
 
     _key ??= rekordboxSqlCipherKey();
-    final db = sqlite3.open(path, mode: OpenMode.readOnly);
+    Object? directError;
+    Object? copyError;
+
+    // WIN_WAL_COPY: Unter Windows gelingt live open oft OHNE WAL zu sehen
+    // (hist=0, lib voll). Deshalb immer frischer Snapshot DB+WAL (ohne Live-SHM).
+    // Mac: live first (sieht WAL), Kopie nur bei Lock.
+    if (Platform.isWindows) {
+      try {
+        final copyPath = copySqliteForRead(path, 'rekordbox_master_copy.db');
+        _db = _openEncrypted(copyPath);
+        _openedViaCopy = true;
+        return;
+      } catch (error) {
+        copyError = error;
+      }
+    }
+
     try {
-      db.execute("PRAGMA cipher = 'sqlcipher'");
-      db.execute('PRAGMA legacy = 4');
-      db.execute("PRAGMA key = '$_key'");
-      db.execute('PRAGMA query_only = ON');
-      db.select('SELECT count(*) FROM sqlite_master');
-      _db = db;
+      _db = _openEncrypted(path);
+      _openedViaCopy = false;
+      // Windows-Fallback nach fehlgeschlagener Kopie: wenn live hist=0 aber
+      // WAL existiert, Kopie nochmal versuchen (Lock war kurz).
+      if (Platform.isWindows) {
+        final wal = File('$path-wal');
+        final liveHist = _count(_db!, 'djmdSongHistory');
+        if (liveHist == 0 && wal.existsSync() && wal.lengthSync() > 0) {
+          try {
+            final copyPath =
+                copySqliteForRead(path, 'rekordbox_master_copy.db');
+            final copyDb = _openEncrypted(copyPath);
+            final copyHist = _count(copyDb, 'djmdSongHistory');
+            if (copyHist > liveHist) {
+              _db!.close();
+              _db = copyDb;
+              _openedViaCopy = true;
+              return;
+            }
+            copyDb.close();
+          } catch (_) {}
+        }
+      }
+      return;
     } catch (error) {
-      db.close();
+      directError = error;
+    }
+
+    try {
+      final copyPath = copySqliteForRead(path, 'rekordbox_master_copy.db');
+      _db = _openEncrypted(copyPath);
+      _openedViaCopy = true;
+    } catch (error) {
       throw StateError(
-        '${toolI18n.text('errRbOpen')}\n$path\n$error',
+        '${toolI18n.text('errRbOpen')}\n$path\n'
+        '${copyError ?? directError}\n$error',
       );
     }
+  }
+
+  Database _openEncrypted(String path) {
+    return withSqliteRetry(() {
+      // Normal öffnen (nicht mode=ro), damit WAL/SHM lesbar ist.
+      final db = sqlite3.open(path);
+      try {
+        db.execute("PRAGMA cipher = 'sqlcipher'");
+        db.execute('PRAGMA legacy = 4');
+        try {
+          db.execute('PRAGMA cipher_compatibility = 4');
+        } catch (_) {}
+        db.execute('PRAGMA key="$_key"');
+        db.execute('PRAGMA read_uncommitted = 1');
+        db.select('SELECT count(*) FROM sqlite_master');
+        db.select(
+          "SELECT 1 FROM sqlite_master WHERE type='table' AND name='djmdSongHistory' LIMIT 1",
+        );
+        return db;
+      } catch (error) {
+        db.close();
+        rethrow;
+      }
+    });
   }
 }
 
 String locateMasterDb({String? override}) {
   final custom = override?.trim();
-  if (custom != null && custom.isNotEmpty) {
-    if (File(custom).existsSync()) return custom;
-    throw StateError('${toolI18n.text('errNotFound')}\n$custom');
+  // Fehlender Override blockiert die Suche nicht (Standardpfad kann leer sein,
+  // während options.json den echten db-path hat).
+  if (custom != null && custom.isNotEmpty && File(custom).existsSync()) {
+    return custom;
   }
 
   final fromAgent = _dbPathFromOptionsJson();
@@ -334,7 +529,8 @@ String locateMasterDb({String? override}) {
     return fromAgent;
   }
 
-  final home = Platform.environment['HOME'];
+  final home = Platform.environment['HOME'] ??
+      Platform.environment['USERPROFILE'];
   if (home != null) {
     final macPath = '$home/Library/Pioneer/rekordbox/master.db';
     if (File(macPath).existsSync()) return macPath;
@@ -346,6 +542,9 @@ String locateMasterDb({String? override}) {
     if (File(winPath).existsSync()) return winPath;
   }
 
+  if (custom != null && custom.isNotEmpty) {
+    throw StateError('${toolI18n.text('errNotFound')}\n$custom');
+  }
   throw StateError(toolI18n.text('errRb'));
 }
 

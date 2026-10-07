@@ -21,6 +21,8 @@
 [CmdletBinding()]
 param(
   [switch]$SkipFlutterBuild,
+  # Ohne flutter clean - deutlich schneller bei kleinen Aenderungen.
+  [switch]$Fast,
   [switch]$ZipOnly,
   [string]$FlutterBat = "$env:USERPROFILE\Downloads\flutter_windows_3.38.4-stable\flutter\bin\flutter.bat"
 )
@@ -74,6 +76,20 @@ $win32Cpp = Get-Content -Raw -Encoding UTF8 (Join-Path $ToolRoot 'windows\runner
 if ($win32Cpp -notlike '*RegisterClassEx*' -or $win32Cpp -notlike '*WNDCLASSEX*') {
   throw "win32_window.cpp ohne WNDCLASSEX/RegisterClassEx. Bitte: git pull."
 }
+if ($win32Cpp -notlike '*ApplyFramelessChrome*') {
+  throw "win32_window.cpp ohne Frameless-Fenster. Bitte Branch mit rahmenlosem Chrome nutzen."
+}
+$toolChrome = Get-Content -Raw -Encoding UTF8 (Join-Path $ToolRoot 'lib\tool_chrome.dart')
+if ($toolChrome -notlike '*WindowChrome.close*' -or $toolChrome -notlike '*WindowChrome.minimize*') {
+  throw "tool_chrome.dart ohne Close/Minimize. Bitte git pull (Frameless-Stand)."
+}
+if ($toolChrome -notlike '*_WindowsWindowControls*' -and $toolChrome -notlike '*_WindowsCloseButton*') {
+  throw "tool_chrome.dart ohne Fenster-Buttons. Bitte git pull (Frameless-Stand)."
+}
+$flutterWin = Get-Content -Raw -Encoding UTF8 (Join-Path $ToolRoot 'windows\runner\flutter_window.cpp')
+if ($flutterWin -notlike '*startDrag*' -or $flutterWin -notlike '*"close"*' -or $flutterWin -notlike '*"minimize"*') {
+  throw "flutter_window.cpp ohne startDrag/close/minimize. Bitte git pull (Frameless-Stand)."
+}
 if ($pubspec -match '(?m)^\s*cloud_functions:') {
   throw "pubspec.yaml enthaelt noch cloud_functions. Bitte zuerst: git pull."
 }
@@ -122,9 +138,13 @@ Bitte VibesBox Sync schliessen (auch aus dem Infobereich), dann erneut:
   Write-Step "flutter --version"
   & $FlutterBat --version
 
-  Write-Step "flutter clean (damit alte Windows-EXE wirklich neu gebaut wird)"
-  & $FlutterBat clean
-  if ($LASTEXITCODE -ne 0) { throw "flutter clean fehlgeschlagen (Exit $LASTEXITCODE)" }
+  if (-not $Fast) {
+    Write-Step "flutter clean (damit alte Windows-EXE wirklich neu gebaut wird)"
+    & $FlutterBat clean
+    if ($LASTEXITCODE -ne 0) { throw "flutter clean fehlgeschlagen (Exit $LASTEXITCODE)" }
+  } else {
+    Write-Step "flutter clean uebersprungen (-Fast)"
+  }
 
   Write-Step "flutter pub get"
   & $FlutterBat pub get

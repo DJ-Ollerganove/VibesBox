@@ -1,7 +1,12 @@
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+
+import 'dj_library_prefs.dart';
+import 'tool_i18n.dart';
 
 /// Logo so groß wie das Fenster erlaubt. Randfarbe des Logos: #000B27.
 /// Hintergrund und Rahmen sind feste Ebenen, damit die Liste sie nicht neu zeichnet.
@@ -18,7 +23,102 @@ class ToolBackdrop extends StatelessWidget {
         const _FrozenBackdrop(),
         child,
         const _LiveFrame(),
+        // Getrennt positioniert: keine volle Titelleisten-Row (die wurde
+        // beim Hover weiß/grau). Nur unsichtbare Drag-Zone + Min/Close.
+        if (!kIsWeb && Platform.isWindows) ...[
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 68,
+            height: 28,
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onPanStart: (_) => WindowChrome.startDrag(),
+            ),
+          ),
+          const Positioned(
+            top: 4,
+            right: 6,
+            child: _WindowsWindowControls(),
+          ),
+        ],
       ],
+    );
+  }
+}
+
+/// Minimize + Close ohne Material/Tooltip/IconButton (kein weißer Hover-Streifen).
+class _WindowsWindowControls extends StatelessWidget {
+  const _WindowsWindowControls();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _WindowsChromeButton(
+          icon: Icons.remove,
+          iconColor: Color(0xFFCFD8DC),
+          hoverColor: Color(0x33FFFFFF),
+          onTap: WindowChrome.minimize,
+        ),
+        SizedBox(width: 2),
+        _WindowsChromeButton(
+          icon: Icons.close,
+          iconColor: Color(0xFFF44336),
+          hoverColor: Color(0x55F44336),
+          onTap: WindowChrome.close,
+        ),
+      ],
+    );
+  }
+}
+
+class _WindowsChromeButton extends StatefulWidget {
+  const _WindowsChromeButton({
+    required this.icon,
+    required this.iconColor,
+    required this.hoverColor,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final Color iconColor;
+  final Color hoverColor;
+  final Future<void> Function() onTap;
+
+  @override
+  State<_WindowsChromeButton> createState() => _WindowsChromeButtonState();
+}
+
+class _WindowsChromeButtonState extends State<_WindowsChromeButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => widget.onTap(),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 80),
+          width: 28,
+          height: 28,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: _hover ? widget.hoverColor : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(
+            widget.icon,
+            color: widget.iconColor,
+            size: 16,
+          ),
+        ),
+      ),
     );
   }
 }

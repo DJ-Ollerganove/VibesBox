@@ -37,6 +37,7 @@ class LiveReader {
           historyName: null,
           tracks: const [],
           readAt: DateTime.now(),
+          debugNote: 'Keine DJ-Software in den Einstellungen gewählt',
         ),
         readAt: DateTime.now(),
         idle: true,
