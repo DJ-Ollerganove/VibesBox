@@ -24,12 +24,12 @@ class ToolBackdrop extends StatelessWidget {
         child,
         const _LiveFrame(),
         // Getrennt positioniert: keine volle Titelleisten-Row (die wurde
-        // beim Hover weiß/grau). Nur unsichtbare Drag-Zone + kleines X.
+        // beim Hover weiß/grau). Nur unsichtbare Drag-Zone + Min/Close.
         if (!kIsWeb && Platform.isWindows) ...[
           Positioned(
             top: 0,
             left: 0,
-            right: 40,
+            right: 68,
             height: 28,
             child: GestureDetector(
               behavior: HitTestBehavior.translucent,
@@ -39,7 +39,7 @@ class ToolBackdrop extends StatelessWidget {
           const Positioned(
             top: 4,
             right: 6,
-            child: _WindowsCloseButton(),
+            child: _WindowsWindowControls(),
           ),
         ],
       ],
@@ -47,15 +47,51 @@ class ToolBackdrop extends StatelessWidget {
   }
 }
 
-/// Close ohne Material/Tooltip/IconButton – die erzeugen den weißen Hover-Streifen.
-class _WindowsCloseButton extends StatefulWidget {
-  const _WindowsCloseButton();
+/// Minimize + Close ohne Material/Tooltip/IconButton (kein weißer Hover-Streifen).
+class _WindowsWindowControls extends StatelessWidget {
+  const _WindowsWindowControls();
 
   @override
-  State<_WindowsCloseButton> createState() => _WindowsCloseButtonState();
+  Widget build(BuildContext context) {
+    return const Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _WindowsChromeButton(
+          icon: Icons.remove,
+          iconColor: Color(0xFFCFD8DC),
+          hoverColor: Color(0x33FFFFFF),
+          onTap: WindowChrome.minimize,
+        ),
+        SizedBox(width: 2),
+        _WindowsChromeButton(
+          icon: Icons.close,
+          iconColor: Color(0xFFF44336),
+          hoverColor: Color(0x55F44336),
+          onTap: WindowChrome.close,
+        ),
+      ],
+    );
+  }
 }
 
-class _WindowsCloseButtonState extends State<_WindowsCloseButton> {
+class _WindowsChromeButton extends StatefulWidget {
+  const _WindowsChromeButton({
+    required this.icon,
+    required this.iconColor,
+    required this.hoverColor,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final Color iconColor;
+  final Color hoverColor;
+  final Future<void> Function() onTap;
+
+  @override
+  State<_WindowsChromeButton> createState() => _WindowsChromeButtonState();
+}
+
+class _WindowsChromeButtonState extends State<_WindowsChromeButton> {
   bool _hover = false;
 
   @override
@@ -66,19 +102,19 @@ class _WindowsCloseButtonState extends State<_WindowsCloseButton> {
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: () => WindowChrome.close(),
+        onTap: () => widget.onTap(),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 80),
           width: 28,
           height: 28,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: _hover ? const Color(0x55F44336) : Colors.transparent,
+            color: _hover ? widget.hoverColor : Colors.transparent,
             borderRadius: BorderRadius.circular(8),
           ),
-          child: const Icon(
-            Icons.close,
-            color: Color(0xFFF44336),
+          child: Icon(
+            widget.icon,
+            color: widget.iconColor,
             size: 16,
           ),
         ),

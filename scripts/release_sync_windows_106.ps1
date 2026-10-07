@@ -44,13 +44,13 @@ $flutterWin = Get-Content -Raw -Encoding UTF8 (Join-Path $RepoRoot 'tools\rb_now
 if ($win32 -notlike '*ApplyFramelessChrome*') {
   throw 'Branch ohne Frameless-Fenster – abgebrochen. Basis muss all-in-one + Installer sein.'
 }
-if ($chrome -notlike '*_WindowsCloseButton*') {
-  throw 'Branch ohne rotes Close-X – abgebrochen.'
+if ($chrome -notlike '*WindowChrome.close*' -or $chrome -notlike '*WindowChrome.minimize*') {
+  throw 'Branch ohne Close/Minimize – abgebrochen.'
 }
-if ($flutterWin -notlike '*startDrag*' -or $flutterWin -notlike '*"close"*') {
-  throw 'Branch ohne startDrag/close Channel – abgebrochen.'
+if ($flutterWin -notlike '*startDrag*' -or $flutterWin -notlike '*"close"*' -or $flutterWin -notlike '*"minimize"*') {
+  throw 'Branch ohne startDrag/close/minimize Channel – abgebrochen.'
 }
-Write-Host 'OK: Frameless + Close-X vorhanden' -ForegroundColor Green
+Write-Host 'OK: Frameless + Minimize/Close vorhanden' -ForegroundColor Green
 
 
 Set-Location (Join-Path $RepoRoot 'tools\rb_now_playing')

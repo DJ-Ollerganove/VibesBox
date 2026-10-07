@@ -80,12 +80,15 @@ if ($win32Cpp -notlike '*ApplyFramelessChrome*') {
   throw "win32_window.cpp ohne Frameless-Fenster. Bitte Branch mit rahmenlosem Chrome nutzen."
 }
 $toolChrome = Get-Content -Raw -Encoding UTF8 (Join-Path $ToolRoot 'lib\tool_chrome.dart')
-if ($toolChrome -notlike '*_WindowsCloseButton*' -or $toolChrome -notlike '*WindowChrome.close*') {
-  throw "tool_chrome.dart ohne rotes Schliessen-X. Bitte git pull (Frameless-Stand)."
+if ($toolChrome -notlike '*WindowChrome.close*' -or $toolChrome -notlike '*WindowChrome.minimize*') {
+  throw "tool_chrome.dart ohne Close/Minimize. Bitte git pull (Frameless-Stand)."
+}
+if ($toolChrome -notlike '*_WindowsWindowControls*' -and $toolChrome -notlike '*_WindowsCloseButton*') {
+  throw "tool_chrome.dart ohne Fenster-Buttons. Bitte git pull (Frameless-Stand)."
 }
 $flutterWin = Get-Content -Raw -Encoding UTF8 (Join-Path $ToolRoot 'windows\runner\flutter_window.cpp')
-if ($flutterWin -notlike '*startDrag*' -or $flutterWin -notlike '*"close"*') {
-  throw "flutter_window.cpp ohne startDrag/close. Bitte git pull (Frameless-Stand)."
+if ($flutterWin -notlike '*startDrag*' -or $flutterWin -notlike '*"close"*' -or $flutterWin -notlike '*"minimize"*') {
+  throw "flutter_window.cpp ohne startDrag/close/minimize. Bitte git pull (Frameless-Stand)."
 }
 if ($pubspec -match '(?m)^\s*cloud_functions:') {
   throw "pubspec.yaml enthaelt noch cloud_functions. Bitte zuerst: git pull."

@@ -81,6 +81,13 @@ bool FlutterWindow::OnCreate() {
           result->Success(flutter::EncodableValue(true));
           return;
         }
+        if (method == "minimize") {
+          if (hwnd != nullptr) {
+            ::ShowWindow(hwnd, SW_MINIMIZE);
+          }
+          result->Success(flutter::EncodableValue(true));
+          return;
+        }
         if (method == "close") {
           if (hwnd != nullptr) {
             ::PostMessage(hwnd, WM_CLOSE, 0, 0);

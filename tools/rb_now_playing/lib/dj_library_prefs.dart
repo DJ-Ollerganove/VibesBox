@@ -487,4 +487,16 @@ class WindowChrome {
       return;
     }
   }
+
+  /// Windows frameless: Fenster minimieren (neben dem roten X).
+  static Future<void> minimize() async {
+    if (!Platform.isWindows) return;
+    try {
+      await _channel.invokeMethod<bool>('minimize');
+    } on PlatformException {
+      return;
+    } on MissingPluginException {
+      return;
+    }
+  }
 }
