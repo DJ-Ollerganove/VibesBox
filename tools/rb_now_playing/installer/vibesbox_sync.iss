@@ -63,6 +63,29 @@ Name: "albanian"; MessagesFile: "languages\Albanian.isl"
 Name: "thai"; MessagesFile: "languages\Thai.isl"
 Name: "hindi"; MessagesFile: "languages\Hindi.isl"
 
+; Sprachauswahl-Dialog: immer englische Bezeichnungen (wie im Sync-Tool)
+[LangOptions]
+english.LanguageName=English
+german.LanguageName=German
+french.LanguageName=French
+spanish.LanguageName=Spanish
+italian.LanguageName=Italian
+dutch.LanguageName=Dutch
+portuguese.LanguageName=Portuguese
+polish.LanguageName=Polish
+czech.LanguageName=Czech
+russian.LanguageName=Russian
+ukrainian.LanguageName=Ukrainian
+turkish.LanguageName=Turkish
+arabic.LanguageName=Arabic
+japanese.LanguageName=Japanese
+chinesesimplified.LanguageName=Chinese
+vietnamese.LanguageName=Vietnamese
+greek.LanguageName=Greek
+albanian.LanguageName=Albanian
+thai.LanguageName=Thai
+hindi.LanguageName=Hindi
+
 [CustomMessages]
 ; VC++-Hinweis – parallel zu den Installer-Sprachen (nicht Flutter tool_packs)
 english.VcMissing=This PC is missing the Microsoft Visual C++ runtime%n(VCRUNTIME140_1.dll).%n%nVibesBox Sync cannot start without this package.%n%nOpen the free Microsoft download now?
