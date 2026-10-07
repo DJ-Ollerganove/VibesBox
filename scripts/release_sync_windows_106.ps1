@@ -37,6 +37,22 @@ Branch/Stand pruefen:
 }
 Write-Host ("OK: pubspec = {0}" -f $got) -ForegroundColor Green
 
+# Nie wieder alten Installer-Ast ohne Frameless akzeptieren.
+$win32 = Get-Content -Raw -Encoding UTF8 (Join-Path $RepoRoot 'tools\rb_now_playing\windows\runner\win32_window.cpp')
+$chrome = Get-Content -Raw -Encoding UTF8 (Join-Path $RepoRoot 'tools\rb_now_playing\lib\tool_chrome.dart')
+$flutterWin = Get-Content -Raw -Encoding UTF8 (Join-Path $RepoRoot 'tools\rb_now_playing\windows\runner\flutter_window.cpp')
+if ($win32 -notlike '*ApplyFramelessChrome*') {
+  throw 'Branch ohne Frameless-Fenster – abgebrochen. Basis muss all-in-one + Installer sein.'
+}
+if ($chrome -notlike '*_WindowsCloseButton*') {
+  throw 'Branch ohne rotes Close-X – abgebrochen.'
+}
+if ($flutterWin -notlike '*startDrag*' -or $flutterWin -notlike '*"close"*') {
+  throw 'Branch ohne startDrag/close Channel – abgebrochen.'
+}
+Write-Host 'OK: Frameless + Close-X vorhanden' -ForegroundColor Green
+
+
 Set-Location (Join-Path $RepoRoot 'tools\rb_now_playing')
 Write-Host "==> build_windows_installer.ps1" -ForegroundColor Cyan
 & .\build_windows_installer.ps1
