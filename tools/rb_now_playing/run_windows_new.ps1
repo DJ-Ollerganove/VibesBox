@@ -14,10 +14,15 @@ Get-Process -Name 'VibesBoxSync','rb_now_playing' -ErrorAction SilentlyContinue 
 
 Write-Host "==> git pull" -ForegroundColor Cyan
 Set-Location $RepoRoot
-git fetch origin
-git checkout cursor/windows-sync-installer-b710
-git pull origin cursor/windows-sync-installer-b710
+git fetch origin cursor/windows-vcredist-installer-b710
+git checkout cursor/windows-vcredist-installer-b710
+git pull origin cursor/windows-vcredist-installer-b710
 Set-Location $ToolRoot
+
+$pubspec = Get-Content -Raw -Encoding UTF8 '.\pubspec.yaml'
+if ($pubspec -notmatch '(?m)^version:\s*1\.0\.6\b') {
+  throw 'pubspec.yaml ist nicht 1.0.6 – falscher Branch/Stand.'
+}
 
 $session = Get-Content -Raw -Encoding UTF8 '.\lib\tool_session.dart'
 $main = Get-Content -Raw -Encoding UTF8 '.\windows\runner\main.cpp'
