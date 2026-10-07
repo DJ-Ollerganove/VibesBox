@@ -51,4 +51,94 @@ Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; IconIndex: 0; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
+; App nur starten, wenn VC++-Laufzeit vorhanden (sonst VCRUNTIME140_1.dll-Fehler).
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent; Check: VcRuntimeInstalled
+
+[Code]
+const
+  VcRedistUrl = 'https://aka.ms/vs/17/release/vc_redist.x64.exe';
+
+var
+  VcDownloadOffered: Boolean;
+
+function VcRuntimeInstalled: Boolean;
+begin
+  { Genau die DLL aus dem Kundenfehlerbild }
+  Result := FileExists(ExpandConstant('{sys}\VCRUNTIME140_1.dll'));
+end;
+
+procedure OpenVcRedistDownload;
+var
+  ErrorCode: Integer;
+begin
+  VcDownloadOffered := True;
+  if not ShellExec('open', VcRedistUrl, '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode) then
+  begin
+    if ActiveLanguage = 'german' then
+      MsgBox(
+        'Download konnte nicht geoeffnet werden.' + #13#10 +
+        'Bitte manuell installieren:' + #13#10 + VcRedistUrl,
+        mbError, MB_OK)
+    else
+      MsgBox(
+        'Could not open the download.' + #13#10 +
+        'Please install manually:' + #13#10 + VcRedistUrl,
+        mbError, MB_OK);
+  end;
+end;
+
+function AskVcRedistDownload(const Msg: String): Boolean;
+begin
+  Result := MsgBox(Msg, mbConfirmation, MB_YESNO) = IDYES;
+  if Result then
+    OpenVcRedistDownload;
+end;
+
+function InitializeSetup: Boolean;
+var
+  Msg: String;
+begin
+  Result := True;
+  VcDownloadOffered := False;
+  if VcRuntimeInstalled or WizardSilent then
+    Exit;
+
+  if ActiveLanguage = 'german' then
+    Msg :=
+      'Auf diesem PC fehlt die Microsoft Visual C++ Laufzeitbibliothek' + #13#10 +
+      '(VCRUNTIME140_1.dll).' + #13#10 + #13#10 +
+      'Ohne dieses Paket kann VibesBox Sync nicht starten.' + #13#10 + #13#10 +
+      'Jetzt den kostenlosen Microsoft-Download oeffnen?'
+  else
+    Msg :=
+      'This PC is missing the Microsoft Visual C++ runtime' + #13#10 +
+      '(VCRUNTIME140_1.dll).' + #13#10 + #13#10 +
+      'VibesBox Sync cannot start without this package.' + #13#10 + #13#10 +
+      'Open the free Microsoft download now?';
+
+  AskVcRedistDownload(Msg);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  Msg: String;
+begin
+  if CurStep <> ssPostInstall then
+    Exit;
+  if VcRuntimeInstalled or WizardSilent or VcDownloadOffered then
+    Exit;
+
+  { Nur nochmal fragen, wenn der Download am Anfang abgelehnt wurde }
+  if ActiveLanguage = 'german' then
+    Msg :=
+      'VibesBox Sync wurde installiert, startet aber erst nach Installation der' + #13#10 +
+      'Visual C++ Laufzeit (VCRUNTIME140_1.dll).' + #13#10 + #13#10 +
+      'Download jetzt oeffnen?'
+  else
+    Msg :=
+      'VibesBox Sync is installed, but it will only start after you install the' + #13#10 +
+      'Visual C++ runtime (VCRUNTIME140_1.dll).' + #13#10 + #13#10 +
+      'Open the download now?';
+
+  AskVcRedistDownload(Msg);
+end;
