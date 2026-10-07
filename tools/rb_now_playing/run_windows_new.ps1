@@ -184,12 +184,12 @@ if ($win32 -notlike '*ApplyFramelessChrome*' -and $win32 -notlike '*WM_NCCALCSIZ
   throw 'win32_window.cpp ohne Frameless-Chrome. Falscher Branch/Stand.'
 }
 $chrome = Get-Content -Raw -Encoding UTF8 '.\lib\tool_chrome.dart'
-if ($chrome -notlike '*_WindowsCloseButton*' -or $chrome -notlike '*WindowChrome.close*') {
-  throw 'tool_chrome.dart ohne rotes Close-X. Falscher Branch/Stand (nie alter Installer-Ast).'
+if ($chrome -notlike '*WindowChrome.close*' -or $chrome -notlike '*WindowChrome.minimize*') {
+  throw 'tool_chrome.dart ohne Close/Minimize. Falscher Branch/Stand (nie alter Installer-Ast).'
 }
 $flutterWin = Get-Content -Raw -Encoding UTF8 '.\windows\runner\flutter_window.cpp'
-if ($flutterWin -notlike '*startDrag*' -or $flutterWin -notlike '*"close"*') {
-  throw 'flutter_window.cpp ohne startDrag/close. Falscher Branch/Stand.'
+if ($flutterWin -notlike '*startDrag*' -or $flutterWin -notlike '*"close"*' -or $flutterWin -notlike '*"minimize"*') {
+  throw 'flutter_window.cpp ohne startDrag/close/minimize. Falscher Branch/Stand.'
 }
 if ($prefs -notlike '*launchWithDj*' -or $prefs -notlike '*setLaunchWithDj*') {
   throw 'dj_library_prefs.dart ohne launchWithDj. Falscher Branch/Stand.'
