@@ -195,8 +195,7 @@ function VcRuntimeInstalled: Boolean;
 var
   Installed: Cardinal;
 begin
-  { 32-Bit-Setup sieht {sys} als SysWOW64 – x64-VC++ liegt in echtem System32.
-    Deshalb zuerst {sysnative}, dann {sys}, dann Registry (64-Bit-View). }
+  // 32-Bit-Setup: sys = SysWOW64. x64-VC++ liegt in echtem System32 (sysnative).
   if FileExists(ExpandConstant('{sysnative}\VCRUNTIME140_1.dll')) then
   begin
     Result := True;
