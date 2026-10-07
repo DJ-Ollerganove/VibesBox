@@ -65,16 +65,25 @@ if ($syncRaw -notlike '*SYNC_HOSTING_STABLE_v3*') {
 Altes sync_version_from_pubspec.ps1 erkannt.
 
 Einmal:
-  git fetch origin cursor/windows-sync-installer-b710
-  git checkout origin/cursor/windows-sync-installer-b710 -- scripts/deploy_sync_windows.ps1 scripts/pull_and_deploy_sync_windows.ps1 tools/rb_now_playing/scripts/sync_version_from_pubspec.ps1 public/sync/index.html public/sync/version.json firebase.json
+  git fetch origin cursor/windows-vcredist-installer-b710
+  git checkout cursor/windows-vcredist-installer-b710
   .\scripts\deploy_sync_windows.ps1
 "@
 }
-$Version = & $syncScript -UpdateHosting |
-  Select-Object -Last 1
-$Version = ("{0}" -f $Version).Trim()
-if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
-  throw ("Keine gueltige Version aus pubspec (bekommen: '{0}')." -f $Version)
+
+# Version IMMER direkt aus pubspec lesen (nicht aus Script-Output / mac-Zeile).
+$pubspecPath = Join-Path $ToolRoot 'pubspec.yaml'
+$pubspec = Get-Content -Raw -Encoding UTF8 $pubspecPath
+if ($pubspec -notmatch '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)') {
+  throw "Konnte version in tools/rb_now_playing/pubspec.yaml nicht lesen."
+}
+$Version = $Matches[1]
+Write-Host ("pubspec.yaml -> Windows-Version {0}" -f $Version) -ForegroundColor Green
+
+& $syncScript -UpdateHosting | Out-Host
+$verJsonCheck = Get-Content -Raw -Encoding UTF8 (Join-Path $RepoRoot 'public\sync\version.json')
+if ($verJsonCheck -notlike ('*"windows": "{0}"*' -f $Version) -and $verJsonCheck -notlike ('*"windows":"{0}"*' -f $Version)) {
+  throw ("version.json wurde nicht auf windows={0} geschrieben." -f $Version)
 }
 
 if (-not $SetupExe) {
