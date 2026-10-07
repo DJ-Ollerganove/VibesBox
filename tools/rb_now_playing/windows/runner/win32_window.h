@@ -90,6 +90,13 @@ class Win32Window {
   // Update the window frame's theme to match the system theme.
   static void UpdateTheme(HWND const window);
 
+  // Mac-ähnlich: keine native Titelleiste / kein grauer Caption-Streifen,
+  // nur unser Flutter-Rahmen. Taskleisten-Icon bleibt erhalten.
+  static void ApplyFramelessChrome(HWND const window);
+
+  // Resize-Ränder wie WS_THICKFRAME, ohne native Caption.
+  static LRESULT HitTestFrameless(HWND window, POINT screen_point);
+
   bool quit_on_close_ = false;
 
   // window handle for top level window.
