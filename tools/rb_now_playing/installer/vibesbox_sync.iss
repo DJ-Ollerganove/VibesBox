@@ -192,9 +192,38 @@ var
   VcDownloadOffered: Boolean;
 
 function VcRuntimeInstalled: Boolean;
+var
+  Installed: Cardinal;
 begin
-  { Genau die DLL aus dem Kundenfehlerbild }
-  Result := FileExists(ExpandConstant('{sys}\VCRUNTIME140_1.dll'));
+  { 32-Bit-Setup sieht {sys} als SysWOW64 – x64-VC++ liegt in echtem System32.
+    Deshalb zuerst {sysnative}, dann {sys}, dann Registry (64-Bit-View). }
+  if FileExists(ExpandConstant('{sysnative}\VCRUNTIME140_1.dll')) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  if FileExists(ExpandConstant('{sys}\VCRUNTIME140_1.dll')) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  if FileExists(ExpandConstant('{win}\System32\VCRUNTIME140_1.dll')) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  Result := False;
+  if RegQueryDWordValue(HKLM64, 'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64', 'Installed', Installed) then
+  begin
+    if Installed = 1 then
+      Result := True;
+  end;
+  if (not Result) and RegQueryDWordValue(HKLM, 'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64', 'Installed', Installed) then
+  begin
+    if Installed = 1 then
+      Result := True;
+  end;
 end;
 
 procedure OpenVcRedistDownload;
