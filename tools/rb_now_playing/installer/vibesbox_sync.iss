@@ -3,9 +3,9 @@
 ; MyAppVersion und OutputBaseFilename werden vor dem Compile
 ; aus pubspec.yaml ueberschrieben.
 ;
-; Sprachen: gleiche Auswahl wie im Sync-Tool (tool_i18n), soweit Inno
-; offizielle .isl-Dateien mitliefert. Albanisch/Hindi/Thai: kein Inno-.isl
-; -> Installer-UI faellt auf Englisch zurueck; App-l10n bleibt davon unberührt.
+; Sprachen: gleiche Auswahl wie im Sync-Tool (tool_i18n).
+; Fehlende/unofficial .isl liegen unter installer/languages/.
+; Hindi: kein Inno-.isl -> Installer-UI Englisch; App-l10n unberührt.
 
 #define MyAppName "VibesBox Sync"
 #define MyAppExeName "VibesBoxSync.exe"
@@ -50,14 +50,17 @@ Name: "dutch"; MessagesFile: "compiler:Languages\Dutch.isl"
 Name: "portuguese"; MessagesFile: "compiler:Languages\Portuguese.isl"
 Name: "polish"; MessagesFile: "compiler:Languages\Polish.isl"
 Name: "czech"; MessagesFile: "compiler:Languages\Czech.isl"
-Name: "greek"; MessagesFile: "compiler:Languages\Greek.isl"
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 Name: "ukrainian"; MessagesFile: "compiler:Languages\Ukrainian.isl"
 Name: "turkish"; MessagesFile: "compiler:Languages\Turkish.isl"
 Name: "arabic"; MessagesFile: "compiler:Languages\Arabic.isl"
 Name: "japanese"; MessagesFile: "compiler:Languages\Japanese.isl"
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
-Name: "vietnamese"; MessagesFile: "compiler:Languages\Vietnamese.isl"
+; Lokal mitgeliefert (nicht in jeder Inno-Installation unter compiler:Languages)
+Name: "chinesesimplified"; MessagesFile: "languages\ChineseSimplified.isl"
+Name: "vietnamese"; MessagesFile: "languages\Vietnamese.isl"
+Name: "greek"; MessagesFile: "languages\Greek.isl"
+Name: "albanian"; MessagesFile: "languages\Albanian.isl"
+Name: "thai"; MessagesFile: "languages\Thai.isl"
 
 [CustomMessages]
 ; VC++-Hinweis – parallel zu den Installer-Sprachen (nicht Flutter tool_packs)
@@ -128,6 +131,14 @@ chinesesimplified.VcOpenFail=无法打开下载。%n请手动安装:%nhttps://ak
 vietnamese.VcMissing=May tinh nay thieu thu vien Microsoft Visual C++%n(VCRUNTIME140_1.dll).%n%nKhong co goi nay thi VibesBox Sync khong the khoi dong.%n%nMo ban tai Microsoft mien phi ngay bay gio?
 vietnamese.VcMissingAfter=VibesBox Sync da duoc cai dat, nhung chi chay sau khi cai Visual C++ runtime (VCRUNTIME140_1.dll).%n%nMo ban tai ngay bay gio?
 vietnamese.VcOpenFail=Khong mo duoc ban tai.%nVui long cai thu cong:%nhttps://aka.ms/vs/17/release/vc_redist.x64.exe
+
+albanian.VcMissing=Ne kete PC mungon biblioteka Microsoft Visual C++%n(VCRUNTIME140_1.dll).%n%nPa kete pakete VibesBox Sync nuk mund te niset.%n%nTe hapet tani shkarkimi falas i Microsoft?
+albanian.VcMissingAfter=VibesBox Sync u instalua, por niset vetem pasi te instaloni runtime Visual C++ (VCRUNTIME140_1.dll).%n%nTe hapet shkarkimi tani?
+albanian.VcOpenFail=Shkarkimi nuk u hap.%nInstaloni manualisht:%nhttps://aka.ms/vs/17/release/vc_redist.x64.exe
+
+thai.VcMissing=พีซีเครื่องนี้ยังไม่มี Microsoft Visual C++ runtime%n(VCRUNTIME140_1.dll)%n%nหากไม่มีแพ็กเกจนี้ VibesBox Sync จะเริ่มไม่ได้%n%nเปิดดาวน์โหลดฟรีจาก Microsoft ตอนนี้เลยหรือไม่?
+thai.VcMissingAfter=ติดตั้ง VibesBox Sync แล้ว แต่จะเริ่มได้หลังจากติดตั้ง Visual C++ runtime (VCRUNTIME140_1.dll)%n%nเปิดดาวน์โหลดตอนนี้เลยหรือไม่?
+thai.VcOpenFail=เปิดดาวน์โหลดไม่ได้%nติดตั้งด้วยตนเอง:%nhttps://aka.ms/vs/17/release/vc_redist.x64.exe
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
