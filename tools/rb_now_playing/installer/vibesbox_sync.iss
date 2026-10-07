@@ -4,8 +4,8 @@
 ; aus pubspec.yaml ueberschrieben.
 ;
 ; Sprachen: gleiche Auswahl wie im Sync-Tool (tool_i18n).
-; Fehlende/unofficial .isl liegen unter installer/languages/.
-; Hindi: kein Inno-.isl -> Installer-UI Englisch; App-l10n unberührt.
+; Fehlende/unofficial .isl liegen unter installer/languages/ (inkl. Hindi).
+; Hinweis: Der Microsoft VC++-Redist selbst hat kein separates Hindi-UI-Paket.
 
 #define MyAppName "VibesBox Sync"
 #define MyAppExeName "VibesBoxSync.exe"
@@ -61,6 +61,7 @@ Name: "vietnamese"; MessagesFile: "languages\Vietnamese.isl"
 Name: "greek"; MessagesFile: "languages\Greek.isl"
 Name: "albanian"; MessagesFile: "languages\Albanian.isl"
 Name: "thai"; MessagesFile: "languages\Thai.isl"
+Name: "hindi"; MessagesFile: "languages\Hindi.isl"
 
 [CustomMessages]
 ; VC++-Hinweis – parallel zu den Installer-Sprachen (nicht Flutter tool_packs)
@@ -139,6 +140,10 @@ albanian.VcOpenFail=Shkarkimi nuk u hap.%nInstaloni manualisht:%nhttps://aka.ms/
 thai.VcMissing=พีซีเครื่องนี้ยังไม่มี Microsoft Visual C++ runtime%n(VCRUNTIME140_1.dll)%n%nหากไม่มีแพ็กเกจนี้ VibesBox Sync จะเริ่มไม่ได้%n%nเปิดดาวน์โหลดฟรีจาก Microsoft ตอนนี้เลยหรือไม่?
 thai.VcMissingAfter=ติดตั้ง VibesBox Sync แล้ว แต่จะเริ่มได้หลังจากติดตั้ง Visual C++ runtime (VCRUNTIME140_1.dll)%n%nเปิดดาวน์โหลดตอนนี้เลยหรือไม่?
 thai.VcOpenFail=เปิดดาวน์โหลดไม่ได้%nติดตั้งด้วยตนเอง:%nhttps://aka.ms/vs/17/release/vc_redist.x64.exe
+
+hindi.VcMissing=इस पीसी पर Microsoft Visual C++ रनटाइम मौजूद नहीं है%n(VCRUNTIME140_1.dll)।%n%nइस पैकेज के बिना VibesBox Sync शुरू नहीं हो सकता।%n%nक्या अभी Microsoft का मुफ़्त डाउनलोड खोला जाए?
+hindi.VcMissingAfter=VibesBox Sync इंस्टॉल हो गया है, लेकिन Visual C++ रनटाइम (VCRUNTIME140_1.dll) इंस्टॉल करने के बाद ही चलेगा।%n%nक्या अभी डाउनलोड खोला जाए?
+hindi.VcOpenFail=डाउनलोड नहीं खोला जा सका।%nकृपया मैन्युअली इंस्टॉल करें:%nhttps://aka.ms/vs/17/release/vc_redist.x64.exe
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
