@@ -14,7 +14,7 @@
 
 [CmdletBinding()]
 param(
-  [string]$Branch = 'cursor/windows-sync-installer-b710',
+  [string]$Branch = 'cursor/windows-vcredist-installer-b710',
   [string]$SetupExe = ''
 )
 
