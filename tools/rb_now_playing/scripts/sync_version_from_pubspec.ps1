@@ -55,7 +55,7 @@ if ($UpdateHosting) {
   $syncDir = Join-Path $RepoRoot 'public\sync'
   New-Item -ItemType Directory -Force -Path $syncDir | Out-Null
 
-  $macVer = '1.0.2'
+  $macVer = '1.0.5'
   $versionJsonPath = Join-Path $syncDir 'version.json'
   if (Test-Path $versionJsonPath) {
     $prev = [System.IO.File]::ReadAllText($versionJsonPath)
