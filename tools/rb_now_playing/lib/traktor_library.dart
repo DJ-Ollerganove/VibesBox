@@ -22,7 +22,10 @@ class TraktorLibrarySource implements DjLibrarySource {
     final nmlPath = _requireCollection();
     final historyFile = locateTraktorHistory(nmlPath);
     if (historyFile != null) {
-      final tracks = parseTraktorHistoryNml(historyFile.readAsStringSync());
+      final tracks = parseTraktorHistoryNml(
+        historyFile.readAsStringSync(),
+        library: _libraryCached(),
+      );
       return HistorySnapshot(
         dbPath: historyFile.path,
         historyName: historyFile.uri.pathSegments.isEmpty
@@ -207,7 +210,10 @@ List<LibraryTrack> parseTraktorCollection(String nml) {
   return tracks;
 }
 
-List<HistoryTrack> parseTraktorHistoryNml(String nml) {
+List<HistoryTrack> parseTraktorHistoryNml(
+  String nml, {
+  List<LibraryTrack> library = const [],
+}) {
   final keys = <String>[];
   final pkRe = RegExp(
     r'<PRIMARYKEY\b[^>]*\bKEY="([^"]+)"',
@@ -234,16 +240,23 @@ List<HistoryTrack> parseTraktorHistoryNml(String nml) {
   for (final key in keys.reversed) {
     n += 1;
     final parsed = traktorPrimaryKeyToTitle(key);
+    LibraryTrack? known;
+    for (final track in library) {
+      if (track.location != null && track.location == parsed.path) {
+        known = track;
+        break;
+      }
+    }
     tracks.add(
       HistoryTrack(
         trackNo: n,
-        title: parsed.title,
-        artist: '',
+        title: known?.title ?? parsed.title,
+        artist: known?.artist ?? '',
         playedAt: null,
         historyName: '',
-        bpm: null,
-        musicalKey: null,
-        length: null,
+        bpm: known?.bpm,
+        musicalKey: known?.musicalKey,
+        length: known?.lengthSec == null ? null : Duration(seconds: known!.lengthSec!),
       ),
     );
   }

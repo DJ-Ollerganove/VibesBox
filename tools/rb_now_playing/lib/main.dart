@@ -6,7 +6,10 @@ import 'package:flutter/services.dart';
 
 import 'firebase_options.dart';
 import 'camelot.dart';
+import 'dj_history_delay.dart';
+import 'heard_session.dart';
 import 'dj_library_prefs.dart';
+import 'dj_watch_install.dart';
 import 'dj_library_source.dart';
 import 'dj_source_factory.dart';
 import 'library_drag.dart';
@@ -16,6 +19,8 @@ import 'song_catalog.dart';
 import 'tidal_lookup.dart';
 import 'rekordbox_history.dart';
 import 'rekordbox_live.dart';
+import 'serato_play_gate.dart';
+import 'serato_remote.dart';
 import 'song_rec_settings_page.dart';
 import 'tool_chrome.dart';
 import 'tool_gate.dart';
@@ -132,7 +137,6 @@ class NowPlayingPage extends StatefulWidget {
 }
 
 class _NowPlayingPageState extends State<NowPlayingPage> {
-  static const _idleAfter = Duration(minutes: 10);
   static const _cOffen = Color(0xFF2196F3);
   static const _cGespielt = Color(0xFF4CAF50);
   static const _cAbgelehnt = Color(0xFFFF9800);
@@ -143,6 +147,9 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
   final _djPrefs = DjLibraryPrefs();
   final _tidal = TidalLookupStore();
   final _liveReader = LiveReader();
+  final _seratoRemote = SeratoRemoteMonitor();
+  final _seratoClock = SeratoPlayClock();
+  DjSoftware? _seratoArmedFor;
   late final SongCatalogStore _catalog;
   DjLibrarySource? _source;
   late final Wishboard _wishboard;
@@ -151,6 +158,7 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
   Timer? _libAfterPlay;
   String? _libTrackIdentity;
   String? _markedPlayId;
+  String? _markingId;
   HistoryTrack? _transitionFrom;
   LiveSnapshot? _snapshot;
   String? _error;
@@ -171,6 +179,8 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
   bool _showQueued = false;
   int _libraryPaintGen = 0;
   String? _suggestSeed;
+  String? _autoDoneKey;
+  String? _emptyOnceKey;
   List<Map<String, dynamic>> _suggestions = const [];
   bool _suggesting = false;
   final List<_Heard> _heard = [];
@@ -195,7 +205,14 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     _library.addListener(_onLibrary);
     _djPrefs.addListener(_onDjPrefs);
     _tidal.addListener(_onTidal);
+    unawaited(_prepareDjWatch());
     unawaited(_bootGate());
+  }
+
+  Future<void> _prepareDjWatch() async {
+    await _djPrefs.load(notify: false);
+    if (!mounted) return;
+    await DjWatchInstall.apply(_djPrefs.launchWithDj);
   }
 
   Future<void> _bootGate() async {
@@ -220,7 +237,17 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     unawaited(_startLibrary());
     unawaited(_startTidal());
     WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
-    _timer = Timer.periodic(const Duration(seconds: 2), (_) => _refresh());
+    _setPollTimer();
+  }
+
+  void _setPollTimer() {
+    if (!_armed) return;
+    _timer?.cancel();
+    final serato = _djPrefs.software == DjSoftware.serato;
+    _timer = Timer.periodic(
+      Duration(milliseconds: serato ? 500 : 2000),
+      (_) => _refresh(),
+    );
   }
 
   Future<void> _startTidal() async {
@@ -249,6 +276,16 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     _source = software == null
         ? null
         : openDjLibrarySource(software, _djPrefs.resolvedPath(software));
+    if (software != _seratoArmedFor) {
+      _seratoArmedFor = software;
+      if (software == DjSoftware.serato) {
+        _seratoRemote.arm();
+        unawaited(_seratoRemote.ensureStarted());
+      } else {
+        _seratoClock.clear();
+        _seratoRemote.stop();
+      }
+    }
     _liveReader.source = _source;
     _library.allowDeckDrag = software != null;
     deckDragSoftware = software?.id ?? 'rekordbox';
@@ -266,6 +303,7 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
         unawaited(_library.syncFrom(_source!));
       }
     }
+    _setPollTimer();
     if (mounted) setState(() {});
   }
 
@@ -294,10 +332,14 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     _djPrefs.dispose();
     _tidal.dispose();
     _source?.close();
+    _seratoRemote.stop();
     super.dispose();
   }
 
-  bool _shouldTreatAsIdle(HistoryTrack? track) {
+  bool _shouldTreatAsIdle(
+    HistoryTrack? track, {
+    bool ignorePlayedAt = false,
+  }) {
     if (track == null) return true;
     final now = DateTime.now();
     final identity = track.identity;
@@ -305,13 +347,12 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
       _seenIdentity = identity;
       _seenAt = now;
     }
-    var age = _seenAt == null ? Duration.zero : now.difference(_seenAt!);
-    final playedAt = track.playedAt;
-    if (playedAt != null) {
-      final fromPlayed = now.difference(playedAt);
-      if (fromPlayed > age) age = fromPlayed;
-    }
-    return age >= _idleAfter;
+    return historyHeadIsIdle(
+      track,
+      now,
+      ignorePlayedAt: ignorePlayedAt,
+      seenAt: _seenAt,
+    );
   }
 
   String _deckKey(LiveSnapshot? snap) {
@@ -322,14 +363,35 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
   }
 
   void _refresh() {
+    unawaited(DjHistoryDelay.applyPending(_djPrefs));
     try {
       final snapshot = _liveReader.read();
-      final effective =
-          _shouldTreatAsIdle(snapshot.history.nowPlaying)
-              ? snapshot.asIdle()
-              : snapshot;
+      final serato = _djPrefs.software == DjSoftware.serato;
+      final now = DateTime.now();
+      final holds = serato && _seratoRemote.holdsHistoryAt(now);
+      final gated = holds
+          ? _seratoClock.apply(
+              snapshot: snapshot,
+              holdsHistory: true,
+              decks: _seratoRemote.decks,
+              delaySeconds: _djPrefs.seratoPlayDelaySec,
+              now: now,
+            )
+          : snapshot;
+      if (!holds) _seratoClock.clear();
+      final seratoHold = holds && gated.idle;
+      final effective = seratoHold
+          ? gated
+          : (_shouldTreatAsIdle(
+                gated.history.nowPlaying,
+                ignorePlayedAt: holds,
+              )
+              ? gated.asIdle()
+              : gated);
       final sameDeck = _deckKey(_snapshot) == _deckKey(effective);
       _snapshot = effective;
+      if (!mounted) return;
+      _seedHeard(snapshot.history);
       if (!mounted) return;
       if (!sameDeck || _error != null) {
         setState(() => _error = null);
@@ -340,7 +402,7 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
         unawaited(widget.session.pushPresence());
       }
       _captureHeard(effective);
-      _kickSuggestions(effective);
+      _autoSuggestLatest();
       final playing = effective.idle ? null : effective.nowPlaying;
       final playingId = playing?.identity;
       if (playingId != null && playingId != _libTrackIdentity) {
@@ -357,17 +419,24 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
             ),
           );
         }
-      } else if (effective.idle) {
+      } else if (effective.idle && !seratoHold) {
         _libTrackIdentity = null;
         _transitionFrom = null;
       }
       if (playing != null && playing.title.trim().isNotEmpty) {
         final markId = playing.identity;
-        if (markId != _markedPlayId) {
-          _markedPlayId = markId;
-          unawaited(
-            _wishboard.noteRecognized(playing.title, playing.artist),
-          );
+        final partyReady = (_wishboard.partyId ?? '').isNotEmpty &&
+            widget.session.isConnected;
+        if (partyReady && markId != _markedPlayId && markId != _markingId) {
+          _markingId = markId;
+          final title = playing.title;
+          final artist = playing.artist;
+          unawaited(() async {
+            final sent = await _wishboard.noteRecognized(title, artist);
+            if (!mounted) return;
+            if (sent != null) _markedPlayId = markId;
+            if (_markingId == markId) _markingId = null;
+          }());
         }
       }
     } catch (error) {
@@ -407,27 +476,11 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
               seedTitle: now.title,
               seedArtist: now.artist,
               keep: _wishboard.recCount.clamp(1, 20),
-              alsoSkip: _playedSkip(),
+              alsoSkip: const [],
             );
       setState(() => _suggestions = shown);
       if (now == null) return;
       _sendSuggestions(now, shown);
-      final want = _wishboard.recCount.clamp(1, 20);
-      final live = _heard.isNotEmpty &&
-          _heard.last.track.identity == now.identity;
-      if (live &&
-          shown.length < want &&
-          !_suggesting &&
-          _wishboard.recEnabled) {
-        final gen = ++_suggestGen;
-        setState(() => _suggesting = true);
-        unawaited(_fetchSuggestions(
-          now,
-          gen,
-          skipShown: shown,
-          already: shown,
-        ));
-      }
     }());
   }
 
@@ -539,29 +592,45 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
       if (now != null) _sendSuggestions(now, const []);
       return;
     }
-    final snap = _snapshot;
-    if (snap != null) _kickSuggestions(snap);
+    _autoDoneKey = null;
+    if (_heard.isNotEmpty) {
+      _heard.last.suggestions = const [];
+      _heard.last.searching = false;
+      _suggesting = false;
+    }
+    _autoSuggestLatest();
   }
 
   void _onSessionChanged() {
     _armIfAllowed();
-    if (!widget.session.isConnected) return;
-    final snap = _snapshot;
-    if (snap == null) return;
-    if (_suggestSeed != null && _suggestions.isEmpty && !_suggesting) {
-      _suggestSeed = null;
-      _kickSuggestions(snap);
+  }
+
+  /// Neue erkannte Songs suchen von selbst. Dieselbe Suche wie der
+  /// Refresh-Knopf, einmal pro Titel, nicht bei jedem History-Tick.
+  void _autoSuggestLatest() {
+    if (!mounted || !widget.session.isConnected || !_wishboard.recEnabled) {
+      return;
     }
+    if (_heard.isEmpty || _suggesting) return;
+    final hit = _heard.last;
+    if (hit.searching || hit.suggestions.isNotEmpty) return;
+    final seed = _cacheKey(hit.track);
+    if (_autoDoneKey == seed) return;
+    _autoDoneKey = seed;
+    if (_browse != _heard.length - 1) {
+      _browse = _heard.length - 1;
+    }
+    _reloadSuggestions();
   }
 
   void _reloadSuggestions() {
     final hit = _shownHit;
     if (hit == null) return;
     if (_suggesting) return;
+    _autoDoneKey = _cacheKey(hit.track);
     for (final other in _heard) {
       other.searching = identical(other, hit);
     }
-    final shown = List<Map<String, dynamic>>.from(hit.suggestions);
     hit.suggestions = const [];
     toolFramePulse.setWorking(true);
     final gen = ++_suggestGen;
@@ -570,12 +639,7 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
       _suggestions = const [];
       _suggesting = true;
     });
-    unawaited(_fetchSuggestions(
-      hit.track,
-      gen,
-      bypassCache: true,
-      excludeExtra: shown,
-    ));
+    unawaited(_fetchSuggestions(hit.track, gen));
   }
 
   _Heard? get _shownHit => _heard.isEmpty ? null : _heard[_browse];
@@ -585,6 +649,33 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
 
   String _cacheKey(HistoryTrack track) =>
       '${track.title.trim().toLowerCase()}|${track.artist.trim().toLowerCase()}|${_wishboard.recFingerprint}';
+
+  void _seedHeard(HistorySnapshot history) {
+    final missing = missingSessionTracks(
+      heardIdentities: [for (final hit in _heard) hit.track.identity],
+      historyNewestFirst: history.tracks,
+    );
+    if (missing.isEmpty) return;
+    var browse = _browse;
+    for (final track in missing) {
+      final hit = _Heard(track, _cacheKey(track));
+      var at = _heard.length;
+      final when = track.playedAt;
+      if (when != null) {
+        for (var i = 0; i < _heard.length; i++) {
+          final other = _heard[i].track.playedAt;
+          if (other != null && other.isAfter(when)) {
+            at = i;
+            break;
+          }
+        }
+      }
+      _heard.insert(at, hit);
+      if (at <= browse) browse++;
+    }
+    _browse = browse.clamp(0, _heard.length - 1);
+    setState(() {});
+  }
 
   void _captureHeard(LiveSnapshot effective) {
     final playing = effective.idle ? null : effective.nowPlaying;
@@ -618,6 +709,10 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
       _suggesting = false;
       _suggestSeed = key;
       _sendSuggestions(track, copied);
+    } else {
+      _suggestions = const [];
+      _suggesting = false;
+      _suggestSeed = null;
     }
     setState(() {});
     unawaited(_enrichHeard(hit));
@@ -652,11 +747,81 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     if (_heard.isEmpty) return;
     final next = (_browse + delta).clamp(0, _heard.length - 1);
     if (next == _browse) return;
+    final hit = _heard[next];
+    if (hit.suggestions.isEmpty) {
+      final copied = _suggestionsLike(hit);
+      if (copied.isNotEmpty) hit.suggestions = copied;
+    }
     setState(() {
       _browse = next;
       _suggestions = [
-        for (final row in _heard[next].suggestions)
-          Map<String, dynamic>.from(row),
+        for (final row in hit.suggestions) Map<String, dynamic>.from(row),
+      ];
+    });
+    if (hit.suggestions.isEmpty) unawaited(_restoreStored(hit));
+    _enqueueTidalLookups();
+  }
+
+  List<Map<String, dynamic>> _suggestionsLike(_Heard hit) {
+    for (var i = _heard.length - 1; i >= 0; i--) {
+      final other = _heard[i];
+      if (identical(other, hit)) continue;
+      if (other.cacheKey != hit.cacheKey || other.suggestions.isEmpty) continue;
+      return [
+        for (final row in other.suggestions) Map<String, dynamic>.from(row),
+      ];
+    }
+    return const [];
+  }
+
+  /// Nach einem Neustart ist die History wieder da, die Vorschläge nur
+  /// noch in song_suggestions. Einmal lesen, keine neue Suche.
+  Future<void> _restoreStored(_Heard hit) async {
+    if (hit.storeChecked || hit.suggestions.isNotEmpty || hit.searching) {
+      return;
+    }
+    if (!widget.session.isConnected || !_wishboard.recEnabled) return;
+    hit.storeChecked = true;
+    hit.searching = true;
+    if (identical(_shownHit, hit) && mounted) setState(() {});
+    final track = hit.track;
+    List<Map<String, dynamic>> stored = const [];
+    try {
+      stored = await _catalog.readStoredPool(
+        track,
+        scope: _wishboard.recScope,
+        allowSameArtist: _wishboard.recAllowSameArtist,
+      );
+    } catch (_) {
+      stored = const [];
+    }
+    if (!mounted) return;
+    hit.searching = false;
+    if (stored.isEmpty) {
+      if (identical(_shownHit, hit)) setState(() {});
+      return;
+    }
+    final want = _wishboard.recCount.clamp(1, 20);
+    final matched = await _library.applyToSuggestionsAsync(
+      stored,
+      skipTitle: track.title,
+      skipArtist: track.artist,
+    );
+    if (!mounted) return;
+    final ready = withoutSameAsPlaying(
+      matched,
+      seedTitle: track.title,
+      seedArtist: track.artist,
+      keep: want,
+      alsoSkip: const [],
+    );
+    hit.suggestions = [
+      for (final row in ready) Map<String, dynamic>.from(row),
+    ];
+    if (!identical(_shownHit, hit)) return;
+    setState(() {
+      _suggestions = [
+        for (final row in hit.suggestions) Map<String, dynamic>.from(row),
       ];
     });
     _enqueueTidalLookups();
@@ -694,49 +859,6 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
       artist: track.artist,
       suggestions: items,
     ));
-  }
-
-  void _kickSuggestions(LiveSnapshot snapshot, {bool force = false}) {
-    if (!widget.session.isConnected) return;
-    if (_wishboard.recFingerprint.isEmpty) return;
-    if (!_wishboard.recEnabled) return;
-    final now = snapshot.nowPlaying;
-    if (now == null || snapshot.idle) return;
-    final seed = _cacheKey(now);
-    if (!force && seed == _suggestSeed) return;
-    if (force && _suggesting) return;
-    if (!force &&
-        _heard.isNotEmpty &&
-        _heard.last.cacheKey == seed &&
-        _heard.last.suggestions.isNotEmpty &&
-        !_heard.last.searching) {
-      _suggestSeed = seed;
-      if (_viewingLatest) {
-        setState(() {
-          _suggestions = [
-            for (final row in _heard.last.suggestions)
-              Map<String, dynamic>.from(row),
-          ];
-          _suggesting = false;
-        });
-      }
-      return;
-    }
-    _suggestSeed = seed;
-    final gen = ++_suggestGen;
-    final viewing = _viewingLatest;
-    for (final hit in _heard) {
-      hit.searching = hit.track.identity == now.identity;
-    }
-    final skip = force
-        ? List<Map<String, dynamic>>.from(_suggestions)
-        : const <Map<String, dynamic>>[];
-    toolFramePulse.setWorking(true);
-    setState(() {
-      if (viewing && !force) _suggestions = const [];
-      _suggesting = true;
-    });
-    unawaited(_fetchSuggestions(now, gen, skipShown: skip));
   }
 
   /// Titel, die in den letzten 12 Stunden in der DJ-History standen.
@@ -859,12 +981,25 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
   }) {
     if (!mounted || gen != _suggestGen) return;
     final playedSkip = _playedSkip(skipShown);
-    final quick = withoutSameAsPlaying(
+    var quick = withoutSameAsPlaying(
       acc,
       seedTitle: track.title,
       seedArtist: track.artist,
       keep: want,
       alsoSkip: playedSkip,
+    );
+    if (quick.isEmpty && acc.isNotEmpty) {
+      quick = withoutSameAsPlaying(
+        acc,
+        seedTitle: track.title,
+        seedArtist: track.artist,
+        keep: want,
+      );
+    }
+    quick = capSeedArtist(
+      quick,
+      seedArtist: track.artist,
+      allowSameArtist: _wishboard.recAllowSameArtist,
     );
     final needsRefill = allowRefill && !stillSearching && quick.length < want;
     if (quick.isEmpty && stillSearching) return;
@@ -901,6 +1036,7 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
       if (items.isNotEmpty || !still) _sendSuggestions(slotTrack, items);
       if (!still &&
           needsRefill &&
+          items.isNotEmpty &&
           items.length < slotWant &&
           _wishboard.recEnabled) {
         final gen = ++_suggestGen;
@@ -941,12 +1077,25 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
       skipArtist: track.artist,
     );
     if (!mounted || token != _libraryPaintGen || gen != _suggestGen) return;
-    final ready = withoutSameAsPlaying(
+    var ready = withoutSameAsPlaying(
       matched,
       seedTitle: track.title,
       seedArtist: track.artist,
       keep: want,
       alsoSkip: _playedSkip(skip),
+    );
+    if (ready.isEmpty && matched.isNotEmpty) {
+      ready = withoutSameAsPlaying(
+        matched,
+        seedTitle: track.title,
+        seedArtist: track.artist,
+        keep: want,
+      );
+    }
+    ready = capSeedArtist(
+      ready,
+      seedArtist: track.artist,
+      allowSameArtist: _wishboard.recAllowSameArtist,
     );
     _rememberHeard(track, ready, searching: _suggesting);
     if (_viewingTrack(track)) {
@@ -967,7 +1116,7 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
   }) async {
     final keepPrevious = !bypassCache &&
         (skipShown.isNotEmpty || already.isNotEmpty);
-    final want = _wishboard.recCount.clamp(1, 20);
+    final want = 20;
     try {
       final acc = <Map<String, dynamic>>[...already];
       final skip = <Map<String, dynamic>>[];
@@ -978,27 +1127,55 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
         if (key.isEmpty || !seenSkip.add(key)) continue;
         skip.add(row);
       }
+      var composed = false;
       if (!keepPrevious) {
-        final cached = bypassCache
-            ? null
-            : await _catalog.readSuggestions(
-          track,
-          scope: _wishboard.recScope,
-          familiarity: _wishboard.recFamiliarity,
+        final stored = bypassCache
+            ? const <Map<String, dynamic>>[]
+            : await _catalog.readStoredPool(
+                track,
+                scope: _wishboard.recScope,
+                allowSameArtist: _wishboard.recAllowSameArtist,
+              );
+        if (!mounted || gen != _suggestGen) return;
+        final fromStore = capSeedArtist(
+          withoutSameAsPlaying(
+            stored,
+            seedTitle: track.title,
+            seedArtist: track.artist,
+            keep: want,
+          ),
+          seedArtist: track.artist,
           allowSameArtist: _wishboard.recAllowSameArtist,
         );
-        if (!mounted || gen != _suggestGen) return;
-        List<Map<String, dynamic>> pool;
-        if (cached != null && cached.length >= want) {
-          pool = await _catalog.withTransitions(
-            cached,
-            track,
-            scope: _wishboard.recScope,
-            allowSameArtist: _wishboard.recAllowSameArtist,
-          );
+        final unseen = withoutSameAsPlaying(
+          fromStore,
+          seedTitle: track.title,
+          seedArtist: track.artist,
+          keep: want,
+          alsoSkip: _playedSkip(),
+        );
+        if (unseen.length >= want) {
+          composed = true;
+          acc
+            ..clear()
+            ..addAll(unseen);
         } else {
           final raw = <Map<String, dynamic>>[];
-          final seen = <String>{};
+          final seen = <String>{
+            for (final row in unseen)
+              '${row['title'] ?? ''}|${row['artist'] ?? ''}'.trim().toLowerCase(),
+          };
+          if (unseen.isNotEmpty) {
+            composed = true;
+            _showFoundSoFar(
+              track,
+              gen,
+              unseen,
+              want,
+              stillSearching: true,
+              allowRefill: false,
+            );
+          }
           void take(Map<String, dynamic> row) {
             if (!mounted || gen != _suggestGen) return;
             final key =
@@ -1008,13 +1185,14 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
             _showFoundSoFar(
               track,
               gen,
-              raw,
+              [...unseen, ...raw],
               want,
-              skipShown: skip,
               stillSearching: true,
+              allowRefill: false,
             );
           }
 
+          final gap = (want - unseen.length).clamp(1, want);
           await widget.session.recommendLive(
             title: track.title,
             artist: track.artist,
@@ -1023,32 +1201,35 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
             scope: _wishboard.recScope,
             familiarity: _wishboard.recFamiliarity,
             allowSameArtist: _wishboard.recAllowSameArtist,
-            count: want,
-            exclude: _excludeFor(track, excludeExtra),
-            fresh: bypassCache,
+            count: gap,
+            exclude: _excludeFor(track, [...excludeExtra, ...fromStore]),
+            fresh: bypassCache || fromStore.isNotEmpty,
             onTrack: take,
           );
           if (!mounted || gen != _suggestGen) return;
-          if (raw.length >= want) {
+          if (raw.isNotEmpty) {
+            final prior = await _catalog.readSuggestions(
+              track,
+              scope: _wishboard.recScope,
+              familiarity: _wishboard.recFamiliarity,
+              allowSameArtist: _wishboard.recAllowSameArtist,
+            );
             unawaited(_catalog.writeSuggestions(
               track,
-              raw,
+              [...?prior, ...raw],
               scope: _wishboard.recScope,
               familiarity: _wishboard.recFamiliarity,
               allowSameArtist: _wishboard.recAllowSameArtist,
             ));
           }
-          pool = await _catalog.withTransitions(
-            raw,
-            track,
-            scope: _wishboard.recScope,
-            allowSameArtist: _wishboard.recAllowSameArtist,
-          );
+          acc
+            ..clear()
+            ..addAll(unseen)
+            ..addAll(raw);
+          if (acc.isEmpty && fromStore.isNotEmpty) {
+            acc.addAll(fromStore);
+          }
         }
-        if (!mounted || gen != _suggestGen) return;
-        acc
-          ..clear()
-          ..addAll(pool);
       } else {
         final raw = <Map<String, dynamic>>[];
         final seen = <String>{};
@@ -1097,6 +1278,13 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
             searching: false,
           );
           final viewing = _viewingTrack(track);
+          if (!keepPrevious) {
+            final seed = _cacheKey(track);
+            if (_emptyOnceKey != seed) {
+              _emptyOnceKey = seed;
+              _autoDoneKey = null;
+            }
+          }
           setState(() {
             _suggesting = false;
             if (viewing && !keepPrevious) _suggestions = const [];
@@ -1109,11 +1297,11 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
         gen,
         acc,
         want,
-        skipShown: keepPrevious && already.isNotEmpty
+        skipShown: composed || (keepPrevious && already.isNotEmpty)
             ? const []
             : skip,
         stillSearching: false,
-        allowRefill: !keepPrevious,
+        allowRefill: !composed && !keepPrevious,
       );
     } catch (_) {
       if (!mounted || gen != _suggestGen) return;
@@ -1249,10 +1437,7 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                   Expanded(
                     child: _mainTab == 1
                         ? _SuggestionsPane(
-                            loading: (_shownHit?.searching ?? false) ||
-                                (widget.session.isConnected &&
-                                    _wishboard.recFingerprint.isEmpty &&
-                                    _wishboard.recEnabled),
+                            loading: _shownHit?.searching ?? false,
                             enabled: _wishboard.recEnabled,
                             isOpenWish: _suggestionIsOpenWish,
                             onOpenWish: _openSuggestionWish,
@@ -1278,12 +1463,17 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                   const SizedBox(height: 6),
                   Text(
                     widget.session.isConnected
-                        ? (_wishboard.partyName == null
-                            ? toolI18n.text('connectedNoParty')
-                            : toolI18n.text(
-                                'connectedParty',
-                                {'name': _wishboard.partyName!},
-                              ))
+                        ? () {
+                            final name = widget.session.ownerLabel ??
+                                _wishboard.djName;
+                            if (name == null || name.trim().isEmpty) {
+                              return toolI18n.text('connected');
+                            }
+                            return toolI18n.text(
+                              'connectedAs',
+                              {'name': name.trim()},
+                            );
+                          }()
                         : toolI18n.text('localHint'),
                     style: const TextStyle(color: Colors.white38, fontSize: 11),
                   ),
@@ -1481,7 +1671,7 @@ class _VibesBoxPane extends StatelessWidget {
     if (wishboard.partyId == null) {
       return Center(
         child: Text(
-          wishboard.error ?? toolI18n.text('noParty'),
+          toolI18n.text('noParty'),
           textAlign: TextAlign.center,
           style: const TextStyle(color: Colors.white54),
         ),
@@ -2647,6 +2837,7 @@ class _Heard {
   final String cacheKey;
   List<Map<String, dynamic>> suggestions = const [];
   bool searching = false;
+  bool storeChecked = false;
   int playCount = 0;
 }
 
@@ -2828,7 +3019,26 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
             connected ? toolI18n.text('connected') : toolI18n.text('connectTitle'),
           ),
           content: connected
-              ? Text(toolI18n.text('stayConnected'))
+              ? Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.session.ownerLabel != null
+                          ? toolI18n.text(
+                              'connectedAs',
+                              {'name': widget.session.ownerLabel!},
+                            )
+                          : toolI18n.text('connected'),
+                      style: const TextStyle(
+                        color: Color(0xFF22E7FF),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(toolI18n.text('stayConnected')),
+                  ],
+                )
               : Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [

@@ -32,5 +32,11 @@
 	<string>NSApplication</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>VibesBox Sync lädt Tidal-Titel aus deiner Rekordbox-Collection auf den Player.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>VibesBox Sync liest bei Serato, ob ein Song läuft oder nur aufgelegt ist.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_SeratoIOSRemote._tcp</string>
+	</array>
 </dict>
 </plist>

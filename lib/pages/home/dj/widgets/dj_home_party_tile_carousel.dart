@@ -72,7 +72,9 @@ class DjHomePartyTileCarousel extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 child: Text(
-                  l.no_further_parties_planned,
+                  mode == 'history'
+                      ? l.no_finished_parties_found
+                      : l.no_further_parties_planned,
                   style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
                   textAlign: TextAlign.center,
                 ),

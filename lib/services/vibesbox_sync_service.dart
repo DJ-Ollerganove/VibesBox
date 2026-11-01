@@ -15,7 +15,8 @@ import 'shazam_service.dart';
 import 'user_self_settings_service.dart';
 import 'user_service.dart';
 
-/// Admin-only: Rekordbox-Tool (VibesBox Sync) statt Mikrofon-Erkennung.
+/// Rekordbox-Tool (VibesBox Sync) statt Mikrofon-Erkennung.
+/// Sichtbar nur mit Freigabe `vibesbox_sync_access` oder für das Plattform-Admin-Konto.
 class VibesBoxSyncService extends ChangeNotifier {
   VibesBoxSyncService._();
   static final VibesBoxSyncService instance = VibesBoxSyncService._();
@@ -36,6 +37,8 @@ class VibesBoxSyncService extends ChangeNotifier {
   Timer? _idleTimer;
   Timer? _historyRetryTimer;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _liveSub;
+  int _listenGen = 0;
+  bool _liveDocAbsent = false;
   Map<String, dynamic>? _nowPlaying;
   List<SongRecommendation> _suggestions = const [];
   String? _suggestionsSeed;
@@ -61,7 +64,7 @@ class VibesBoxSyncService extends ChangeNotifier {
     final model = UserService().currentUser.value;
     return model != null &&
         model.id == user.uid &&
-        AppConfig.isAdminRole(model);
+        model.vibesboxSyncAccess;
   }
 
   Future<void> initialize() async {
@@ -162,6 +165,7 @@ class VibesBoxSyncService extends ChangeNotifier {
     final nextUid = user?.uid;
     if (nextUid == null) {
       await _stopListen();
+      _liveDocAbsent = false;
       _uid = null;
       _connected = false;
       _device = '';
@@ -185,6 +189,7 @@ class VibesBoxSyncService extends ChangeNotifier {
         return;
       }
       await _stopListen();
+      _liveDocAbsent = false;
       _uid = nextUid;
       _connected = false;
       _device = '';
@@ -201,6 +206,9 @@ class VibesBoxSyncService extends ChangeNotifier {
       return;
     }
 
+    if (_uid != nextUid) {
+      _liveDocAbsent = false;
+    }
     _uid = nextUid;
     if (!_persistInFlight) {
       final nextEnabled = await _readEnabled(nextUid);
@@ -214,15 +222,54 @@ class VibesBoxSyncService extends ChangeNotifier {
     if (_enabled && ShazamService().isEnabled) {
       await PartyAutostartService().setManualRecognitionEnabled(false);
     }
-    if (_liveSub == null) {
+    if (_liveSub == null && !_liveDocAbsent) {
       await _startListen();
     }
+  }
+
+  /// Erst zuhören, wenn `rb_tool_live` existiert. Der erste erlaubte
+  /// Snapshot auf ein fehlendes Dokument hat den Prozess beendet.
+  Future<void> attachAfterPairingCode() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || _liveSub != null) return;
+    _listenGen++;
+    _liveDocAbsent = false;
+    await _stopListen();
+    _attachLive(uid);
   }
 
   Future<void> _startListen() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
+    final gen = ++_listenGen;
     await _stopListen();
+    final exists = await _liveDocExists(uid);
+    if (gen != _listenGen) return;
+    if (FirebaseAuth.instance.currentUser?.uid != uid) return;
+    if (exists == null) return;
+    if (!exists) {
+      _liveDocAbsent = true;
+      return;
+    }
+    _liveDocAbsent = false;
+    _attachLive(uid);
+  }
+
+  /// null = Lesen fehlgeschlagen, später noch einmal versuchen.
+  Future<bool?> _liveDocExists(String uid) async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('rb_tool_live')
+          .doc(uid)
+          .get();
+      return snap.exists;
+    } catch (e) {
+      debugLog('VibesBox Sync: Live-Dokument nicht lesbar: $e');
+      return null;
+    }
+  }
+
+  void _attachLive(String uid) {
     _liveSub = RbToolService.instance.liveStream(uid).listen(
       _onLive,
       onError: (e) {
@@ -239,6 +286,14 @@ class VibesBoxSyncService extends ChangeNotifier {
   }
 
   void _onLive(DocumentSnapshot<Map<String, dynamic>> snap) {
+    try {
+      _applyLive(snap);
+    } catch (e, st) {
+      debugLog('VibesBox Sync: Live-Snapshot verworfen: $e\n$st');
+    }
+  }
+
+  void _applyLive(DocumentSnapshot<Map<String, dynamic>> snap) {
     final data = snap.data();
     final nextConnected = data?['connected'] == true;
     final nextDevice = _deviceOf(data);
@@ -267,17 +322,17 @@ class VibesBoxSyncService extends ChangeNotifier {
       _nowPlaying = now;
       changed = true;
     }
-    final nextSeed = now == null ? '' : _seedOf(now);
+    final nextSeed = _normalizedSeed(now);
     final parsed = _parseSuggestions(nowRaw is Map ? nowRaw : null);
     final forSeed = nowRaw is Map
         ? (nowRaw['suggestionsFor'] ?? '').toString().trim()
         : '';
-    final ready = nextSeed.isNotEmpty && forSeed == nextSeed;
+    final ready = nextSeed != null && forSeed == nextSeed;
     if (ready != _suggestionsReady ||
         nextSeed != _suggestionsSeed ||
         !_suggestionListEquals(_suggestions, parsed)) {
       _suggestionsReady = ready;
-      _suggestionsSeed = nextSeed.isEmpty ? null : nextSeed;
+      _suggestionsSeed = nextSeed;
       _suggestions = ready ? parsed : const [];
       changed = true;
     }
@@ -289,6 +344,12 @@ class VibesBoxSyncService extends ChangeNotifier {
       return;
     }
     unawaited(_ingestNowPlaying(now));
+  }
+
+  static String? _normalizedSeed(Map<String, dynamic>? now) {
+    if (now == null) return null;
+    final seed = _seedOf(now);
+    return seed.isEmpty ? null : seed;
   }
 
   Future<void> _clearNowPlayingDisplay() async {
@@ -383,8 +444,9 @@ class VibesBoxSyncService extends ChangeNotifier {
   }
 
   static String _seedOf(Map<String, dynamic> now) {
-    final title = (now['title'] as String? ?? '').trim();
-    final artist = (now['artist'] as String? ?? '').trim();
+    final title = now['title'] is String ? (now['title'] as String).trim() : '';
+    final artist =
+        now['artist'] is String ? (now['artist'] as String).trim() : '';
     if (title.isEmpty || artist.isEmpty) return '';
     return '$title|$artist';
   }

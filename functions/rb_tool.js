@@ -21,12 +21,25 @@ const COL_RATE = 'rb_tool_redeem_rate';
 const COL_STATE = 'rb_tool_state';
 const COL_LIVE = 'rb_tool_live';
 const TEN_DIGIT_RE = /^\d{10}$/;
+/** Gleiche UID wie AppConfig.adminDjId. Sieht Sync immer, auch ohne users.admin. */
+const PLATFORM_ADMIN_UID = 'rtJXMTULzTPUz0xtdQOw9Jm8SGD3';
 
 const CALLABLE_OPTS = {
   region: 'us-central1',
   enforceAppCheck: false,
   serviceAccount: 'dj-ollerganove@appspot.gserviceaccount.com',
 };
+
+function toolDjName(userData) {
+  const name = String(
+    userData?.djName
+      || userData?.dj_name
+      || userData?.displayName
+      || userData?.display_name
+      || '',
+  ).trim().slice(0, 80);
+  return name || null;
+}
 
 function normalizeTenDigitCode(raw) {
   if (raw == null) return null;
@@ -47,11 +60,16 @@ function generateTenDigitCode() {
   return String(crypto.randomInt(0, 10000000000)).padStart(10, '0');
 }
 
+/**
+ * Pairing vom Handy. „Verbinden“ ist für die Plattform-Admin-UID und für
+ * users.vibesbox_sync_access freigegeben. users.admin bleibt zusätzlich erlaubt.
+ */
 async function assertCallerAdmin(uid) {
+  if (uid === PLATFORM_ADMIN_UID) return;
   const snap = await db.collection('users').doc(uid).get();
-  if (!snap.exists || snap.data()?.admin !== true) {
-    throw new HttpsError('permission-denied', 'Nur Admin.');
-  }
+  const data = snap.exists ? snap.data() : null;
+  if (data?.admin === true || data?.vibesbox_sync_access === true) return;
+  throw new HttpsError('permission-denied', 'Nur Admin.');
 }
 
 async function assertRedeemRateLimit(ipHash) {
@@ -525,7 +543,17 @@ async function getRbToolWishboardHandler(request) {
   }
   const sess = await db.collection(COL_SESSIONS).doc(sessionId).get();
   if (!sess.exists || sess.data()?.active !== true || String(sess.data()?.ownerUid || '') !== ownerUid) {
-    throw new HttpsError('permission-denied', 'Session inaktiv.');
+    const named = await db.collection('users').doc(ownerUid).get();
+    const namedData = named.exists ? named.data() : null;
+    return {
+      partyId: null,
+      partyName: null,
+      wishes: [],
+      setlist: [],
+      preOmitted: true,
+      setlistOmitted: true,
+      djName: toolDjName(namedData),
+    };
   }
 
   const req = request.data && typeof request.data === 'object' ? request.data : {};
@@ -554,6 +582,7 @@ async function getRbToolWishboardHandler(request) {
     empty.syncSend = userData?.vibesbox_sync_enabled === true;
     empty.showGreetingTranslations = userData?.show_greeting_translations !== false;
     empty.djAdmin = userData?.admin === true;
+    empty.djName = toolDjName(userData);
     if (includeSongRec) {
       empty.songRec = compactSongRec(userData);
     }
@@ -583,6 +612,7 @@ async function getRbToolWishboardHandler(request) {
       syncSend: userOnly?.vibesbox_sync_enabled === true,
       showGreetingTranslations: userOnly?.show_greeting_translations !== false,
       djAdmin: userOnly?.admin === true,
+      djName: toolDjName(userOnly),
     };
   }
 
@@ -630,6 +660,7 @@ async function getRbToolWishboardHandler(request) {
   out.syncSend = userData?.vibesbox_sync_enabled === true;
   out.showGreetingTranslations = userData?.show_greeting_translations !== false;
   out.djAdmin = userData?.admin === true;
+  out.djName = toolDjName(userData);
   if (includeSongRec) {
     out.songRec = compactSongRec(userData);
   }

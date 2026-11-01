@@ -90,6 +90,7 @@ class DjSetlistStoreService {
     required String partyId,
     required List<EventSetlistTrack> tracks,
     String? partyName,
+    String? occasionId,
   }) async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null || partyId.isEmpty) {
@@ -104,11 +105,14 @@ class DjSetlistStoreService {
       };
       final name = SecurityHelper.sanitize(partyName ?? '', maxLength: 200);
       if (name.isNotEmpty) payload['partyName'] = name;
+      final occasion = SecurityHelper.sanitize(occasionId ?? '', maxLength: 40);
+      if (occasion.isNotEmpty) payload['occasionId'] = occasion;
       await _doc(partyId).set(payload);
-      // Zähler nur über Library-Save (sonst Doppelzählung mit Export-Menü).
+      // Pool füllt der Library-Save. Hier nur Metadaten, sonst Doppelzählung.
       MusicCatalogService.instance.syncSetlistTracks(
         tracks,
         countAsSuggested: false,
+        previous: tracks,
       );
     } catch (e) {
       debugLog('DjSetlistStoreService.save: $e');
@@ -119,10 +123,19 @@ class DjSetlistStoreService {
   Future<void> replaceTracks({
     required String partyId,
     required List<EventSetlistTrack> tracks,
+    bool syncPool = true,
   }) async {
     if (partyId.isEmpty) return;
     try {
-      await _doc(partyId).update({
+      final ref = _doc(partyId);
+      final snap = await ref.get();
+      final data = snap.data() ?? <String, dynamic>{};
+      final occasion = SecurityHelper.sanitize(
+        (data['occasionId'] as String?) ?? '',
+        maxLength: 40,
+      );
+      final previous = EventSetlistTrack.listFrom(data['tracks']);
+      await ref.update({
         'tracks': tracks.map((e) => e.toJson()).toList(),
         'targetCount': tracks.length,
         'updatedAt': FieldValue.serverTimestamp(),
@@ -130,6 +143,8 @@ class DjSetlistStoreService {
       MusicCatalogService.instance.syncSetlistTracks(
         tracks,
         countAsSuggested: false,
+        occasionId: syncPool ? occasion : null,
+        previous: syncPool ? previous : tracks,
       );
     } catch (e) {
       debugLog('DjSetlistStoreService.replaceTracks: $e');

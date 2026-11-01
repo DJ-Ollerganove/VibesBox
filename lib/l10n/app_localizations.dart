@@ -2031,6 +2031,18 @@ class AppLocalizations {
   String get admin_tool_history => translate('admin_tool_history');
   String get admin_tool_no_data => translate('admin_tool_no_data');
   String get vibesbox_sync_title => translate('vibesbox_sync_title');
+  String get vibesbox_sync_not_connected =>
+      translate('vibesbox_sync_not_connected');
+  String vibesbox_sync_with_device(String device) =>
+      tp('vibesbox_sync_with_device', {'device': device});
+  String get vibesbox_sync_connect => translate('vibesbox_sync_connect');
+  String get vibesbox_sync_disconnect => translate('vibesbox_sync_disconnect');
+  String get vibesbox_sync_about => translate('vibesbox_sync_about');
+  String get vibesbox_sync_download => translate('vibesbox_sync_download');
+  String get vibesbox_sync_mac => translate('vibesbox_sync_mac');
+  String get vibesbox_sync_windows => translate('vibesbox_sync_windows');
+  String get vibesbox_sync_macos => translate('vibesbox_sync_macos');
+  String get vibesbox_sync_switch => translate('vibesbox_sync_switch');
   String get vibesbox_sync_hint => translate('vibesbox_sync_hint');
   String get vibesbox_sync_generate_code =>
       translate('vibesbox_sync_generate_code');
@@ -2041,6 +2053,38 @@ class AppLocalizations {
   String get vibesbox_sync_error_create =>
       translate('vibesbox_sync_error_create');
   String get vibesbox_sync_no_song => translate('vibesbox_sync_no_song');
+  String get vibesbox_sync_coming_soon =>
+      translate('vibesbox_sync_coming_soon');
+  String vibesbox_sync_install_line({
+    required String os,
+    required String version,
+    required String when,
+  }) =>
+      tp('vibesbox_sync_install_line', {
+        'os': os,
+        'version': version,
+        'when': when,
+      });
+  String get vibesbox_sync_no_tool => translate('vibesbox_sync_no_tool');
+  String get vibesbox_sync_unlocked => translate('vibesbox_sync_unlocked');
+  String vibesbox_sync_grant_failed(String error) =>
+      tp('vibesbox_sync_grant_failed', {'error': error});
+  String get vibesbox_sync_show_in_settings =>
+      translate('vibesbox_sync_show_in_settings');
+  String get vibesbox_sync_access_on => translate('vibesbox_sync_access_on');
+  String get vibesbox_sync_access_off => translate('vibesbox_sync_access_off');
+  String get vibesbox_sync_admin_https =>
+      translate('vibesbox_sync_admin_https');
+  String get vibesbox_sync_admin_saved =>
+      translate('vibesbox_sync_admin_saved');
+  String vibesbox_sync_admin_live(String mac, String win) =>
+      tp('vibesbox_sync_admin_live', {'mac': mac, 'win': win});
+  String get vibesbox_sync_admin_target =>
+      translate('vibesbox_sync_admin_target');
+  String get vibesbox_sync_admin_download =>
+      translate('vibesbox_sync_admin_download');
+  String get vibesbox_sync_admin_note => translate('vibesbox_sync_admin_note');
+  String get vibesbox_sync_admin_min => translate('vibesbox_sync_admin_min');
   String get admin_no_permission => translate('admin_no_permission');
   String get notification_channel_new_wishes => translate('notification_channel_new_wishes');
   String get notification_channel_new_wishes_desc => translate('notification_channel_new_wishes_desc');

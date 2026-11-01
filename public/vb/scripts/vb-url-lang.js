@@ -7,16 +7,16 @@
   'use strict';
 
   var DEFAULT_LANG = 'en';
-  var ALLOWED = (typeof window !== 'undefined' && window.PWA_ALLOWED_LANG) ? window.PWA_ALLOWED_LANG : { de: 1, en: 1, fr: 1, ru: 1, zh: 1, es: 1, tr: 1, pt: 1, it: 1, uk: 1, hi: 1, sq: 1, vi: 1, ja: 1, el: 1, nl: 1, pl: 1, cs: 1, th: 1, ar: 1 };
-  var STATIC_PWA_LANG_CODES = (typeof window !== 'undefined' && window.PWA_STATIC_LANG_CODES) ? window.PWA_STATIC_LANG_CODES.slice() : ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi', 'ja', 'el', 'nl', 'pl', 'cs', 'th', 'ar'];
-  var REGION_TO_LANG = { de: 'de', at: 'de', ch: 'de', fr: 'fr', es: 'es', it: 'it', ru: 'ru', tr: 'tr', pt: 'pt', br: 'pt', zh: 'zh', cn: 'zh', tw: 'zh', ua: 'uk', in: 'hi', al: 'sq', vn: 'vi', ar: 'ar', sa: 'ar', eg: 'ar' };
+  var ALLOWED = (typeof window !== 'undefined' && window.PWA_ALLOWED_LANG) ? window.PWA_ALLOWED_LANG : { de: 1, en: 1, fr: 1, ru: 1, zh: 1, es: 1, tr: 1, pt: 1, it: 1, uk: 1, hi: 1, sq: 1, vi: 1, ja: 1, el: 1, nl: 1, pl: 1, cs: 1, th: 1, ar: 1, ro: 1, sr: 1, bg: 1, hr: 1, hu: 1 };
+  var STATIC_PWA_LANG_CODES = (typeof window !== 'undefined' && window.PWA_STATIC_LANG_CODES) ? window.PWA_STATIC_LANG_CODES.slice() : ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi', 'ja', 'el', 'nl', 'pl', 'cs', 'th', 'ar', 'ro', 'sr', 'bg', 'hr', 'hu'];
+  var REGION_TO_LANG = { de: 'de', at: 'de', ch: 'de', fr: 'fr', es: 'es', it: 'it', ru: 'ru', tr: 'tr', pt: 'pt', br: 'pt', zh: 'zh', cn: 'zh', tw: 'zh', ua: 'uk', in: 'hi', al: 'sq', vn: 'vi', ar: 'ar', sa: 'ar', eg: 'ar', ro: 'ro', rs: 'sr', bg: 'bg', hr: 'hr', hu: 'hu' };
   var PERMANENT_LOCALE_KEY = 'permanent_user_locale';
   var VB_ENTRY_LANG_KEY = 'vb_entry_lang';
-  var LANGUAGE_NAMES = { de: 'German', en: 'English', fr: 'French', ru: 'Russian', zh: 'Chinese', es: 'Spanish', tr: 'Turkish', pt: 'Portuguese', it: 'Italian', uk: 'Ukrainian', hi: 'Hindi', sq: 'Albanian', vi: 'Vietnamese', ar: 'Arabic' };
+  var LANGUAGE_NAMES = { de: 'German', en: 'English', fr: 'French', ru: 'Russian', zh: 'Chinese', es: 'Spanish', tr: 'Turkish', pt: 'Portuguese', it: 'Italian', uk: 'Ukrainian', hi: 'Hindi', sq: 'Albanian', vi: 'Vietnamese', ar: 'Arabic', ro: 'Romanian', sr: 'Serbian', bg: 'Bulgarian', hr: 'Croatian', hu: 'Hungarian' };
 
   window.IS_DEBUG = new URLSearchParams(window.location.search || '').get('x') === '99';
   /** Cache-Bust für /vb/lang/*.js — bei neuen i18n-Keys erhöhen (sonst bleibt altes Paket im Browser-Cache). */
-  var LANG_ASSET_V = '20260909l10n';
+  var LANG_ASSET_V = '20261007srhr';
   window.VB_LANG_ASSET_V = LANG_ASSET_V;
 
   function normalizeCode(raw) {
@@ -470,7 +470,7 @@
       svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
       svg.setAttribute('aria-hidden', 'true');
       var use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
-      use.setAttribute('href', '/vb/assets/flags.svg#flag-' + getFlagIconId(entry));
+      use.setAttribute('href', '/vb/assets/flags.svg?v=3#flag-' + getFlagIconId(entry));
       svg.appendChild(use);
       flagWrap.appendChild(svg);
       var nameSpan = document.createElement('span');

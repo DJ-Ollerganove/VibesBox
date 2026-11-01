@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>VibesBox Sync</title>
+    <welcome file="welcome.html"/>
+    <conclusion file="conclusion.html"/>
+    <options customize="never" require-scripts="false" rootVolumeOnly="true"/>
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+    <choices-outline>
+        <line choice="sync"/>
+    </choices-outline>
+    <choice id="sync" visible="false" title="VibesBox Sync">
+        <pkg-ref id="com.vibesbox.sync"/>
+    </choice>
+    <pkg-ref id="com.vibesbox.sync" version="1.0.5" onConclusion="none">VibesBoxSync-component.pkg</pkg-ref>
+</installer-gui-script>

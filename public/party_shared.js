@@ -85,7 +85,12 @@
     pl: 'pl-PL',
     cs: 'cs-CZ',
     th: 'th-TH',
-    ar: 'ar'
+    ar: 'ar',
+    ro: 'ro-RO',
+    sr: 'sr-RS',
+    bg: 'bg-BG',
+    hr: 'hr-HR',
+    hu: 'hu-HU'
   };
 
   function getPartyLangCode(lang) {

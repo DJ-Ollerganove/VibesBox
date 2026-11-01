@@ -21,7 +21,12 @@ const GREETING_LANGUAGE_CODES = Object.freeze([
   "pl",
   "cs",
   "th",
-  "ar"
+  "ar",
+  "ro",
+  "sr",
+  "bg",
+  "hr",
+  "hu"
 ]);
 
 const GREETING_LANG_LABELS = Object.freeze({
@@ -44,7 +49,12 @@ const GREETING_LANG_LABELS = Object.freeze({
   "pl": "Polish",
   "cs": "Czech",
   "th": "Thai",
-  "ar": "Arabic"
+  "ar": "Arabic",
+  "ro": "Romanian",
+  "sr": "Serbian",
+  "bg": "Bulgarian",
+  "hr": "Croatian",
+  "hu": "Hungarian"
 });
 
 const _greetingLangSet = new Set(GREETING_LANGUAGE_CODES);
@@ -60,6 +70,7 @@ const GREETING_LANG_ALIASES = Object.freeze({
 
 const _PREFIX_CANONICAL = [
   'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi', 'ja', 'el', 'nl', 'pl', 'cs', 'th', 'ar',
+  'ro', 'sr', 'bg', 'hr', 'hu',
 ];
 
 /**

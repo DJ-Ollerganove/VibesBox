@@ -25,11 +25,14 @@ class LiveGuestStatsView extends StatelessWidget {
           .doc(partyId)
           .snapshots(),
       builder: (context, partySnapshot) {
-        final int totalFromPartyField = (partySnapshot.hasData &&
+        final partyData = (partySnapshot.hasData &&
                 partySnapshot.data != null &&
                 partySnapshot.data!.data() != null)
-            ? (partySnapshot.data!.data() as Map<String, dynamic>)['total_guest_count'] as int? ?? 0
-            : 0;
+            ? partySnapshot.data!.data() as Map<String, dynamic>
+            : null;
+        final rawGuestCount = partyData?['total_guest_count'];
+        final int totalFromPartyField =
+            rawGuestCount is num ? rawGuestCount.toInt() : 0;
 
         return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),

@@ -220,6 +220,7 @@ service cloud.firestore {
         && (!('isPro' in data) || data.isPro != true)
         && (!('is_blocked' in data) || data.is_blocked != true)
         && (!('email_verified_override' in data) || data.email_verified_override != true)
+        && (!('vibesbox_sync_access' in data) || data.vibesbox_sync_access != true)
         && (!('role_id' in data) || !roleDocNameIsAdmin(data.role_id));
     }
 
@@ -232,7 +233,8 @@ service cloud.firestore {
         'proUntil',
         'planType',
         'is_blocked',
-        'email_verified_override'
+        'email_verified_override',
+        'vibesbox_sync_access'
       ]);
     }
 
@@ -637,6 +639,7 @@ service cloud.firestore {
           'referralRedeemedAt',
           'referralSource',
           'trialDaysGranted',
+          'vibesbox_sync_access',
         ])
         && userPreservesDeviceBlockFusion()
         && userPreservesDjB2bLedger();
@@ -1230,6 +1233,12 @@ service cloud.firestore {
         );
     }
 
+    /// Handy darf den eigenen Sync-Live-Stand lesen, wenn die Freigabe gesetzt ist.
+    function callerHasVibesboxSyncAccess() {
+      return authUserDocExists()
+        && authUserData().vibesbox_sync_access == true;
+    }
+
     function isSafeRbToolLive(data) {
       return data != null
         && data.keys().hasOnly([
@@ -1261,6 +1270,15 @@ service cloud.firestore {
         && request.auth.token.sessionId.size() > 0
         && exists(/databases/$(database)/documents/rb_tool_sessions/$(request.auth.token.sessionId))
         && get(/databases/$(database)/documents/rb_tool_sessions/$(request.auth.token.sessionId)).data.active == true;
+    }
+
+    function isRbToolToken() {
+      return request.auth != null
+        && request.auth.token.role == 'rb_tool'
+        && request.auth.token.sessionId is string
+        && request.auth.token.sessionId.size() > 0
+        && request.auth.token.ownerUid is string
+        && request.auth.token.ownerUid.size() > 0;
     }
 
     function isSafeSongSuggestions(data) {
@@ -1662,7 +1680,7 @@ service cloud.firestore {
         return data != null
           && data.keys().hasOnly([
             'title', 'tracks', 'targetCount', 'createdAt', 'updatedAt',
-            'partyId', 'partyName', 'partyIds', 'partyNames',
+            'partyId', 'partyName', 'partyIds', 'partyNames', 'occasionId',
           ])
           && isSafeText(data.title, 200)
           && data.title.size() > 0
@@ -1680,7 +1698,8 @@ service cloud.firestore {
               && data.partyIds.size() >= 0))
           && (!('partyNames' in data) || data.partyNames is map)
           && (!('createdAt' in data) || data.createdAt is timestamp)
-          && (!('updatedAt' in data) || data.updatedAt is timestamp);
+          && (!('updatedAt' in data) || data.updatedAt is timestamp)
+          && isSafeOptionalText(data, 'occasionId', 40);
       }
 
       // DJ-eigene Setlisten-Bibliothek — nur users/{uid}/dj_setlists, volles CRUD.
@@ -1928,7 +1947,9 @@ service cloud.firestore {
 
     function isSafeDjSetlistShape(data) {
       return data != null
-        && data.keys().hasOnly(['tracks', 'updatedAt', 'createdBy', 'targetCount', 'partyName'])
+        && data.keys().hasOnly([
+          'tracks', 'updatedAt', 'createdBy', 'targetCount', 'partyName', 'occasionId',
+        ])
         && data.createdBy is string
         && data.createdBy.size() > 0
         && data.createdBy.size() <= 128
@@ -1940,7 +1961,8 @@ service cloud.firestore {
             && data.targetCount <= 1000))
         && (!('updatedAt' in data) || data.updatedAt is timestamp)
         && (!('partyName' in data)
-            || isSafeText(data.partyName, 200));
+            || isSafeText(data.partyName, 200))
+        && isSafeOptionalText(data, 'occasionId', 40);
     }
 
     function isSafeDjSetlistCreate(data) {
@@ -1976,6 +1998,11 @@ service cloud.firestore {
         && isSafeDjSetlistShape(request.resource.data)
         && request.resource.data.createdBy == resource.data.createdBy;
       allow delete: if canManagePartySetlist(partyId);
+    }
+
+    // Globaler Song-Pool je Anlass. Nur Admin-SDK (Setlist-KI), keine Client-Writes.
+    match /setlist_occasion_pool/{occasionId} {
+      allow read, write: if false;
     }
 
     function isSafeDjSongBlacklistDoc(data) {
@@ -2773,14 +2800,16 @@ service cloud.firestore {
     }
 
     match /song_suggestions/{trackId} {
-      allow read: if isAdmin() || isActiveRbTool();
+      allow get: if isAdmin() || isActiveRbTool() || isRbToolToken();
+      allow list: if isAdmin() || isActiveRbTool();
       allow create, update: if isActiveRbTool()
         && isSafeSongSuggestions(request.resource.data);
       allow delete: if isAdmin();
     }
 
     match /song_transitions/{trackId} {
-      allow read: if isAdmin() || isActiveRbTool();
+      allow get: if isAdmin() || isActiveRbTool() || isRbToolToken();
+      allow list: if isAdmin() || isActiveRbTool();
       allow create, update: if isActiveRbTool()
         && isSafeSongTransitions(request.resource.data);
       allow delete: if isAdmin();
@@ -2817,7 +2846,10 @@ service cloud.firestore {
     match /rb_tool_live/{ownerUid} {
       allow read: if request.auth != null
         && (
-          (isAdmin() && request.auth.uid == ownerUid)
+          (
+            request.auth.uid == ownerUid
+            && (isAdmin() || callerHasVibesboxSyncAccess())
+          )
           || (
             request.auth.token.role == 'rb_tool'
             && request.auth.token.ownerUid == ownerUid

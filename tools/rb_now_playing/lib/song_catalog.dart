@@ -10,6 +10,93 @@ class SongCatalogStore {
 
   final ToolSession _session;
 
+  /// Alle gespeicherten Vorschläge dieses Songs, über frühere Anzahlen
+  /// und Einstellungen hinweg. Reihenfolge: am häufigsten danach gespielt.
+  Future<List<Map<String, dynamic>>> readStoredPool(
+    HistoryTrack seed, {
+    required String scope,
+    required bool allowSameArtist,
+  }) async {
+    try {
+      final stored = await _readEveryStored(seed).timeout(
+        const Duration(seconds: 6),
+      );
+      if (stored.isEmpty) return const [];
+      final ranked = await withTransitions(
+        stored,
+        seed,
+        scope: scope,
+        allowSameArtist: allowSameArtist,
+      );
+      final keys = <String>{
+        for (final item in stored)
+          workKeyOf(
+            (item['title'] ?? '').toString(),
+            (item['artist'] ?? '').toString(),
+          ),
+      };
+      final onlyStored = <Map<String, dynamic>>[];
+      final seen = <String>{};
+      for (final item in ranked) {
+        final key = workKeyOf(
+          (item['title'] ?? '').toString(),
+          (item['artist'] ?? '').toString(),
+        );
+        if (key.isEmpty || !keys.contains(key) || !seen.add(key)) continue;
+        onlyStored.add(item);
+      }
+      return onlyStored;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _readEveryStored(HistoryTrack seed) async {
+    final token = await _session.freshIdTokenOrNull();
+    if (token == null) return const [];
+    const scopes = ['strict', 'similar', 'bold'];
+    const fams = ['hits', 'mix'];
+    final ids = <String>[];
+    for (final scope in scopes) {
+      for (final fam in fams) {
+        for (final same in [true, false]) {
+          final id = suggestionCacheDocId(
+            artist: seed.artist,
+            title: seed.title,
+            scope: scope,
+            familiarity: fam,
+            allowSameArtist: same,
+          );
+          if (id.isNotEmpty && !ids.contains(id)) ids.add(id);
+        }
+      }
+    }
+    final docs = await Future.wait(ids.map((id) async {
+      try {
+        return await _session.rest.getDocument(
+          idToken: token,
+          collection: 'song_suggestions',
+          docId: id,
+        );
+      } catch (_) {
+        return null;
+      }
+    }));
+    final out = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    for (final doc in docs) {
+      for (final item in _rowsOfSuggestions(doc)) {
+        final key = workKeyOf(
+          (item['title'] ?? '').toString(),
+          (item['artist'] ?? '').toString(),
+        );
+        if (key.isEmpty || !seen.add(key)) continue;
+        out.add(item);
+      }
+    }
+    return out;
+  }
+
   Future<List<Map<String, dynamic>>?> readSuggestions(
     HistoryTrack seed, {
     required String scope,
@@ -32,32 +119,7 @@ class SongCatalogStore {
         collection: 'song_suggestions',
         docId: docId,
       );
-      if (doc == null) return null;
-      final raw = doc['suggestions'];
-      if (raw is! List || raw.isEmpty) return null;
-      final out = <Map<String, dynamic>>[];
-      for (final item in raw) {
-        if (item is! Map) continue;
-        final map = Map<String, dynamic>.from(item);
-        final title = (map['title'] ?? '').toString().trim();
-        final artist = (map['artist'] ?? '').toString().trim();
-        final uri = (map['spotify_uri'] ?? '').toString().trim();
-        if (title.isEmpty || artist.isEmpty) continue;
-        if (!uri.startsWith('spotify:')) continue;
-        out.add({
-          'title': title,
-          'artist': artist,
-          'version': (map['version'] ?? '').toString(),
-          'track_id': (map['track_id'] ?? '').toString(),
-          'spotify_uri': (map['spotify_uri'] ?? '').toString(),
-          if (map['bpm'] is num) 'bpm': map['bpm'],
-          if ((map['camelot'] ?? '').toString().trim().isNotEmpty)
-            'camelot': map['camelot'].toString().trim(),
-          if ((map['genre'] ?? '').toString().trim().isNotEmpty)
-            'genre': map['genre'].toString().trim(),
-        });
-        if (out.length >= 20) break;
-      }
+      final out = _rowsOfSuggestions(doc);
       return out.isEmpty ? null : out;
     } catch (_) {
       return null;
@@ -236,6 +298,36 @@ class SongCatalogStore {
       return const [];
     }
   }
+}
+
+List<Map<String, dynamic>> _rowsOfSuggestions(Map<String, dynamic>? doc) {
+  if (doc == null) return const [];
+  final raw = doc['suggestions'];
+  if (raw is! List || raw.isEmpty) return const [];
+  final out = <Map<String, dynamic>>[];
+  for (final item in raw) {
+    if (item is! Map) continue;
+    final map = Map<String, dynamic>.from(item);
+    final title = (map['title'] ?? '').toString().trim();
+    final artist = (map['artist'] ?? '').toString().trim();
+    final uri = (map['spotify_uri'] ?? '').toString().trim();
+    if (title.isEmpty || artist.isEmpty) continue;
+    if (!uri.startsWith('spotify:')) continue;
+    out.add({
+      'title': title,
+      'artist': artist,
+      'version': (map['version'] ?? '').toString(),
+      'track_id': (map['track_id'] ?? '').toString(),
+      'spotify_uri': (map['spotify_uri'] ?? '').toString(),
+      if (map['bpm'] is num) 'bpm': map['bpm'],
+      if ((map['camelot'] ?? '').toString().trim().isNotEmpty)
+        'camelot': map['camelot'].toString().trim(),
+      if ((map['genre'] ?? '').toString().trim().isNotEmpty)
+        'genre': map['genre'].toString().trim(),
+    });
+    if (out.length >= 20) break;
+  }
+  return out;
 }
 
 int? _mixBpm(double? raw) {

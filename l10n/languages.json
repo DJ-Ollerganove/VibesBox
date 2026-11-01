@@ -244,6 +244,66 @@
       "time_suffix": "",
       "time_style": "intl_12",
       "hour12": true
+    },
+    {
+      "code": "ro",
+      "intl_locale": "ro-RO",
+      "name": "Romanian",
+      "flag": "🇷🇴",
+      "icon": "ro",
+      "langKey": "lang_romanian",
+      "arbKey": "romanian",
+      "time_suffix": "",
+      "time_style": "colon_suffix",
+      "text_direction": "ltr"
+    },
+    {
+      "code": "sr",
+      "intl_locale": "sr-RS",
+      "name": "Serbian",
+      "flag": "🇷🇸",
+      "icon": "sr",
+      "langKey": "lang_serbian",
+      "arbKey": "serbian",
+      "time_suffix": " ч",
+      "time_style": "colon_suffix",
+      "text_direction": "ltr"
+    },
+    {
+      "code": "bg",
+      "intl_locale": "bg-BG",
+      "name": "Bulgarian",
+      "flag": "🇧🇬",
+      "icon": "bg",
+      "langKey": "lang_bulgarian",
+      "arbKey": "bulgarian",
+      "time_suffix": "",
+      "time_style": "colon_suffix",
+      "text_direction": "ltr"
+    },
+    {
+      "code": "hr",
+      "intl_locale": "hr-HR",
+      "name": "Croatian",
+      "flag": "🇭🇷",
+      "icon": "hr",
+      "langKey": "lang_croatian",
+      "arbKey": "croatian",
+      "time_suffix": " h",
+      "time_style": "colon_suffix",
+      "text_direction": "ltr"
+    },
+    {
+      "code": "hu",
+      "intl_locale": "hu-HU",
+      "name": "Hungarian",
+      "flag": "🇭🇺",
+      "icon": "hu",
+      "langKey": "lang_hungarian",
+      "arbKey": "hungarian",
+      "time_suffix": "",
+      "time_style": "colon_suffix",
+      "text_direction": "ltr"
     }
   ]
 }

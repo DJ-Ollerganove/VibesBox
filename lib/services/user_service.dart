@@ -324,6 +324,7 @@ class UserService {
         _docSub?.cancel();
         _docSub = null;
         _docListeningUid = null;
+        _clearRecordedLogin();
         userDocSnapshotReadyNotifier.value = false;
         _cancelTrialLocalTimer();
         _setRootUserAndEmit(null);
@@ -346,6 +347,20 @@ class UserService {
       _docListeningUid = user.uid;
       userDocSnapshotReadyNotifier.value = false;
       unawaited(DeviceBlockFusionService.applyIfNeeded(user));
+      if (!user.isAnonymous) {
+        unawaited(
+          UserService.recordLoginActivity(
+            uid: user.uid,
+            email: user.email,
+            displayName: user.displayName,
+            roleId: null,
+            seedCreatedAt: false,
+            loginCount: 0,
+            lastLogin: Timestamp.now(),
+            previousLogin: null,
+          ),
+        );
+      }
       debugLog(
         '👤 UserService: starte Firestore-Snapshot',
       );
@@ -631,7 +646,17 @@ class UserService {
     }
   }
 
+  /// Eine Zählung pro App-Start und Konto. Verhindert Doppelzählung, wenn
+  /// Login-Seite und Session-Restore dieselbe Anmeldung melden.
+  static String? _recordedLoginUidThisProcess;
+
+  static void _clearRecordedLogin() {
+    _recordedLoginUidThisProcess = null;
+  }
+
   /// Login-Zähler + lastLogin — zuerst Callable (Admin), dann Firestore-Fallback.
+  /// Der Fallback liest den gespeicherten Zähler und addiert 1. Der vom Aufrufer
+  /// mitgegebene [loginCount] wird nicht geschrieben (Session-Restore kennt ihn oft nicht).
   static Future<void> recordLoginActivity({
     required String uid,
     required String? email,
@@ -642,6 +667,9 @@ class UserService {
     required Timestamp lastLogin,
     required Timestamp? previousLogin,
   }) async {
+    if (uid.isEmpty) return;
+    if (_recordedLoginUidThisProcess == uid) return;
+    _recordedLoginUidThisProcess = uid;
     try {
       await FirebaseFunctions.instanceFor(region: 'us-central1')
           .httpsCallable('recordUserLoginActivity')
@@ -650,27 +678,51 @@ class UserService {
         'displayName': displayName ?? '',
         'seedCreatedAt': seedCreatedAt,
       });
-      debugLog('UserService: Login-Aktivität via Callable OK (uid=$uid)');
+      debugLog(
+        'UserService: Login-Aktivität via Callable OK (uid=$uid, hint=$loginCount, role=${roleId ?? '-'})',
+      );
       return;
     } catch (e) {
       debugLog('UserService: Callable Login fehlgeschlagen, Firestore-Fallback: $e');
     }
 
-    final updateData = <String, dynamic>{
-      'email': email,
-      'displayName': displayName,
-      'loginCount': loginCount,
-      'lastLogin': lastLogin,
-      'previousLogin': previousLogin,
-    };
-    if (seedCreatedAt) {
-      updateData['created_at'] = lastLogin;
+    try {
+      final ref = FirebaseFirestore.instance.collection('users').doc(uid);
+      final snap = await ref.get();
+      final data = snap.data();
+      var count = 0;
+      final raw = data?['loginCount'];
+      if (raw is int) {
+        count = raw;
+      } else if (raw is num) {
+        count = raw.toInt();
+      }
+      final now = Timestamp.now();
+      final prev = data?['lastLogin'];
+      final updateData = <String, dynamic>{
+        'loginCount': count + 1,
+        'lastLogin': now,
+        'previousLogin': prev is Timestamp ? prev : previousLogin,
+      };
+      final trimmedEmail = email?.trim();
+      final trimmedName = displayName?.trim();
+      if (trimmedEmail != null && trimmedEmail.isNotEmpty) {
+        updateData['email'] = trimmedEmail;
+      }
+      if (trimmedName != null && trimmedName.isNotEmpty) {
+        updateData['displayName'] = trimmedName;
+      }
+      if (seedCreatedAt && data?['created_at'] == null) {
+        updateData['created_at'] = now;
+      }
+      await ref.set(_sanitizeWriteMap(updateData), SetOptions(merge: true));
+      debugLog(
+        'UserService: Login-Aktivität Firestore OK (uid=$uid, count=${count + 1}, clientStamp=$lastLogin)',
+      );
+    } catch (e) {
+      _recordedLoginUidThisProcess = null;
+      debugLog('UserService: Login-Aktivität Firestore fehlgeschlagen: $e');
     }
-    await FirebaseFirestore.instance
-        .collection('users')
-        .doc(uid)
-        .set(_sanitizeWriteMap(updateData), SetOptions(merge: true));
-    debugLog('UserService: Login-Aktivität Firestore OK (uid=$uid)');
   }
 }
 

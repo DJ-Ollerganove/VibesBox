@@ -56,6 +56,7 @@ class DjSetlistTrackActionsService {
       await DjSetlistStoreService.instance.replaceTracks(
         partyId: pid,
         tracks: tracks,
+        syncPool: false,
       );
     }
   }

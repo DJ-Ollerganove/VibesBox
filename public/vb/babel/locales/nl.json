@@ -187,7 +187,7 @@
   "main_contact_title": "Neem contact met ons op",
   "main_feature_auto_body": "",
   "main_feature_auto_title": "",
-  "main_feature_dj_body": "Professioneel beheer van alle muziekaanvragen via de app. Houd volledige controle over de flow van het feest en reageer onmiddellijk op de dansvloer.",
+  "main_feature_dj_body": "Professioneel beheer van alle muziekaanvragen via de app voor iOS en Android. Als uitbreidingsmodule is er VibesBox Sync voor Mac of Windows. Houd volledige controle over de flow van het feest en reageer onmiddellijk op de dansvloer.",
   "main_feature_dj_title": "Voor DJ's",
   "main_feature_guest_body": "Snelle toegang via QR-code direct in de browser. Geen app-installatie nodig. Eenvoudig en zonder hindernissen muziekverzoeken versturen.",
   "main_feature_guest_title": "Voor gasten",
@@ -462,5 +462,12 @@
   "song_blacklist_mode_block_hint": "De gast ziet een beleefd bericht. Er wordt geen wens opgeslagen.",
   "song_blacklist_guest_blocked_title": "Wens niet mogelijk",
   "song_blacklist_live_hint": "{song} automatisch naar Afgewezen.",
-  "select_language": "Selecteer taal"
+  "select_language": "Selecteer taal",
+  "sync_page_title": "VibesBox Sync",
+  "sync_page_meta_description": "Download VibesBox Sync voor Windows en Mac.",
+  "sync_page_heading": "Hier kun je VibesBox Sync downloaden",
+  "sync_page_windows": "Voor Windows:",
+  "sync_page_mac": "Voor macOS:",
+  "sync_page_download": "Downloaden",
+  "sync_page_version": "Versie {version}"
 }

@@ -120,7 +120,7 @@
       svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
       svg.setAttribute('aria-hidden', 'true');
       var use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
-      var flagHref = '/vb/assets/flags.svg?v=2#flag-' + getFlagIconId(entry);
+      var flagHref = '/vb/assets/flags.svg?v=3#flag-' + getFlagIconId(entry);
       use.setAttribute('href', flagHref);
       use.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', flagHref);
       svg.appendChild(use);

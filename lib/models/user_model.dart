@@ -53,6 +53,8 @@ class UserModel {
   final bool vibesboxSyncEnabled;
   /// Ob `vibesbox_sync_enabled` im User-Dokument vorkommt (fehlt ≠ false).
   final bool hasVibesboxSyncEnabledField;
+  /// Admin-Freigabe: VibesBox Sync in den Einstellungen (Firestore: vibesbox_sync_access).
+  final bool vibesboxSyncAccess;
   /// Aus Firestore `language` oder `locale` (Rohwert); UI normalisiert via [LocaleHelper].
   final String? preferredLanguage;
   /// DJ: lokale Push bei neuen Wünschen (Firestore: notifyNewWishes).
@@ -122,6 +124,7 @@ class UserModel {
     this.autoStartRecognition = false,
     this.vibesboxSyncEnabled = false,
     this.hasVibesboxSyncEnabledField = false,
+    this.vibesboxSyncAccess = false,
     this.preferredLanguage,
     this.notifyNewWishes = false,
     this.enableNotificationSound = true,
@@ -275,6 +278,7 @@ class UserModel {
       autoStartRecognition: data['auto_start_recognition'] == true,
       vibesboxSyncEnabled: data['vibesbox_sync_enabled'] == true,
       hasVibesboxSyncEnabledField: data.containsKey('vibesbox_sync_enabled'),
+      vibesboxSyncAccess: data['vibesbox_sync_access'] == true,
       preferredLanguage: parsePreferredLanguageFields(data),
       notifyNewWishes: data['notifyNewWishes'] == true,
       enableNotificationSound: data['enableNotificationSound'] != false,
@@ -396,6 +400,7 @@ class UserModel {
         autoStartRecognition == other.autoStartRecognition &&
         vibesboxSyncEnabled == other.vibesboxSyncEnabled &&
         hasVibesboxSyncEnabledField == other.hasVibesboxSyncEnabledField &&
+        vibesboxSyncAccess == other.vibesboxSyncAccess &&
         preferredLanguage == other.preferredLanguage &&
         notifyNewWishes == other.notifyNewWishes &&
         enableNotificationSound == other.enableNotificationSound &&
@@ -447,6 +452,7 @@ class UserModel {
         autoStartRecognition,
         vibesboxSyncEnabled,
         hasVibesboxSyncEnabledField,
+        vibesboxSyncAccess,
         preferredLanguage,
         notifyNewWishes,
         enableNotificationSound,
@@ -498,6 +504,7 @@ class UserModel {
     bool? autoStartRecognition,
     bool? vibesboxSyncEnabled,
     bool? hasVibesboxSyncEnabledField,
+    bool? vibesboxSyncAccess,
     String? preferredLanguage,
     bool? notifyNewWishes,
     bool? enableNotificationSound,
@@ -549,6 +556,7 @@ class UserModel {
       vibesboxSyncEnabled: vibesboxSyncEnabled ?? this.vibesboxSyncEnabled,
       hasVibesboxSyncEnabledField:
           hasVibesboxSyncEnabledField ?? this.hasVibesboxSyncEnabledField,
+      vibesboxSyncAccess: vibesboxSyncAccess ?? this.vibesboxSyncAccess,
       preferredLanguage: preferredLanguage ?? this.preferredLanguage,
       notifyNewWishes: notifyNewWishes ?? this.notifyNewWishes,
       enableNotificationSound:

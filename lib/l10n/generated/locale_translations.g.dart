@@ -2,6 +2,7 @@
 // Quelle: l10n/languages.json + vorhandene app_localizations_*.dart
 
 import '../app_localizations_ar.dart';
+import '../app_localizations_bg.dart';
 import '../app_localizations_cs.dart';
 import '../app_localizations_de.dart';
 import '../app_localizations_el.dart';
@@ -9,13 +10,17 @@ import '../app_localizations_en.dart';
 import '../app_localizations_es.dart';
 import '../app_localizations_fr.dart';
 import '../app_localizations_hi.dart';
+import '../app_localizations_hr.dart';
+import '../app_localizations_hu.dart';
 import '../app_localizations_it.dart';
 import '../app_localizations_ja.dart';
 import '../app_localizations_nl.dart';
 import '../app_localizations_pl.dart';
 import '../app_localizations_pt.dart';
+import '../app_localizations_ro.dart';
 import '../app_localizations_ru.dart';
 import '../app_localizations_sq.dart';
+import '../app_localizations_sr.dart';
 import '../app_localizations_th.dart';
 import '../app_localizations_tr.dart';
 import '../app_localizations_uk.dart';
@@ -44,6 +49,11 @@ Map<String, String> translationsForLanguageCode(String code) {
     'cs' => AppLocalizationsCS.translations,
     'th' => AppLocalizationsTH.translations,
     'ar' => AppLocalizationsAR.translations,
+    'ro' => AppLocalizationsRO.translations,
+    'sr' => AppLocalizationsSR.translations,
+    'bg' => AppLocalizationsBG.translations,
+    'hr' => AppLocalizationsHR.translations,
+    'hu' => AppLocalizationsHU.translations,
     _ => AppLocalizationsDE.translations,
   };
 }

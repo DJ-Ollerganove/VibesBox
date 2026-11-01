@@ -2,6 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../l10n/app_localizations.dart';
+
 /// Admin steuert VibesBox Sync. Gleiche Versionszeile wie die App-Matrix,
 /// nur macOS und Windows. Das Tool ist nur für DJs.
 class AdminSyncToolCard extends StatefulWidget {
@@ -100,8 +102,9 @@ class _AdminSyncToolCardState extends State<AdminSyncToolCard> {
   Future<void> _save() async {
     final macUrl = _macUrl.text.trim();
     final winUrl = _winUrl.text.trim();
+    final l = AppLocalizations.of(context)!;
     if (!_urlOk(macUrl) || !_urlOk(winUrl)) {
-      setState(() => _message = 'Download-Links müssen mit https beginnen, oder leer sein.');
+      setState(() => _message = l.vibesbox_sync_admin_https);
       return;
     }
     final macVersion = _compose(_macMajor, _macMinor, _macPatch);
@@ -122,7 +125,7 @@ class _AdminSyncToolCardState extends State<AdminSyncToolCard> {
         'win_note': _winNote.text.trim(),
         'updated_at': FieldValue.serverTimestamp(),
       });
-      if (mounted) setState(() => _message = 'Gespeichert.');
+      if (mounted) setState(() => _message = l.vibesbox_sync_admin_saved);
     } catch (e) {
       if (mounted) setState(() => _message = e.toString());
     } finally {
@@ -198,9 +201,11 @@ class _AdminSyncToolCardState extends State<AdminSyncToolCard> {
           .snapshots(),
       builder: (context, snapshot) {
         final data = snapshot.data?.data() ?? const <String, dynamic>{};
-        final liveLine =
-            'LIVE admin_config/sync_tool — macOS ${_liveCell(data['mac_min_version'])} | '
-            'Windows ${_liveCell(data['win_min_version'])}';
+        final l = AppLocalizations.of(context)!;
+        final liveLine = l.vibesbox_sync_admin_live(
+          _liveCell(data['mac_min_version']),
+          _liveCell(data['win_min_version']),
+        );
         return Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -212,7 +217,7 @@ class _AdminSyncToolCardState extends State<AdminSyncToolCard> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'VibesBox Sync',
+                l.vibesbox_sync_title,
                 style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.bold,
                       color: Colors.orange,
@@ -229,7 +234,7 @@ class _AdminSyncToolCardState extends State<AdminSyncToolCard> {
               ),
               const SizedBox(height: 12),
               _platformBlock(
-                title: 'macOS',
+                title: l.vibesbox_sync_macos,
                 major: _macMajor,
                 minor: _macMinor,
                 patch: _macPatch,
@@ -240,7 +245,7 @@ class _AdminSyncToolCardState extends State<AdminSyncToolCard> {
               ),
               const SizedBox(height: 14),
               _platformBlock(
-                title: 'Windows',
+                title: l.vibesbox_sync_windows,
                 major: _winMajor,
                 minor: _winMinor,
                 patch: _winPatch,
@@ -266,7 +271,7 @@ class _AdminSyncToolCardState extends State<AdminSyncToolCard> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.save, size: 18),
-                label: const Text('Speichern'),
+                label: Text(l.save),
                 style: FilledButton.styleFrom(
                   backgroundColor: Colors.orange,
                   foregroundColor: Colors.black,
@@ -302,7 +307,7 @@ class _AdminSyncToolCardState extends State<AdminSyncToolCard> {
         ),
         const SizedBox(height: 4),
         Text(
-          'Zielversion',
+          AppLocalizations.of(context)!.vibesbox_sync_admin_target,
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: Colors.white70,
               ),
@@ -324,7 +329,7 @@ class _AdminSyncToolCardState extends State<AdminSyncToolCard> {
           style: const TextStyle(color: Colors.white, fontSize: 13),
           inputFormatters: [FilteringTextInputFormatter.deny(RegExp(r'[<>]'))],
           decoration: _fieldDecoration.copyWith(
-            labelText: 'Download (https)',
+            labelText: AppLocalizations.of(context)!.vibesbox_sync_admin_download,
             labelStyle: const TextStyle(color: Colors.white54),
           ),
         ),
@@ -335,16 +340,16 @@ class _AdminSyncToolCardState extends State<AdminSyncToolCard> {
           style: const TextStyle(color: Colors.white, fontSize: 13),
           inputFormatters: [FilteringTextInputFormatter.deny(RegExp(r'[<>]'))],
           decoration: _fieldDecoration.copyWith(
-            labelText: 'Hinweis',
+            labelText: AppLocalizations.of(context)!.vibesbox_sync_admin_note,
             labelStyle: const TextStyle(color: Colors.white54),
           ),
         ),
         CheckboxListTile(
           value: forceMin,
           onChanged: (v) => onForceMin(v ?? false),
-          title: const Text(
-            'Mindestversion',
-            style: TextStyle(color: Colors.white),
+          title: Text(
+            AppLocalizations.of(context)!.vibesbox_sync_admin_min,
+            style: const TextStyle(color: Colors.white),
           ),
           activeColor: Colors.orange,
           checkColor: Colors.black,

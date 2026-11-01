@@ -6,7 +6,7 @@
 (function () {
   'use strict';
 
-  window.PWA_LANG_ASSET_V = '20260909l10n';
+  window.PWA_LANG_ASSET_V = '20261007srhr';
 
   window.pwaSelectLanguageLabel = function () {
     var key = 'select_language';
@@ -32,8 +32,8 @@
   /** Session: von Root (/) mitgegebene Sprache für /vb/ — gleiche Browser-Sitzung, auch ohne ?lang= in jeder Navigation. */
   var VB_ENTRY_LANG_KEY = 'vb_entry_lang';
   /** Muss mit default-pwa-languages.js übereinstimmen — URL-Sprache gilt auch wenn codes noch leer. */
-  var STATIC_PWA_LANG_CODES = ['de', 'en', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi', 'ja', 'el', 'nl', 'pl', 'cs', 'th', 'ar'];
-  var REGION_TO_LANG = { de: 'de', at: 'de', ch: 'de', fr: 'fr', es: 'es', it: 'it', ru: 'ru', tr: 'tr', pt: 'pt', br: 'pt', zh: 'zh', cn: 'zh', tw: 'zh', ua: 'uk', in: 'hi', al: 'sq', vn: 'vi', jp: 'ja', ja: 'ja', gr: 'el', el: 'el', nl: 'nl', pl: 'pl', cs: 'cs', cz: 'cs', th: 'th', ar: 'ar', sa: 'ar', eg: 'ar' };
+  var STATIC_PWA_LANG_CODES = ['de', 'en', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi', 'ja', 'el', 'nl', 'pl', 'cs', 'th', 'ar', 'ro', 'sr', 'bg', 'hr', 'hu'];
+  var REGION_TO_LANG = { de: 'de', at: 'de', ch: 'de', fr: 'fr', es: 'es', it: 'it', ru: 'ru', tr: 'tr', pt: 'pt', br: 'pt', zh: 'zh', cn: 'zh', tw: 'zh', ua: 'uk', in: 'hi', al: 'sq', vn: 'vi', jp: 'ja', ja: 'ja', gr: 'el', el: 'el', nl: 'nl', pl: 'pl', cs: 'cs', cz: 'cs', th: 'th', ar: 'ar', sa: 'ar', eg: 'ar', ro: 'ro', rs: 'sr', bg: 'bg', hr: 'hr', hu: 'hu' };
 
   function setVbPreferredLangForSession(code) {
     if (!code) return;
@@ -257,7 +257,7 @@
     if (list.length) return list.map(function (e) { return e.code; });
     var d = window.DEFAULT_PWA_LANGUAGES;
     if (d && d.length) return d.map(function (e) { return e.code; });
-    return ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi', 'ja', 'el', 'nl', 'pl', 'cs', 'th', 'ar'];
+    return ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi', 'ja', 'el', 'nl', 'pl', 'cs', 'th', 'ar', 'ro', 'sr', 'bg', 'hr', 'hu'];
   }
 
   function getEffectiveLangForMenu() {
@@ -319,7 +319,7 @@
       svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
       svg.setAttribute('aria-hidden', 'true');
       var use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
-      use.setAttribute('href', '/vb/assets/flags.svg#flag-' + getFlagIconId(entry));
+      use.setAttribute('href', '/vb/assets/flags.svg?v=3#flag-' + getFlagIconId(entry));
       svg.appendChild(use);
       flagWrap.appendChild(svg);
       var nameSpan = document.createElement('span');

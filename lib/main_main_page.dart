@@ -4442,6 +4442,7 @@ class _MainPageState extends State<MainPage>
                         Navigator.pop(context);
                       },
                     ),
+                    if (VibesBoxSyncService.instance.isVisibleForCurrentUser)
                     ListTile(
                       dense: true,
                       visualDensity: VisualDensity.compact,

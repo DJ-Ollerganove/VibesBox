@@ -187,7 +187,7 @@
   "main_contact_title": "お問い合わせ",
   "main_feature_auto_body": "",
   "main_feature_auto_title": "",
-  "main_feature_dj_body": "アプリですべての音楽リクエストをプロフェッショナルに管理。パーティーの流れを完全にコントロールし、ダンスフロアに即座に対応。",
+  "main_feature_dj_body": "iOSとAndroid向けのアプリですべての音楽リクエストをプロフェッショナルに管理。拡張モジュールとしてVibesBox SyncがMacまたはWindows向けにあります。パーティーの流れを完全にコントロールし、ダンスフロアに即座に対応。",
   "main_feature_dj_title": "DJ向け",
   "main_feature_guest_body": "ブラウザから直接QRコードでクイックアクセス。アプリのインストールは不要。ハードルなしで簡単に音楽リクエストを送信。",
   "main_feature_guest_title": "ご宿泊のお客様",
@@ -462,5 +462,12 @@
   "song_blacklist_mode_block_hint": "ゲストには丁寧なメッセージが表示されます。リクエストは保存されません。",
   "song_blacklist_guest_blocked_title": "リクエストできません",
   "song_blacklist_live_hint": "{song} は自動的に却下へ移されました。",
-  "select_language": "言語を選択"
+  "select_language": "言語を選択",
+  "sync_page_title": "VibesBox Sync",
+  "sync_page_meta_description": "Windows と Mac 向けの VibesBox Sync をダウンロード。",
+  "sync_page_heading": "こちらから VibesBox Sync をダウンロード",
+  "sync_page_windows": "Windows：",
+  "sync_page_mac": "macOS：",
+  "sync_page_download": "ダウンロード",
+  "sync_page_version": "バージョン {version}"
 }

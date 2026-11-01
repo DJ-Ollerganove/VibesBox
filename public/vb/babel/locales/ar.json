@@ -187,7 +187,7 @@
   "main_contact_title": "تواصل",
   "main_feature_auto_body": "",
   "main_feature_auto_title": "",
-  "main_feature_dj_body": "إدارة احترافية لجميع طلبات الأغاني عبر التطبيق. تحكم كامل في تدفق الحفلة وتفاعل فوري مع حلبة الرقص.",
+  "main_feature_dj_body": "إدارة احترافية لجميع طلبات الأغاني عبر التطبيق لـ iOS وAndroid. كوحدة توسعة يتوفر VibesBox Sync لـ Mac أو Windows. تحكم كامل في تدفق الحفلة وتفاعل فوري مع حلبة الرقص.",
   "main_feature_dj_title": "للـ DJs",
   "main_feature_guest_body": "وصول سريع عبر رمز QR مباشرة في المتصفح. لا حاجة لتثبيت التطبيق. أرسل طلبات الموسيقى بسهولة وبدون عوائق.",
   "main_feature_guest_title": "للضيوف",
@@ -462,5 +462,12 @@
   "song_blacklist_mode_block_hint": "يرى الضيف رسالة مهذبة. لا يُحفظ أي طلب.",
   "song_blacklist_guest_blocked_title": "الطلب غير ممكن",
   "song_blacklist_live_hint": "{song} نُقل تلقائيًا إلى المرفوضة.",
-  "select_language": "اختر اللغة"
+  "select_language": "اختر اللغة",
+  "sync_page_title": "VibesBox Sync",
+  "sync_page_meta_description": "نزّل VibesBox Sync لنظامي Windows و Mac.",
+  "sync_page_heading": "يمكنك تنزيل VibesBox Sync من هنا",
+  "sync_page_windows": "لنظام Windows:",
+  "sync_page_mac": "لنظام macOS:",
+  "sync_page_download": "تنزيل",
+  "sync_page_version": "الإصدار {version}"
 }

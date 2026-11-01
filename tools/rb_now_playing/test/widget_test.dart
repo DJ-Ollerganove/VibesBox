@@ -2,7 +2,9 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:rb_now_playing/dj_install_scan.dart';
 import 'package:rb_now_playing/dj_library_prefs.dart';
+import 'package:rb_now_playing/djay_library.dart';
 import 'package:rb_now_playing/engine_dj_library.dart';
 import 'package:rb_now_playing/library_match.dart';
 import 'package:rb_now_playing/library_store.dart';
@@ -251,10 +253,24 @@ void main() {
     expect(DjSoftware.tryParse('Traktor Pro'), DjSoftware.traktor);
     expect(DjSoftware.tryParse('mixxx'), DjSoftware.mixxx);
     expect(DjSoftware.tryParse('Engine DJ'), DjSoftware.engineDj);
+    expect(DjSoftware.tryParse('djay'), DjSoftware.djayPro);
+    expect(DjSoftware.tryParse('DJAY Pro')?.label, 'DJAY Pro');
+    expect(DjSoftware.tryParse('algoriddim djay pro'), DjSoftware.djayPro);
     expect(DjSoftware.tryParse('ableton'), isNull);
-    expect(DjSoftware.tryParse('djay'), isNull);
     expect(DjSoftware.tryParse('cross dj'), isNull);
     expect(DjSoftware.tryParse('ultramixer'), isNull);
+    expect(
+      DjSoftware.values.map((e) => e.label).toList(),
+      [
+        'DJAY Pro',
+        'Engine DJ',
+        'Mixxx',
+        'Rekordbox',
+        'Serato DJ Pro',
+        'Traktor Pro',
+        'Virtual DJ',
+      ],
+    );
   });
 
   test('hat in jeder Sprache dieselben Texte', () {
@@ -285,10 +301,18 @@ void main() {
     expect(compareSyncVersions('1.0.1', '1.0.2') < 0, isTrue);
     expect(compareSyncVersions('1.0.1+1', '1.0.1'), 0);
     expect(compareSyncVersions('1.0.2', '1.0.1') > 0, isTrue);
-    expect(kSyncToolVersion, '1.0.2');
+    expect(kSyncToolVersion, '1.0.7');
     expect(formatToolDevice('macos', 'Version 26.6.2 (Build 25G83)'), 'macOS 26.6.2');
     expect(formatToolDevice('windows', '10.0.22631'), 'Windows 11');
     expect(formatToolDevice('windows', '10.0.19045'), 'Windows 10');
+    expect(
+      formatToolDevice('windows', '"Windows 10 Pro" 10.0 (Build 22631)'),
+      'Windows 11',
+    );
+    expect(
+      formatToolDevice('windows', '"Windows 10 Pro" 10.0 (Build 19045)'),
+      'Windows 10',
+    );
   });
 
   test('legt Bibliothekscache je DJ-Software an', () {
@@ -298,7 +322,35 @@ void main() {
     expect(libraryCacheFileName('mixxx'), 'library_mixxx.json');
     expect(libraryCacheFileName('enginedj'), 'library_enginedj.json');
     expect(libraryCacheFileName('virtualdj'), 'library_virtualdj.json');
+    expect(libraryCacheFileName('djaypro'), 'library_djaypro.json');
     expect(libraryCacheFileName(null), 'library.json');
+  });
+
+  test('findet die Bibliothek neben der Installation', () async {
+    final root = await Directory.systemTemp.createTemp('vdj-scan');
+    try {
+      final current = Directory('${root.path}/VirtualDJ')..createSync();
+      await File('${current.path}/virtualdj.exe').writeAsString('x');
+      final db = File('${current.path}/database.xml');
+      await db.writeAsString('<db/>');
+      final oldDir = Directory('${root.path}/Old VirtualDJ')..createSync();
+      await File('${oldDir.path}/virtualdj.exe').writeAsString('x');
+      final old = File('${oldDir.path}/database.xml');
+      await old.writeAsString('<old/>');
+      final now = DateTime.now();
+      await old.setLastModified(now.subtract(const Duration(days: 4)));
+      await db.setLastModified(now);
+      await Directory('${root.path}/Pulse DJ.app').create();
+      await File('${root.path}/Pulse DJ.app/database.xml').writeAsString('no');
+
+      final found = await scanInstalledLibrary(
+        DjSoftware.virtualDj,
+        installRoots: [root.path],
+      );
+      expect(found, db.path);
+    } finally {
+      await root.delete(recursive: true);
+    }
   });
 
   test('zeigt die Standardpfade der Bibliotheken', () {
@@ -308,6 +360,8 @@ void main() {
     expect(defaultLibraryPath(DjSoftware.traktor), contains('Native Instruments'));
     expect(defaultLibraryPath(DjSoftware.mixxx).toLowerCase(), contains('mixxx'));
     expect(defaultLibraryPath(DjSoftware.engineDj), contains('Engine Library'));
+    expect(defaultLibraryPath(DjSoftware.djayPro), contains('MediaLibrary.db'));
+    expect(defaultLibraryPath(DjSoftware.djayPro), contains('djay'));
   });
 
   test('parst Serato database V2', () {
@@ -371,6 +425,57 @@ void main() {
     expect(tracks.first.bpm, 120);
     expect(tracks.first.playCount, 4);
     expect(tracks.first.location, '/Music/a.mp3');
+    const unnamed = '''
+<VirtualDJ_Database>
+ <Song FilePath="/Music/Lets Get It Started.mp3">
+  <Tags Author="Black Eyed Peas" Key="Bm" Bpm="0.47" />
+ </Song>
+ <Song FilePath="/Music/notes.zip">
+  <Tags Flag="2" />
+ </Song>
+</VirtualDJ_Database>
+''';
+    final extra = parseVirtualDjDatabase(unnamed);
+    expect(extra, hasLength(1));
+    expect(extra.first.title, 'Lets Get It Started');
+    expect(extra.first.artist, 'Black Eyed Peas');
+    expect(extra.first.musicalKey, 'Bm');
+    expect(extra.first.bpm, closeTo(127.66, 0.1));
+  });
+
+  test('nimmt die Virtual-DJ-History aus dem Ordner, der zuletzt gespielt hat', () async {
+    final root = await Directory.systemTemp.createTemp('vdj-history');
+    try {
+      final roaming = Directory('${root.path}/Roaming/VirtualDJ')..createSync(recursive: true);
+      final local = Directory('${root.path}/Local/VirtualDJ')..createSync(recursive: true);
+      final roamingDb = File('${roaming.path}/database.xml');
+      final localDb = File('${local.path}/database.xml');
+      await roamingDb.writeAsString('<old/>');
+      await localDb.writeAsString('<new/>');
+      final historyDir = Directory('${local.path}/History')..createSync();
+      final history = File('${historyDir.path}/2026-10-24.m3u');
+      await history.writeAsString('''
+#EXTM3U
+#EXTINF:180,Toto - Africa
+C:\\Music\\africa.mp3
+''');
+      final now = DateTime.now();
+      await roamingDb.setLastModified(now);
+      await localDb.setLastModified(now.subtract(const Duration(days: 1)));
+      await history.setLastModified(now);
+
+      final picked = preferVirtualDjDatabase([roamingDb.path, localDb.path]);
+      expect(picked, localDb.path);
+      final file = newestVirtualDjHistory([roaming.path, local.path]);
+      expect(file?.path, history.path);
+      final bytes = <int>[0xFF, 0xFE];
+      for (final unit in 'Toto - Africa'.codeUnits) {
+        bytes..add(unit & 0xff)..add((unit >> 8) & 0xff);
+      }
+      expect(decodeVirtualDjBytes(bytes), 'Toto - Africa');
+    } finally {
+      await root.delete(recursive: true);
+    }
   });
 
   test('parst Virtual-DJ-History-M3U', () {
@@ -385,6 +490,81 @@ void main() {
     expect(tracks.first.title, 'SOS');
     expect(tracks.first.artist, 'ABBA');
     expect(tracks.last.title, 'Africa');
+  });
+
+  test('liest Titel und Interpret aus der Virtual-DJ-EXTVDJ-Zeile', () {
+    const m3u = '''
+#EXTVDJ:<time>11:14</time><lastplaytime>1792833299</lastplaytime><artist>ABBA</artist><title>11 Chiquitita</title><songlength>325.907</songlength>
+/Users/dj/Music/AbbaMania/11 - Chiquitita.mp3
+''';
+    final tracks = parseVirtualDjM3u(m3u);
+    expect(tracks.single.title, '11 Chiquitita');
+    expect(tracks.single.artist, 'ABBA');
+    expect(tracks.single.length, const Duration(seconds: 326));
+    expect(tracks.single.playedAt, isNotNull);
+  });
+
+  test('liest Interpret und Titel aus dem Dateinamen, wenn Virtual DJ keine Tags schreibt', () {
+    const m3u = '''
+#EXTVDJ:<songlength>193.489</songlength>
+/Users/dj/Downloads/JOHN LEGEND - ALL OF ME (GERMAN VERSION) Hochzeitslied.mp3
+#EXTVDJ:<songlength>200</songlength>
+/Music/11 - Chiquitita.mp3
+''';
+    final tracks = parseVirtualDjM3u(m3u);
+    expect(tracks.first.title, '11 - Chiquitita');
+    expect(tracks.first.artist, isEmpty);
+    expect(tracks.last.title, 'ALL OF ME');
+    expect(tracks.last.artist, 'JOHN LEGEND');
+    expect(
+      virtualDjResolveTitleArtist(
+        taggedTitle: null,
+        taggedArtist: null,
+        path:
+            'Outatime - Last night a dj saved my life (dan winter ext mix).mp3',
+      ).artist,
+      'Outatime',
+    );
+  });
+
+  test('zeigt von gespeicherten Vorschlägen nur die Anzahl, häufigste Folge zuerst', () {
+    final ranked = rankByPlayedAfter(
+      pool: [
+        {'title': 'Alpha', 'artist': 'One'},
+        {'title': 'Bravo', 'artist': 'Two'},
+        {'title': 'Cairo', 'artist': 'Three'},
+        {'title': 'Delta', 'artist': 'Four'},
+      ],
+      playedAfter: [
+        {'title': 'Cairo', 'artist': 'Three', 'playedAfter': 9},
+        {'title': 'Alpha', 'artist': 'One', 'playedAfter': 2},
+      ],
+      scope: 'similar',
+      allowSameArtist: true,
+    );
+    final shown = ranked.take(2).toList();
+    expect(shown.first['title'], 'Cairo');
+    expect(shown[1]['title'], 'Alpha');
+    expect(shown, hasLength(2));
+  });
+
+  test('hängt BPM und Tonart aus der Virtual-DJ-Bibliothek an die History', () {
+    const xml = '''
+<Song FilePath="/Music/Mixtape/Seeed - Ding.mp3" FileSize="4810363">
+  <Tags Author="Seeed" Title="Ding" Bpm="0.512821" Key="Gm" />
+  <Scan Bpm="0.512812" Key="D" />
+</Song>
+''';
+    const m3u = '''
+#EXTVDJ:<artist>Seeed</artist><title>Ding</title><songlength>209.640</songlength>
+/Music/Mixtape/Seeed - Ding.mp3
+''';
+    final byPath = virtualDjLibraryByPath(parseVirtualDjDatabase(xml));
+    final tracks = parseVirtualDjM3u(m3u, libraryByPath: byPath);
+    expect(tracks.single.title, 'Ding');
+    expect(tracks.single.artist, 'Seeed');
+    expect(tracks.single.bpm, closeTo(117, 0.2));
+    expect(tracks.single.musicalKey, 'D');
   });
 
   test('parst Traktor-collection.nml und History-PRIMARYKEY', () {
@@ -429,6 +609,13 @@ void main() {
     final played = parseTraktorHistoryNml(history);
     expect(played.first.title, 'Africa');
     expect(played.last.title, 'SOS');
+    final enriched = parseTraktorHistoryNml(
+      history,
+      library: tracks,
+    );
+    expect(enriched.first.artist, 'Toto');
+    expect(enriched.first.bpm, 93);
+    expect(enriched.first.musicalKey, 'B');
   });
 
   test('baut Engine-DJ-Pfade und Tidal-URIs', () {
@@ -503,4 +690,171 @@ INSERT INTO HistorylistEntity VALUES (1, 1, 1, 1750000000);
     source.close();
     dir.deleteSync(recursive: true);
   });
+
+  test('liest DJAY-Pro MediaLibrary.db mit TSAF-Blobs', () {
+    final dir = Directory.systemTemp.createTempSync('djayvb');
+    final path = '${dir.path}/MediaLibrary.db';
+    const titleId = '0123456789abcdef0123456789abcdef';
+    final titleBlob = _djayTsaf([
+      ..._djayClass('ADCMediaItemTitleID'),
+      ..._djayStringField(titleId, 'uuid'),
+      ..._djayStringField('Africa', 'title'),
+      ..._djayStringField('Toto', 'artist'),
+      ..._djayDoubleField(295.0, 'duration'),
+    ]);
+    final analyzedBlob = _djayTsaf([
+      ..._djayClass('ADCMediaItemAnalyzedData'),
+      ..._djayStringField(titleId, 'uuid'),
+      ..._djayDoubleField(93.0, 'bpm'),
+      ..._djayDoubleField(23.0, 'keySignatureIndex'),
+    ]);
+    final userBlob = _djayTsaf([
+      ..._djayClass('ADCMediaItemUserData'),
+      ..._djayStringField(titleId, 'uuid'),
+      ..._djayDoubleField(7.0, 'playCount'),
+    ]);
+    final locBlob = _djayTsaf([
+      ..._djayClass('ADCMediaItemLocation'),
+      ..._djayStringField(titleId, 'uuid'),
+      ..._djaySourceUris(['file:///Music/africa.mp3']),
+    ]);
+    final historyBlob = _djayTsaf([
+      ..._djayClass('ADCHistorySessionItem'),
+      ..._djayStringField('item-1', 'uuid'),
+      ..._djayClass('ADCMediaItemTitleID'),
+      ..._djayStringField(titleId, 'uuid'),
+      ..._djayStringField('Africa', 'title'),
+      ..._djayStringField('Toto', 'artist'),
+      ..._djayDoubleField(295.0, 'duration'),
+      0x08, ...'titleID'.codeUnits, 0x00,
+      ..._djayDoubleField(1.0, 'deckNumber'),
+      ..._djayDateField(0.0, 'startTime'),
+    ]);
+    final db = sqlite3.open(path);
+    db.execute('''
+CREATE TABLE database2 (
+  rowid INTEGER PRIMARY KEY,
+  collection CHAR NOT NULL,
+  key CHAR NOT NULL,
+  data BLOB,
+  metadata BLOB
+);
+''');
+    db.execute(
+      'INSERT INTO database2 (collection, key, data) VALUES (?, ?, ?)',
+      ['mediaItemTitleIDs', titleId, titleBlob],
+    );
+    db.execute(
+      'INSERT INTO database2 (collection, key, data) VALUES (?, ?, ?)',
+      ['mediaItemAnalyzedData', titleId, analyzedBlob],
+    );
+    db.execute(
+      'INSERT INTO database2 (collection, key, data) VALUES (?, ?, ?)',
+      ['mediaItemUserData', titleId, userBlob],
+    );
+    db.execute(
+      'INSERT INTO database2 (collection, key, data) VALUES (?, ?, ?)',
+      ['localMediaItemLocations', titleId, locBlob],
+    );
+    db.execute(
+      'INSERT INTO database2 (collection, key, data) VALUES (?, ?, ?)',
+      ['historySessionItems', 'item-1', historyBlob],
+    );
+    db.close();
+
+    expect(extractDjayString(titleBlob, 'title'), 'Africa');
+    expect(djayKeyName(23), 'Am');
+    expect(resolveDjayUri('file:///Music/africa.mp3'), '/Music/africa.mp3');
+
+    final source = DjayLibrarySource(path);
+    final tracks = source.readLibrary();
+    expect(tracks, hasLength(1));
+    expect(tracks.first.title, 'Africa');
+    expect(tracks.first.artist, 'Toto');
+    expect(tracks.first.bpm, 93);
+    expect(tracks.first.musicalKey, 'Am');
+    expect(tracks.first.playCount, 7);
+    expect(tracks.first.location, '/Music/africa.mp3');
+    expect(source.readHistory().nowPlaying?.title, 'Africa');
+    expect(source.libraryPulse().trackCount, 1);
+    expect(source.libraryPulse().playSum, 7);
+    source.close();
+    dir.deleteSync(recursive: true);
+  });
+
+  test('liest DJAY-Zahlen und Bookmarks wie in einer echten Bibliothek', () {
+    final file = File('${Directory.systemTemp.path}/djay_bookmark_probe.mp3');
+    file.writeAsStringSync('x');
+    final parts = file.path.split('/').where((part) => part.isNotEmpty).toList();
+    final analyzed = _djayTsaf([
+      0x13, 0x00, 0x00, ..._f32(143.2), 0x08, ...'bpm'.codeUnits, 0x00,
+      0x0f, 4, 0x08, ...'keySignatureIndex'.codeUnits, 0x00,
+      0x08, ...'titleIDs'.codeUnits, 0x00,
+      0x08, ...'playCount'.codeUnits, 0x00,
+    ]);
+    expect(extractDjayDouble(analyzed, 'bpm'), closeTo(143.2, 0.05));
+    expect(extractDjayDouble(analyzed, 'keySignatureIndex'), 4);
+    expect(djayKeyName(4), 'Eb');
+    expect(extractDjayDouble(analyzed, 'playCount'), isNull);
+    final bookmark = _djayTsaf(_djayBookmarkParts(parts));
+    expect(djayBookmarkPath(bookmark), file.path);
+    file.deleteSync();
+  });
+}
+
+Uint8List _djayTsaf(List<int> body) {
+  final out = BytesBuilder();
+  out.add([0x54, 0x53, 0x41, 0x46]); // TSAF
+  out.add(List<int>.filled(16, 0));
+  out.add(body);
+  return out.toBytes();
+}
+
+List<int> _djayClass(String name) => [0x2b, 0x08, ...name.codeUnits, 0x00];
+
+List<int> _djayStringField(String value, String key) => [
+      0x08,
+      ...value.codeUnits,
+      0x00,
+      0x08,
+      ...key.codeUnits,
+      0x00,
+    ];
+
+List<int> _djayDoubleField(double value, String key) {
+  final bytes = ByteData(8)..setFloat64(0, value, Endian.little);
+  return [
+    ...bytes.buffer.asUint8List(),
+    0x08,
+    ...key.codeUnits,
+    0x00,
+  ];
+}
+
+List<int> _djayDateField(double cfAbsolute, String key) =>
+    _djayDoubleField(cfAbsolute, key);
+
+List<int> _f32(double value) {
+  final bytes = ByteData(4)..setFloat32(0, value, Endian.little);
+  return bytes.buffer.asUint8List();
+}
+
+List<int> _djayBookmarkParts(List<String> parts) {
+  final out = <int>[];
+  for (final part in parts) {
+    final raw = part.codeUnits;
+    final len = ByteData(4)..setUint32(0, raw.length, Endian.little);
+    out.addAll(len.buffer.asUint8List());
+    out.addAll([1, 1, 0, 0, ...raw]);
+  }
+  return out;
+}
+
+List<int> _djaySourceUris(List<String> uris) {
+  final out = <int>[];
+  for (final uri in uris) {
+    out.addAll([0x21, 0x08, ...uri.codeUnits, 0x00]);
+  }
+  out.addAll([0x08, ...'sourceURIs'.codeUnits, 0x00]);
+  return out;
 }

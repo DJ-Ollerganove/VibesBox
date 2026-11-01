@@ -27,6 +27,11 @@ abstract final class LanguageRegistry {
     'cs',
     'th',
     'ar',
+    'ro',
+    'sr',
+    'bg',
+    'hr',
+    'hu',
   ];
 
   static const List<Locale> materialLocales = [
@@ -50,6 +55,11 @@ abstract final class LanguageRegistry {
     Locale('cs'),
     Locale('th'),
     Locale('ar'),
+    Locale('ro'),
+    Locale('sr'),
+    Locale('bg'),
+    Locale('hr'),
+    Locale('hu'),
   ];
 
   /// Nur App-Admin — nicht im öffentlichen Sprachmenü.
@@ -77,6 +87,11 @@ abstract final class LanguageRegistry {
     'cs': 'cs-CZ',
     'th': 'th-TH',
     'ar': 'ar',
+    'ro': 'ro-RO',
+    'sr': 'sr-RS',
+    'bg': 'bg-BG',
+    'hr': 'hr-HR',
+    'hu': 'hu-HU',
   };
 
   /// BCP-47 für [DateFormat] / Intl (z. B. vi → vi-VN).
@@ -118,6 +133,11 @@ abstract final class LanguageRegistry {
     'cs': '',
     'th': '',
     'ar': '',
+    'ro': '',
+    'sr': ' ч',
+    'bg': '',
+    'hr': ' h',
+    'hu': '',
   };
 
   static String timeSuffixFor(String languageCode) {
@@ -146,6 +166,11 @@ abstract final class LanguageRegistry {
     'cs': 'colon_suffix',
     'th': 'colon_suffix',
     'ar': 'intl_12',
+    'ro': 'colon_suffix',
+    'sr': 'colon_suffix',
+    'bg': 'colon_suffix',
+    'hr': 'colon_suffix',
+    'hu': 'colon_suffix',
   };
 
   static String timeStyleFor(String languageCode) {
@@ -174,6 +199,11 @@ abstract final class LanguageRegistry {
     'cs': 'ltr',
     'th': 'ltr',
     'ar': 'rtl',
+    'ro': 'ltr',
+    'sr': 'ltr',
+    'bg': 'ltr',
+    'hr': 'ltr',
+    'hu': 'ltr',
   };
 
   static bool isRtl(String languageCode) {

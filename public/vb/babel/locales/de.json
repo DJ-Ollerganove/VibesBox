@@ -187,7 +187,7 @@
   "main_contact_title": "Kontakt",
   "main_feature_auto_body": "",
   "main_feature_auto_title": "",
-  "main_feature_dj_body": "Professionelles Management aller Musikwünsche per App. Behalte die volle Kontrolle über den Flow der Party und reagiere sofort auf die Tanzfläche.",
+  "main_feature_dj_body": "Professionelles Management aller Musikwünsche per App für iOS und Android. Als Erweiterungsmodul gibt es VibesBox Sync für Mac oder Windows. Behalte die volle Kontrolle über den Flow der Party und reagiere sofort auf die Tanzfläche.",
   "main_feature_dj_title": "Für DJs",
   "main_feature_guest_body": "Schneller Zugriff via QR-Code direkt im Browser. Keine App-Installation notwendig. Musikwünsche einfach und ohne Hürden abschicken.",
   "main_feature_guest_title": "Für Gäste",
@@ -462,5 +462,12 @@
   "song_blacklist_mode_block_hint": "Der Gast sieht eine höfliche Meldung. Es wird kein Wunsch gespeichert.",
   "song_blacklist_guest_blocked_title": "Wunsch nicht möglich",
   "song_blacklist_live_hint": "{song} automatisch nach Abgelehnt.",
-  "select_language": "Sprache auswählen"
+  "select_language": "Sprache auswählen",
+  "sync_page_title": "VibesBox Sync",
+  "sync_page_meta_description": "VibesBox Sync für Windows und Mac herunterladen.",
+  "sync_page_heading": "Hier kannst du VibesBox Sync downloaden",
+  "sync_page_windows": "Für Windows:",
+  "sync_page_mac": "Für macOS:",
+  "sync_page_download": "Download",
+  "sync_page_version": "Version {version}"
 }

@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'dj_history_delay.dart';
 import 'dj_library_prefs.dart';
+import 'dj_watch_install.dart';
 import 'dj_source_factory.dart';
 import 'library_store.dart';
 import 'tool_gate_pages.dart';
@@ -32,6 +34,12 @@ class _SongRecSettingsPageState extends State<SongRecSettingsPage> {
   bool _saving = false;
   String? _error;
 
+  @override
+  void initState() {
+    super.initState();
+    unawaited(DjHistoryDelay.refreshDisplayed(widget.djPrefs));
+  }
+
   Future<void> _importLibrary() async {
     final software = widget.djPrefs.software;
     if (software == null || !widget.djPrefs.wantsRead) return;
@@ -49,6 +57,11 @@ class _SongRecSettingsPageState extends State<SongRecSettingsPage> {
     if (widget.library.error != null) {
       setState(() => _error = widget.library.error);
     }
+  }
+
+  Future<void> _setLaunchWithDj(bool value) async {
+    await widget.djPrefs.setLaunchWithDj(value);
+    await DjWatchInstall.apply(value);
   }
 
   Future<void> _browsePath() async {
@@ -145,11 +158,21 @@ class _SongRecSettingsPageState extends State<SongRecSettingsPage> {
             padding: const EdgeInsets.fromLTRB(12, 2, 12, 16),
             children: [
               _GroupFrame(
-                child: _checkRow(
-                  label: toolI18n.text('alwaysOnTop'),
-                  value: widget.djPrefs.alwaysOnTop,
-                  onChanged: (value) =>
-                      unawaited(widget.djPrefs.setAlwaysOnTop(value)),
+                child: Column(
+                  children: [
+                    _checkRow(
+                      label: toolI18n.text('alwaysOnTop'),
+                      value: widget.djPrefs.alwaysOnTop,
+                      onChanged: (value) =>
+                          unawaited(widget.djPrefs.setAlwaysOnTop(value)),
+                    ),
+                    const Divider(height: 1),
+                    _checkRow(
+                      label: toolI18n.text('launchWithDj'),
+                      value: widget.djPrefs.launchWithDj,
+                      onChanged: (value) => unawaited(_setLaunchWithDj(value)),
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(height: 8),
@@ -174,17 +197,6 @@ class _SongRecSettingsPageState extends State<SongRecSettingsPage> {
                 Text(
                   toolI18n.text('connectFirst'),
                   style: _hintStyle,
-                )
-              else if (widget.wishboard.recFingerprint.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.only(top: 24),
-                  child: Center(
-                    child: SizedBox(
-                      width: 22,
-                      height: 22,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  ),
                 )
               else ...[
                 Text(
@@ -357,6 +369,16 @@ class _DjLibrarySection extends StatelessWidget {
             ),
           ),
         ),
+        if (software == DjSoftware.serato)
+          _DelaySlider(
+            seconds: prefs.seratoPlayDelaySec,
+            title: toolI18n.text('seratoDelay'),
+            hint: toolI18n.text('seratoDelayHint'),
+            onCommit: prefs.setSeratoPlayDelay,
+          ),
+        if (software == DjSoftware.rekordbox ||
+            software == DjSoftware.virtualDj)
+          _historyDelaySlider(prefs, software!),
         if (software != null) ...[
           const SizedBox(height: 6),
           _switchRow(
@@ -583,6 +605,106 @@ class _GroupFrame extends StatelessWidget {
         border: Border.all(color: const Color(0xFFFF8800), width: 1),
       ),
       child: child,
+    );
+  }
+}
+
+Widget _historyDelaySlider(DjLibraryPrefs prefs, DjSoftware software) {
+  return _DelaySlider(
+    seconds: software == DjSoftware.rekordbox
+        ? prefs.rekordboxHistoryDelaySec
+        : prefs.virtualDjHistoryDelaySec,
+    min: software == DjSoftware.rekordbox ? 1 : 0,
+    title: toolI18n.text('historyDelay'),
+    hint: _historyDelayHint(prefs, software),
+    onCommit: (seconds) => DjHistoryDelay.request(prefs, software, seconds),
+  );
+}
+
+String _historyDelayHint(DjLibraryPrefs prefs, DjSoftware software) {
+  final name = software.label;
+  final pending = software == DjSoftware.rekordbox
+      ? prefs.rekordboxHistoryDelayPending
+      : prefs.virtualDjHistoryDelayPending;
+  final found = software == DjSoftware.rekordbox
+      ? prefs.rekordboxSettingsFound
+      : prefs.virtualDjSettingsFound;
+  if (!found) return toolI18n.text('historyDelayMissing', {'name': name});
+  if (pending) return toolI18n.text('historyDelayPending', {'name': name});
+  return toolI18n.text('historyDelayHint', {'name': name});
+}
+
+class _DelaySlider extends StatefulWidget {
+  const _DelaySlider({
+    required this.seconds,
+    required this.title,
+    required this.hint,
+    required this.onCommit,
+    this.min = 0,
+  });
+
+  final int seconds;
+  final int min;
+  final String title;
+  final String hint;
+  final Future<void> Function(int seconds) onCommit;
+
+  @override
+  State<_DelaySlider> createState() => _DelaySliderState();
+}
+
+class _DelaySliderState extends State<_DelaySlider> {
+  late double _value = widget.seconds.toDouble();
+
+  @override
+  void didUpdateWidget(_DelaySlider oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.seconds != widget.seconds &&
+        widget.seconds.toDouble() != _value) {
+      _value = widget.seconds.toDouble();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final seconds = _value.round().clamp(widget.min, 60);
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(widget.title, style: _labelStyle),
+          const SizedBox(height: 2),
+          Text(widget.hint, style: _hintStyle),
+          Row(
+            children: [
+              Expanded(
+                child: Slider(
+                  value: _value.clamp(widget.min.toDouble(), 60).toDouble(),
+                  min: widget.min.toDouble(),
+                  max: 60,
+                  divisions: 60 - widget.min,
+                  activeColor: const Color(0xFFFF8800),
+                  onChanged: (value) => setState(() => _value = value),
+                  onChangeEnd: (value) =>
+                      unawaited(widget.onCommit(value.round())),
+                ),
+              ),
+              SizedBox(
+                width: 36,
+                child: Text(
+                  '$seconds s',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

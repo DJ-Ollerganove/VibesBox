@@ -752,6 +752,7 @@ class _SetlistGeneratorViewState extends State<SetlistGeneratorView>
                       tracks: _tracks,
                       listTitle: _listTitle(l),
                       libraryListId: _libraryListId,
+                      occasionId: _occasionId,
                     );
                     if (!mounted) return;
                     if (id != null && id.isNotEmpty) {

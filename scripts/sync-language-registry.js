@@ -128,6 +128,7 @@ const GREETING_LANG_ALIASES = Object.freeze({
 
 const _PREFIX_CANONICAL = [
   'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi', 'ja', 'el', 'nl', 'pl', 'cs', 'th', 'ar',
+  'ro', 'sr', 'bg', 'hr', 'hu',
 ];
 
 /**

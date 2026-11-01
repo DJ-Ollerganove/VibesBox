@@ -136,19 +136,22 @@ class Wishboard extends ChangeNotifier {
   static const _partyCheckEvery = Duration(minutes: 3);
   static const _partyWaitEvery = Duration(seconds: 20);
   static const _heavyEvery = Duration(minutes: 2);
+  static const _wishPollEvery = Duration(seconds: 5);
 
   final ToolSession _session;
   Timer? _listenRetry;
   Timer? _partyTimer;
+  Timer? _wishPoll;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _wishSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _userSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _partyDocSub;
   String? _listenPartyId;
-  bool _skipWishPrime = true;
-  bool _reconcileOnListen = false;
   bool _busy = false;
+  bool _pulling = false;
+  int _wishRev = 0;
   String? partyId;
   String? partyName;
+  String? djName;
   String? error;
   bool loading = false;
   List<WishItem> wishes = const [];
@@ -156,7 +159,7 @@ class Wishboard extends ChangeNotifier {
   DateTime? _lastHeavyAt;
   String _fingerprint = '';
   final Map<String, List<WishRow>> _rowCache = {};
-  String recFingerprint = '';
+  String recFingerprint = _recFp(true, 'similar', 'hits', true, 5);
   bool recEnabled = true;
   bool sendRecognition = false;
   String recScope = 'similar';
@@ -295,6 +298,7 @@ class Wishboard extends ChangeNotifier {
       _stopLive();
       partyId = null;
       partyName = null;
+      djName = null;
       wishes = const [];
       setlist = const [];
       _lastHeavyAt = null;
@@ -314,7 +318,7 @@ class Wishboard extends ChangeNotifier {
       _catalogParty = null;
       _partyWatchFast = null;
       _recheckParty = false;
-      recFingerprint = '';
+      recFingerprint = _recFp(true, 'similar', 'hits', true, 5);
       _pendingRecFp = null;
       _pendingRecAt = null;
       error = null;
@@ -401,6 +405,8 @@ class Wishboard extends ChangeNotifier {
       final nextAdmin =
           data.containsKey('djAdmin') ? data['djAdmin'] == true : djAdmin;
       final adminChanged = nextAdmin != djAdmin;
+      final nextDjName = (data['djName'] ?? '').toString().trim();
+      final djNameChanged = nextDjName.isNotEmpty && nextDjName != djName;
       final fp = _wishFingerprint(nextPartyId, nextWishes, nextSetlist);
       final recFp = _recFp(
         rec.enabled,
@@ -429,12 +435,14 @@ class Wishboard extends ChangeNotifier {
           !recChanged &&
           !sendChanged &&
           !showChanged &&
-          !adminChanged) {
+          !adminChanged &&
+          !djNameChanged) {
         if (wasLoading) notifyListeners();
         return;
       }
       showGreetingTranslations = showTr;
       djAdmin = nextAdmin;
+      if (nextDjName.isNotEmpty) djName = nextDjName;
       _fingerprint = fp;
       if (recChanged) {
         recFingerprint = recFp;
@@ -461,7 +469,9 @@ class Wishboard extends ChangeNotifier {
       if (_session.isConnected && id != null && id.isNotEmpty) {
         unawaited(_ensureLive(id));
         unawaited(ensurePlayedHistory());
+        _armWishPoll();
       } else if (id == null || id.isEmpty) {
+        _stopWishPoll();
         _clearPlayed();
       }
       if (_session.isConnected) _armPartyWatch();
@@ -469,6 +479,48 @@ class Wishboard extends ChangeNotifier {
         _recheckParty = false;
         unawaited(_checkParty());
       }
+    }
+  }
+
+  void _armWishPoll() {
+    if (_wishPoll != null) return;
+    _wishPoll = Timer.periodic(_wishPollEvery, (_) => unawaited(_pullWishes()));
+  }
+
+  void _stopWishPoll() {
+    _wishPoll?.cancel();
+    _wishPoll = null;
+  }
+
+  /// Die Wunschliste kommt einmal per Abruf. Der Firestore-Listener fällt
+  /// aus, sobald die Anmeldung fehlt oder der erste Schub verworfen wird.
+  /// Dieser Abruf holt dieselbe Liste nach, ohne Setlist und Vorab neu zu laden.
+  Future<void> _pullWishes() async {
+    final id = partyId;
+    if (id == null || id.isEmpty || !_session.isConnected || _pulling || _busy) {
+      return;
+    }
+    _pulling = true;
+    final rev = _wishRev;
+    try {
+      final data = await _session.fetchWishboard(
+        includeSetlist: false,
+        includePre: false,
+        includeSongRec: false,
+        partyId: id,
+      );
+      if (partyId != id || _wishRev != rev) return;
+      final nextPartyId = (data['partyId'] ?? '').toString();
+      if (nextPartyId != id) return;
+      final next = _mergeLiveWishes(_parseWishes(data['wishes']));
+      final fp = _wishFingerprint(id, next, setlist);
+      if (fp == _fingerprint) return;
+      wishes = next;
+      _fingerprint = fp;
+      notifyListeners();
+    } catch (_) {
+    } finally {
+      _pulling = false;
     }
   }
 
@@ -485,11 +537,13 @@ class Wishboard extends ChangeNotifier {
     if (startNow) unawaited(_checkParty());
   }
 
-  Future<void> noteRecognized(String title, String artist) async {
+  /// `null`, wenn noch keine Party hängt — der Aufrufer soll es später
+  /// noch einmal versuchen. Sonst ist der Titel gemeldet (auch bei Fehler).
+  Future<bool?> noteRecognized(String title, String artist) async {
     final id = partyId;
     final song = title.trim();
     if (id == null || id.isEmpty || song.isEmpty || !_session.isConnected) {
-      return;
+      return null;
     }
     try {
       final data = await _session.markRecognized(
@@ -497,9 +551,12 @@ class Wishboard extends ChangeNotifier {
         title: song,
         artist: artist.trim(),
       );
-      if (partyId != id) return;
+      if (partyId != id) return null;
       _applyRecognized(data);
-    } catch (_) {}
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   void _applyRecognized(Map<String, dynamic> data) {
@@ -663,10 +720,6 @@ class Wishboard extends ChangeNotifier {
         .collection('parties')
         .doc(id)
         .collection('wishes');
-    _skipWishPrime = !_reconcileOnListen &&
-        wishes.isNotEmpty &&
-        _catalogParty == id;
-    _reconcileOnListen = false;
     _wishSub = wishesRef.snapshots().listen(
       _applyWishSnap,
       onError: (_) => _scheduleListenRetry(id),
@@ -683,7 +736,6 @@ class Wishboard extends ChangeNotifier {
     _wishSub?.cancel();
     _wishSub = null;
     if (_listenPartyId == id) _listenPartyId = null;
-    _reconcileOnListen = true;
     _listenRetry?.cancel();
     _listenRetry = Timer(const Duration(seconds: 20), () {
       final current = partyId;
@@ -694,14 +746,11 @@ class Wishboard extends ChangeNotifier {
   }
 
   /// Listener liefert bei jedem Ereignis nur die geänderten Dokumente.
-  /// Der erste Schub ist derselbe Stand wie der einmalige Abruf und wird
-  /// nicht noch einmal in die Liste geschrieben.
+  /// Der erste Schub wird mitgeschrieben: Wünsche, die zwischen Abruf und
+  /// Listener ankamen, stehen nur dort.
   void _applyWishSnap(QuerySnapshot<Map<String, dynamic>> snap) {
-    if (_skipWishPrime) {
-      _skipWishPrime = false;
-      return;
-    }
     if (snap.docChanges.isEmpty) return;
+    _wishRev++;
     var next = wishes;
     var changed = false;
     for (final change in snap.docChanges) {
@@ -819,6 +868,7 @@ class Wishboard extends ChangeNotifier {
   void _stopLive() {
     _listenRetry?.cancel();
     _listenRetry = null;
+    _stopWishPoll();
     _partyTimer?.cancel();
     _partyTimer = null;
     _wishSub?.cancel();

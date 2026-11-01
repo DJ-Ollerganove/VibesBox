@@ -187,7 +187,7 @@
   "main_contact_title": "Skontaktuj się z nami",
   "main_feature_auto_body": "",
   "main_feature_auto_title": "",
-  "main_feature_dj_body": "Profesjonalne zarządzanie wszystkimi zamówieniami muzycznymi za pośrednictwem aplikacji. Pełna kontrola nad przebiegiem imprezy i natychmiastowa reakcja na parkiecie.",
+  "main_feature_dj_body": "Profesjonalne zarządzanie wszystkimi zamówieniami muzycznymi za pośrednictwem aplikacji na iOS i Android. Jako moduł rozszerzenia jest VibesBox Sync dla Mac lub Windows. Pełna kontrola nad przebiegiem imprezy i natychmiastowa reakcja na parkiecie.",
   "main_feature_dj_title": "Dla DJ-ów",
   "main_feature_guest_body": "Szybki dostęp za pomocą kodu QR bezpośrednio w przeglądarce. Instalacja aplikacji nie jest konieczna. Wysyłaj prośby o muzykę łatwo i bez przeszkód.",
   "main_feature_guest_title": "Dla gości",
@@ -462,5 +462,12 @@
   "song_blacklist_mode_block_hint": "Gość widzi uprzejmy komunikat. Życzenie nie jest zapisywane.",
   "song_blacklist_guest_blocked_title": "Życzenie niemożliwe",
   "song_blacklist_live_hint": "{song} automatycznie w Odrzuconych.",
-  "select_language": "Wybierz język"
+  "select_language": "Wybierz język",
+  "sync_page_title": "VibesBox Sync",
+  "sync_page_meta_description": "Pobierz VibesBox Sync dla Windows i Mac.",
+  "sync_page_heading": "Tutaj możesz pobrać VibesBox Sync",
+  "sync_page_windows": "Dla Windows:",
+  "sync_page_mac": "Dla macOS:",
+  "sync_page_download": "Pobierz",
+  "sync_page_version": "Wersja {version}"
 }

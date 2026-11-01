@@ -187,7 +187,7 @@
   "main_contact_title": "Kontaktujte nás",
   "main_feature_auto_body": "",
   "main_feature_auto_title": "",
-  "main_feature_dj_body": "Profesionální správa všech hudebních požadavků prostřednictvím aplikace. Mějte plnou kontrolu nad průběhem večírku a okamžitě reagujte na dění na tanečním parketu.",
+  "main_feature_dj_body": "Profesionální správa všech hudebních požadavků prostřednictvím aplikace pro iOS a Android. Jako rozšiřující modul je k dispozici VibesBox Sync pro Mac nebo Windows. Mějte plnou kontrolu nad průběhem večírku a okamžitě reagujte na dění na tanečním parketu.",
   "main_feature_dj_title": "Pro DJe",
   "main_feature_guest_body": "Rychlý přístup prostřednictvím QR kódu přímo v prohlížeči. Není nutná instalace aplikace. Odesílejte hudební požadavky snadno a bez překážek.",
   "main_feature_guest_title": "Pro hosty",
@@ -462,5 +462,12 @@
   "song_blacklist_mode_block_hint": "Host uvidí zdvořilou zprávu. Přání se neuloží.",
   "song_blacklist_guest_blocked_title": "Přání není možné",
   "song_blacklist_live_hint": "{song} automaticky do Zamítnuto.",
-  "select_language": "Výběr jazyka"
+  "select_language": "Výběr jazyka",
+  "sync_page_title": "VibesBox Sync",
+  "sync_page_meta_description": "Stáhněte si VibesBox Sync pro Windows a Mac.",
+  "sync_page_heading": "Zde si můžete stáhnout VibesBox Sync",
+  "sync_page_windows": "Pro Windows:",
+  "sync_page_mac": "Pro macOS:",
+  "sync_page_download": "Stáhnout",
+  "sync_page_version": "Verze {version}"
 }

@@ -194,6 +194,7 @@ function recommendSystemPrompt(settings, askCount) {
     + 'Entscheide nach konkreten Genres/der Interpreten-Welt — nicht nach vagem „Party-Feeling“. '
     + `${scopeMap[settings.scope]} ${famMap[settings.familiarity]} `
     + 'Nur real existierende Songs. Keine erfundenen Titel/Anagramme. '
+    + 'Titel und Interpret in der Schrift der Veröffentlichung, auch Griechisch, Kyrillisch, Arabisch oder eine andere Schrift. Nicht auf lateinische Buchstaben umschreiben. '
     + 'Titel und Interpret nur als Paar, das so veröffentlicht wurde. '
     + 'Niemals einen bekannten Hit einem anderen Interpreten zuordnen. '
     + 'Niemals denselben Song wie den Seed (auch nicht Live/Remix/Radio Edit/Acoustic). '
@@ -207,7 +208,7 @@ function recommendSystemPrompt(settings, askCount) {
   );
 }
 
-function recommendUserPrompt(title, artist, settings, exclude, sceneInfo, mix, askCount) {
+function recommendUserPrompt(title, artist, settings, exclude, sceneInfo, mix, askCount, note) {
   const sameArtist = settings.allowSameArtist
     ? `Höchstens zwei andere Songs von „${artist}“.`
     : `Keine Songs von „${artist}“.`;
@@ -283,6 +284,7 @@ function recommendUserPrompt(title, artist, settings, exclude, sceneInfo, mix, a
     text += exclude.map((e) => `${e.title} – ${e.artist}`).join('; ');
     text += '.';
   }
+  if (note) text += ` ${note}`;
   return text;
 }
 
@@ -339,8 +341,21 @@ function normName(raw) {
     .trim();
 }
 
+/** Nur wenn der lateinische Schlüssel leer ist. Lateinische Titel bleiben unverändert. */
+function scriptName(raw) {
+  return String(raw || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{M}+/gu, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
 function trackKey(title, artist) {
-  return `${workTitle(title)}|${workArtist(artist)}`;
+  const t = workTitle(title) || scriptTitle(title);
+  const a = workArtist(artist) || scriptArtist(artist);
+  if (!t) return '';
+  return `${t}|${a}`;
 }
 
 /** Remix / Radio Edit / Live / Klammern zählen als derselbe Song. */
@@ -358,11 +373,32 @@ function workTitle(raw) {
   return normName(s);
 }
 
+function scriptTitle(raw) {
+  let s = String(raw || '');
+  s = s.replace(/[\(\[\{].*?[\)\]\}]/g, ' ');
+  s = s.replace(
+    /\s[-–—]\s*(?:remix|rmx|rework|bootleg|mashup|karaoke|unplugged|instrumental|acoustic|(?:radio|extended|club|vip|original)\s+(?:edit|mix|version)|radio\s+edit).*$/i,
+    ' ',
+  );
+  s = s.replace(
+    /\b(?:remix|rmx|rework|bootleg|mashup|karaoke|unplugged|instrumental|acoustic|(?:radio|extended|club|vip|original)\s+(?:edit|mix|version)|radio\s+edit)\b/gi,
+    ' ',
+  );
+  return scriptName(s);
+}
+
 function workArtist(raw) {
   let s = String(raw || '');
   s = s.replace(/\s+(feat\.?|ft\.?|featuring|vs\.?)\s+.+$/i, ' ');
   s = s.replace(/[\(\[\{].*?[\)\]\}]/g, ' ');
   return normName(s);
+}
+
+function scriptArtist(raw) {
+  let s = String(raw || '');
+  s = s.replace(/\s+(feat\.?|ft\.?|featuring|vs\.?)\s+.+$/i, ' ');
+  s = s.replace(/[\(\[\{].*?[\)\]\}]/g, ' ');
+  return scriptName(s);
 }
 
 /** Schnell: Artist-Suche (Genres stecken schon in der Antwort). */
@@ -451,7 +487,10 @@ function namesClose(a, b) {
 }
 
 function titlesClose(a, b) {
-  return namesClose(workTitle(a), workTitle(b));
+  const left = workTitle(a);
+  const right = workTitle(b);
+  if (left && right) return namesClose(left, right);
+  return namesClose(scriptTitle(a), scriptTitle(b));
 }
 
 const ARTIST_STOP = new Set([
@@ -459,7 +498,11 @@ const ARTIST_STOP = new Set([
 ]);
 
 function artistTokens(raw) {
-  return workArtist(raw)
+  const latin = workArtist(raw)
+    .split(' ')
+    .filter((token) => token.length > 1 && !ARTIST_STOP.has(token));
+  if (latin.length) return latin;
+  return scriptArtist(raw)
     .split(' ')
     .filter((token) => token.length > 1 && !ARTIST_STOP.has(token));
 }
@@ -506,6 +549,27 @@ function artistsClose(a, b) {
   return hits === left.length;
 }
 
+function artistCredits(raw) {
+  return String(raw || '')
+    .replace(/[\(\[\{].*?[\)\]\}]/g, ' ')
+    .split(/\s+(?:feat\.?|ft\.?|featuring|vs\.?|versus|with)\s+|[,&/+]|\s+-\s+/i)
+    .map((part) => normName(part))
+    .filter((part) => part.length > 1);
+}
+
+/** Einer der genannten Interpreten reicht. „AYLIVA, Apache 207“ trifft „AYLIVA“. */
+function samePlayingArtist(seed, row) {
+  const left = artistCredits(seed);
+  const right = artistCredits(row);
+  if (!left.length || !right.length) return artistsClose(seed, row);
+  for (const a of left) {
+    for (const b of right) {
+      if (a === b || namesClose(a, b)) return true;
+    }
+  }
+  return false;
+}
+
 function spotifyQueryPart(raw) {
   return String(raw || '')
     .replace(/["']/g, ' ')
@@ -522,11 +586,11 @@ function rememberVerifiedTrack(key, value) {
   spotifyTrackVerifyCache.set(key, value);
 }
 
-async function searchSpotifyTrackItems(q, token) {
+async function searchSpotifyTrackItems(q, token, limit = 8) {
   const response = await axios.get('https://api.spotify.com/v1/search', {
     timeout: 1800,
     headers: { Authorization: `Bearer ${token}` },
-    params: { q, type: 'track', limit: 8 },
+    params: { q, type: 'track', limit },
     validateStatus: () => true,
   });
   if (response.status < 200 || response.status >= 300) return [];
@@ -571,8 +635,12 @@ async function verifySpotifyTrackPair(track, token) {
     rememberVerifiedTrack(key, null);
     return null;
   }
-  const items = await searchSpotifyTrackItems(`${t} ${a}`, token);
-  const hit = pickVerifiedSpotifyHit(track, items);
+  let items = await searchSpotifyTrackItems(`${t} ${a}`, token);
+  let hit = pickVerifiedSpotifyHit(track, items);
+  if (!hit) {
+    items = await searchSpotifyTrackItems(t, token, 20);
+    hit = pickVerifiedSpotifyHit(track, items);
+  }
   rememberVerifiedTrack(key, hit);
   if (!hit) {
     console.log('openaiMusicProxy: drop invented pair', track.title, '-', track.artist);
@@ -619,6 +687,7 @@ const SETLIST_SYSTEM = [
 const LANG_OK = [
   'de', 'en', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk',
   'hi', 'sq', 'vi', 'ja', 'el', 'nl', 'pl', 'cs', 'th', 'ar',
+  'ro', 'sr', 'bg', 'hr', 'hu',
 ];
 
 function normalizeLang(raw) {
@@ -1339,7 +1408,7 @@ async function handleRecommend(data) {
     allowSameArtist: data.allowSameArtist !== false,
   };
   const ask = clampRecommendCount(data.count ?? data.need);
-  const seedExclude = mapExclude(data.exclude, 20);
+  const seedExclude = mapExclude(data.exclude, 80);
   const mix = {
     bpm: normalizeBpm(data.bpm),
     camelot: normalizeCamelot(data.camelot || data.key || data.musicalKey),
@@ -1431,6 +1500,49 @@ async function handleRecommend(data) {
   return { tracks: collected.slice(0, ask) };
 }
 
+function hashSalt(raw) {
+  const s = String(raw || '');
+  let h = 0;
+  for (let i = 0; i < s.length; i += 1) {
+    h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  }
+  return h;
+}
+
+/**
+ * Bewährte Songs dieses Anlasses. Höchstens ~40 % der Charge,
+ * mindestens ein Platz bleibt für die KI, damit neue Titel reinkommen.
+ */
+async function takeOccasionPoolSongs(occasionId, need, excludeKeys, salt) {
+  if (!occasionId || need < 2) return [];
+  let snap;
+  try {
+    snap = await db.collection('setlist_occasion_pool').doc(occasionId).get();
+  } catch (e) {
+    console.warn('openaiMusicProxy: pool read', e && e.message ? e.message : e);
+    return [];
+  }
+  const rows =
+    snap.exists && Array.isArray(snap.data().songs) ? snap.data().songs : [];
+  const fresh = [];
+  for (const row of rows) {
+    const title = clip(stripHostileMarkup(row && (row.t || row.title)), 200);
+    const artist = clip(stripHostileMarkup(row && (row.a || row.artist)), 200);
+    if (!title || !artist) continue;
+    const key = trackKey(title, artist);
+    if (!key || excludeKeys.has(key)) continue;
+    fresh.push({ title, artist, n: Number(row.n) || 1 });
+  }
+  if (!fresh.length) return [];
+  fresh.sort((a, b) => b.n - a.n);
+  const window = fresh.slice(0, Math.min(fresh.length, 48));
+  const shift = hashSalt(salt) % window.length;
+  const rotated = window.slice(shift).concat(window.slice(0, shift));
+  const want = Math.max(1, Math.floor(need * 0.4));
+  const take = Math.min(rotated.length, want, need - 1);
+  return rotated.slice(0, take).map((row) => ({ title: row.title, artist: row.artist }));
+}
+
 async function handleSetlist(data, profileLanguage) {
   const needRaw = Number(data.need);
   const need = Number.isFinite(needRaw)
@@ -1462,47 +1574,70 @@ async function handleSetlist(data, profileLanguage) {
     occasionId: pickAllowed(data.occasionId, SETLIST_OCCASION_OK, ''),
   };
   const already = mapExclude(data.already, 40);
-  // Folgebatches: Extra anfordern, weil die KI oft bekannte Hits wiederholt.
-  const ask = already.length > 0 ? Math.min(28, need + 8) : need;
   const excludeKeys = new Set(already.map((e) => trackKey(e.title, e.artist)));
+  const poolSongs = await takeOccasionPoolSongs(
+    input.occasionId,
+    need,
+    excludeKeys,
+    `${input.eventType}|${input.preferred}|${input.artistsMust}`,
+  );
+  for (const row of poolSongs) {
+    const key = trackKey(row.title, row.artist);
+    if (key) excludeKeys.add(key);
+  }
+  const aiNeed = need - poolSongs.length;
+  const alreadyForAi = already.concat(poolSongs);
+  // Folgebatches: Extra anfordern, weil die KI oft bekannte Hits wiederholt.
+  const ask = alreadyForAi.length > 0 ? Math.min(28, aiNeed + 8) : aiNeed;
 
   console.log('openaiMusicProxy:setlist', {
     need,
     ask,
+    aiNeed,
+    pool: poolSongs.length,
     already: already.length,
     marketIds,
     marketPercents,
     genres: input.genres,
   });
 
-  // Ein KI-Call. Schlanker Prompt + weniger Tokens = schneller.
-  // Server filtert Duplikate gegen "already", damit die App nicht 20s für 1 neuen Song wartet.
-  const content = await callOpenAi({
-    system: SETLIST_SYSTEM,
-    user: setlistUserPrompt(input, ask, already),
-    temperature: already.length > 0
-      ? 0.85
-      : (marketIds.length > 1 ? 0.45 : 0.55),
-    maxTokens: 1600,
-    timeoutMs: 20000,
-  });
-  const parsed = parseTrackList(content, true, ask + 4);
-  const tracks = [];
-  const seen = new Set(excludeKeys);
-  for (const t of parsed) {
-    const k = trackKey(t.title, t.artist);
-    if (!k || seen.has(k)) continue;
-    seen.add(k);
-    tracks.push(t);
-    if (tracks.length >= need) break;
+  const tracks = poolSongs.slice();
+  if (aiNeed > 0) {
+    try {
+      // Ein KI-Call für den Rest. Pool-Songs stehen in "already" und dürfen nicht wiederholt werden.
+      const content = await callOpenAi({
+        system: SETLIST_SYSTEM,
+        user: setlistUserPrompt(input, ask, alreadyForAi),
+        temperature: alreadyForAi.length > 0
+          ? 0.85
+          : (marketIds.length > 1 ? 0.45 : 0.55),
+        maxTokens: 1600,
+        timeoutMs: 20000,
+      });
+      const parsed = parseTrackList(content, true, ask + 4);
+      const seen = new Set(excludeKeys);
+      for (const t of parsed) {
+        const k = trackKey(t.title, t.artist);
+        if (!k || seen.has(k)) continue;
+        seen.add(k);
+        tracks.push(t);
+        if (tracks.length >= need) break;
+      }
+    } catch (e) {
+      if (!poolSongs.length) throw e;
+      console.warn(
+        'openaiMusicProxy:setlist ai',
+        e && e.message ? e.message : e,
+      );
+    }
   }
   console.log('openaiMusicProxy:setlist done', {
     need,
     ask,
-    parsed: parsed.length,
+    pool: poolSongs.length,
     unique: tracks.length,
   });
-  return { tracks };
+  return { tracks: tracks.slice(0, need) };
 }
 
 function isMusicSetlistRequest(data) {
@@ -1631,6 +1766,7 @@ async function pullVerified(args) {
       args.sceneInfo,
       args.mix,
       need,
+      args.note || '',
     ),
     temperature: args.temperature,
     maxTokens: Math.min(800, 60 * need + 80),
@@ -1647,7 +1783,16 @@ async function pullVerified(args) {
     seen.add(key);
     fresh.push(row);
   }
-  return keepVerifiedTracks(fresh);
+  const verified = await keepVerifiedTracks(fresh);
+  if (Array.isArray(args.rejected)) {
+    for (const row of fresh) {
+      const kept = verified.some((hit) => (
+        titlesClose(row.title, hit.title) && artistsClose(row.artist, hit.artist)
+      ));
+      if (!kept) args.rejected.push(row);
+    }
+  }
+  return verified;
 }
 
 function parseArtistNames(content, max) {
@@ -1664,7 +1809,7 @@ function parseArtistNames(content, max) {
     const name = clip(stripHostileMarkup(
       typeof entry === 'string' ? entry : (entry && entry.name),
     ), 80);
-    const key = normName(name);
+    const key = normName(name) || scriptName(name);
     if (!name || !key || seen.has(key)) continue;
     seen.add(key);
     out.push(name);
@@ -1675,7 +1820,13 @@ function parseArtistNames(content, max) {
 
 function genreWords(genres) {
   return (genres || [])
-    .map((g) => String(g || '').toLowerCase().replace(/[-/]/g, ' ').replace(/\s+/g, ' ').trim())
+    .map((g) => {
+      let text = String(g || '').toLowerCase().replace(/[-/]/g, ' ').replace(/\s+/g, ' ').trim();
+      if (text === 'deutschrap' || text === 'german rap' || text === 'german hiphop') {
+        text = 'german hip hop';
+      }
+      return text;
+    })
     .filter(Boolean);
 }
 
@@ -1767,35 +1918,232 @@ async function resolveSpotifyArtist(name, token) {
 
 async function fetchArtistTopTracks(artistId, token) {
   if (!artistId) return [];
+  let best = [];
+  for (const market of ['DE', 'US', 'GB']) {
+    try {
+      const res = await axios.get(
+        `https://api.spotify.com/v1/artists/${artistId}/top-tracks`,
+        {
+          timeout: 1800,
+          headers: { Authorization: `Bearer ${token}` },
+          params: { market },
+          validateStatus: () => true,
+        },
+      );
+      const rows = res.data && Array.isArray(res.data.tracks) ? res.data.tracks : [];
+      const mapped = rows
+        .map((row) => ({
+          title: clip(row && row.name, 200),
+          artist: clip(row && row.artists && row.artists[0] && row.artists[0].name, 200),
+          track_id: String((row && row.id) || ''),
+          spotify_uri: String((row && row.uri) || (row && row.id ? `spotify:track:${row.id}` : '')),
+          popularity: Number(row && row.popularity) || 0,
+        }))
+        .filter((row) => row.title && row.artist && row.spotify_uri)
+        .sort((a, b) => b.popularity - a.popularity);
+      if (mapped.length > best.length) best = mapped;
+      if (mapped.length >= 5) return mapped;
+    } catch (_e) { /* nächster Markt */ }
+  }
+  return best;
+}
+
+/** Wenn die KI nichts bestätigt: echte Songs dieses Interpreten, egal welcher Markt. */
+async function confirmedArtistTracks(title, artist, exclude, ask) {
+  const token = await getSpotifyToken();
+  if (!token || !ask || ask < 1) return [];
+  let artistId = '';
+  const resolved = await resolveSpotifyArtist(artist, token).catch(() => null);
+  if (resolved && resolved.id) artistId = resolved.id;
+  if (!artistId) {
+    const q = `${spotifyQueryPart(title)} ${spotifyQueryPart(artist)}`.trim();
+    const items = q ? await searchSpotifyTrackItems(q, token) : [];
+    const item = items[0];
+    artistId = item && item.artists && item.artists[0] && item.artists[0].id
+      ? String(item.artists[0].id)
+      : '';
+  }
+  if (!artistId) return [];
+  const tops = await fetchArtistTopTracks(artistId, token);
+  const blocked = new Set((exclude || []).map((row) => songKey(row.title)).filter(Boolean));
+  const seedKey = songKey(title);
+  if (seedKey) blocked.add(seedKey);
+  const out = [];
+  for (const row of tops) {
+    if (isSameRecording(title, artist, row.title, row.artist)) continue;
+    const key = songKey(row.title) || row.spotify_uri;
+    if (!key || blocked.has(key)) continue;
+    blocked.add(key);
+    out.push(row);
+    if (out.length >= ask) break;
+  }
+  return out;
+}
+
+/** Echte Songs von Interpreten, die Spotify neben diesem nennt. Weltweit, nicht nur ein Genre-Text. */
+async function relatedArtistTracks(title, artist, exclude, ask) {
+  if (!ask || ask < 1) return [];
+  const token = await getSpotifyToken();
+  if (!token) return [];
+  const resolved = await resolveSpotifyArtist(artist, token).catch(() => null);
+  const artistId = resolved && resolved.id ? resolved.id : '';
+  if (!artistId) return [];
   const res = await axios.get(
-    `https://api.spotify.com/v1/artists/${artistId}/top-tracks`,
+    `https://api.spotify.com/v1/artists/${artistId}/related-artists`,
     {
       timeout: 1800,
       headers: { Authorization: `Bearer ${token}` },
-      params: { market: 'DE' },
       validateStatus: () => true,
     },
   );
-  const rows = res.data && Array.isArray(res.data.tracks) ? res.data.tracks : [];
-  return rows
-    .map((row) => ({
-      title: clip(row && row.name, 200),
-      artist: clip(row && row.artists && row.artists[0] && row.artists[0].name, 200),
-      track_id: String((row && row.id) || ''),
-      spotify_uri: String((row && row.uri) || (row && row.id ? `spotify:track:${row.id}` : '')),
-      popularity: Number(row && row.popularity) || 0,
-    }))
-    .filter((row) => row.title && row.artist)
-    .sort((a, b) => b.popularity - a.popularity);
+  const people = res.data && Array.isArray(res.data.artists)
+    ? res.data.artists.slice(0, 20)
+    : [];
+  if (!people.length) return [];
+  const lists = await Promise.all(people.map(async (person) => {
+    if (!person || !person.id) return [];
+    try {
+      return await fetchArtistTopTracks(person.id, token);
+    } catch (_e) {
+      return [];
+    }
+  }));
+  const blocked = new Set((exclude || []).map((row) => songKey(row.title)).filter(Boolean));
+  const seedKey = songKey(title);
+  if (seedKey) blocked.add(seedKey);
+  const out = [];
+  for (let i = 0; i < lists.length && out.length < ask; i += 1) {
+    const person = people[i];
+    if (person && samePlayingArtist(artist, person.name)) continue;
+    let took = 0;
+    for (const row of lists[i]) {
+      if (took >= 2 || out.length >= ask) break;
+      if (isSameRecording(title, artist, row.title, row.artist)) continue;
+      if (samePlayingArtist(artist, row.artist)) continue;
+      const key = songKey(row.title) || row.spotify_uri;
+      if (!key || blocked.has(key)) continue;
+      blocked.add(key);
+      out.push(row);
+      took += 1;
+    }
+  }
+  return out;
+}
+
+function foldSlugText(raw) {
+  return String(raw || '')
+    .toLowerCase()
+    .replace(/ä/g, 'ae')
+    .replace(/ö/g, 'oe')
+    .replace(/ü/g, 'ue')
+    .replace(/ß/g, 'ss')
+    .replace(/[éèê]/g, 'e')
+    .replace(/[áà]/g, 'a')
+    .replace(/ñ/g, 'n');
+}
+
+function slugPart(raw, forArtist) {
+  let text = foldSlugText(raw).replace(/[\[(].*?[\])]/g, ' ');
+  text = forArtist
+    ? text.replace(/\s*(?:feat\.?|ft\.?|featuring|vs\.?|versus|\bx\b|&|\/|,|\+)\s*/gi, ' ')
+    : text.replace(/\s+(feat\.?|ft\.?|featuring|vs\.?|x)\s+.+$/i, ' ');
+  let latin = '';
+  let space = false;
+  for (const ch of text) {
+    const c = ch.codePointAt(0);
+    const ok = (c >= 97 && c <= 122) || (c >= 48 && c <= 57);
+    if (ok) {
+      if (space && latin) latin += ' ';
+      latin += ch;
+      space = false;
+    } else {
+      space = true;
+    }
+  }
+  latin = latin.trim();
+  const body = latin || text
+    .normalize('NFD')
+    .replace(/\p{M}+/gu, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+  return body.replace(/ /g, '_') || 'x';
+}
+
+function suggestionDocId(title, artist, settings) {
+  const same = settings.allowSameArtist === false ? 'nosame' : 'same';
+  const scope = slugPart(settings.scope || 'similar', false);
+  const familiarity = slugPart(settings.familiarity || 'hits', false);
+  let id = `${slugPart(artist, true)}_${slugPart(title, false)}_original__${scope}_${familiarity}_${same}`;
+  if (id.length > 700) id = id.slice(0, 700);
+  return id;
+}
+
+async function rememberSharedSuggestions(title, artist, settings, tracks) {
+  const rows = [];
+  const seen = new Set();
+  for (const item of tracks || []) {
+    const rowTitle = clip(item && item.title, 200);
+    const rowArtist = clip(item && item.artist, 200);
+    const uri = String((item && item.spotify_uri) || '');
+    if (!rowTitle || !rowArtist || !uri.startsWith('spotify:')) continue;
+    const key = `${songKey(rowTitle)}|${songKey(rowArtist) || rowArtist}`;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    rows.push({
+      track_id: String(item.track_id || ''),
+      artist: rowArtist,
+      title: rowTitle,
+      version: 'Original',
+      spotify_uri: uri,
+      ...(item.bpm != null ? { bpm: item.bpm } : {}),
+      ...(item.camelot ? { camelot: String(item.camelot) } : {}),
+    });
+    if (rows.length >= 20) break;
+  }
+  if (!rows.length) return;
+  const docId = suggestionDocId(title, artist, settings);
+  const ref = db.collection('song_suggestions').doc(docId);
+  const prev = await ref.get();
+  const prior = prev.exists && Array.isArray(prev.get('suggestions'))
+    ? prev.get('suggestions')
+    : [];
+  const merged = [];
+  const have = new Set();
+  for (const item of prior.concat(rows)) {
+    const key = `${songKey(item.title)}|${item.artist || ''}`;
+    if (!item || !item.title || !item.spotify_uri || have.has(key)) continue;
+    have.add(key);
+    merged.push(item);
+    if (merged.length >= 20) break;
+  }
+  await ref.set({
+    artist: clip(artist, 200),
+    title: clip(title, 200),
+    version: 'Original',
+    scope: settings.scope || 'similar',
+    familiarity: settings.familiarity || 'hits',
+    allowSameArtist: settings.allowSameArtist !== false,
+    created_at: admin.firestore.FieldValue.serverTimestamp(),
+    suggestions: merged,
+  }, { merge: true });
 }
 
 function songKey(title) {
-  return workTitle(title);
+  return workTitle(title) || scriptTitle(title);
 }
 
-function takeFreshTracks(rows, familiarity, blockedSongs, seedTitle, max) {
+/** Gleicher Song, auch wenn Spotify Titel und Interpret vertauscht hat. */
+function isSameRecording(seedTitle, seedArtist, title, artist) {
+  const straight = titlesClose(seedTitle, title) && artistsClose(seedArtist, artist);
+  const swapped = titlesClose(seedTitle, artist) && artistsClose(seedArtist, title);
+  return straight || swapped;
+}
+
+function takeFreshTracks(rows, familiarity, blockedSongs, seedTitle, max, seedArtist) {
   const usable = rows.filter((row) => {
     if (titlesClose(seedTitle, row.title)) return false;
+    if (seedArtist && isSameRecording(seedTitle, seedArtist, row.title, row.artist)) return false;
     const key = songKey(row.title);
     return key && !blockedSongs.has(key) && row.popularity >= 8;
   });
@@ -1815,6 +2163,7 @@ function takeFreshTracks(rows, familiarity, blockedSongs, seedTitle, max) {
 async function pullRealSlots({
   sceneInfo,
   seedTitle,
+  seedArtist,
   need,
   blocked,
   mode,
@@ -1834,7 +2183,7 @@ async function pullRealSlots({
     genreLine,
     avoid: [matched].concat(avoidNames || []),
     kind: mode === 'neighbor' ? 'neighbor' : 'core',
-    count: Math.min(16, need + 8),
+    count: Math.min(24, need + 12),
   });
   const seedTopsPromise = mode !== 'neighbor' && allowSameArtist && sceneInfo.artistId
     ? fetchArtistTopTracks(sceneInfo.artistId, token).catch(() => [])
@@ -1842,7 +2191,9 @@ async function pullRealSlots({
   const [names, seedTops] = await Promise.all([namesPromise, seedTopsPromise]);
 
   if (mode !== 'neighbor' && allowSameArtist) {
-    const seedHits = takeFreshTracks(seedTops, 'hits', blocked, seedTitle, Math.min(2, need));
+    const seedHits = takeFreshTracks(
+      seedTops, 'hits', blocked, seedTitle, Math.min(2, need), seedArtist,
+    );
     taken.push(...seedHits);
     if (taken.length) usedArtists.add(normName(matched));
   }
@@ -1869,7 +2220,7 @@ async function pullRealSlots({
   const batches = await mapPool(picks, 4, async (artist) => {
     try {
       const tops = await fetchArtistTopTracks(artist.id, token);
-      const rows = takeFreshTracks(tops, familiarity, blocked, seedTitle, 2);
+      const rows = takeFreshTracks(tops, familiarity, blocked, seedTitle, 2, seedArtist);
       for (const hit of rows) {
         console.log(
           'openaiMusicProxy: real',
@@ -1928,14 +2279,21 @@ async function collectFollowUps({
       sceneInfo = null;
     }
   }
-  const baseExclude = mapExclude(exclude, 20);
+  const baseExclude = mapExclude(exclude, 80);
+  const rejected = [];
   const out = [];
   const seenSongs = new Set([songKey(title)].filter(Boolean));
   const emit = (rows) => {
     for (const row of rows || []) {
       if (out.length >= ask) return;
+      if (isSameRecording(title, artist, row.title, row.artist)) continue;
       const key = songKey(row.title);
       if (!key || seenSongs.has(key)) continue;
+      const sameAsSeed = samePlayingArtist(artist, row.artist);
+      const fromThisArtist = out.filter((item) => samePlayingArtist(row.artist, item.artist)).length;
+      if (sameAsSeed && !settings.allowSameArtist) continue;
+      if (sameAsSeed && fromThisArtist >= 2) continue;
+      if (!sameAsSeed && fromThisArtist >= 2) continue;
       seenSongs.add(key);
       out.push(row);
       if (onTrack) onTrack(row);
@@ -1952,12 +2310,12 @@ async function collectFollowUps({
       const coreN = Math.ceil(ask / 2);
       const [corePool, neighborPool] = await Promise.all([
         pullRealSlots({
-          sceneInfo, seedTitle: title, need: ask, blocked: new Set(blocked),
+          sceneInfo, seedTitle: title, seedArtist: artist, need: ask, blocked: new Set(blocked),
           mode: 'core', allowSameArtist: settings.allowSameArtist,
           familiarity: settings.familiarity,
         }),
         pullRealSlots({
-          sceneInfo, seedTitle: title, need: ask - coreN, blocked: new Set(blocked),
+          sceneInfo, seedTitle: title, seedArtist: artist, need: ask - coreN, blocked: new Set(blocked),
           mode: 'neighbor', allowSameArtist: settings.allowSameArtist,
           familiarity: settings.familiarity,
         }),
@@ -1967,69 +2325,57 @@ async function collectFollowUps({
       if (out.length < ask) emit(corePool.slice(coreN));
     } else {
       const core = await pullRealSlots({
-        sceneInfo, seedTitle: title, need: ask, blocked,
+        sceneInfo, seedTitle: title, seedArtist: artist, need: ask, blocked,
         mode: 'core', allowSameArtist: settings.allowSameArtist,
         familiarity: settings.familiarity,
       });
       emit(core);
-      if (out.length < ask) {
-        const more = await pullRealSlots({
-          sceneInfo, seedTitle: title, need: ask - out.length, blocked,
-          mode: 'core', allowSameArtist: settings.allowSameArtist,
-          familiarity: settings.familiarity,
-          avoidNames: out.map((row) => row.artist),
-        });
-        emit(more);
-      }
     }
-    if (out.length > 0) return { tracks: out.slice(0, ask), sceneInfo };
+    if (out.length < ask) {
+      const gap = await pullVerified({
+        title,
+        artist,
+        settings,
+        sceneInfo,
+        mix,
+        need: ask - out.length,
+        exclude: baseExclude.concat(out, rejected),
+        rejected,
+        temperature: temp,
+      });
+      emit(gap);
+    }
+    await fillRemainder();
+    return { tracks: out.slice(0, ask), sceneInfo };
   }
   if (settings.scope === 'similar') {
-    const coreN = Math.ceil(ask / 2);
-    const coreSettings = { ...settings, scope: 'strict' };
     const core = await pullVerified({
-      title, artist, settings: coreSettings, sceneInfo, mix,
-      need: coreN, exclude: baseExclude, temperature: 0.15,
+      title, artist, settings, sceneInfo, mix,
+      need: ask, exclude: baseExclude, rejected, temperature: 0.35,
     });
     emit(core);
-    if (out.length < coreN) {
-      const moreCore = await pullVerified({
-        title, artist, settings: coreSettings, sceneInfo, mix,
-        need: coreN - out.length,
-        exclude: baseExclude.concat(out),
-        temperature: 0.15,
-      });
-      emit(moreCore);
-    }
-    const rest = ask - out.length;
-    if (rest > 0) {
-      const neighbors = await pullVerified({
-        title, artist,
-        settings: { ...settings, scope: 'similar', neighborFill: true },
-        sceneInfo, mix,
-        need: rest,
-        exclude: baseExclude.concat(out),
-        temperature: 0.35,
-      });
-      emit(neighbors);
-    }
   } else {
     const first = await pullVerified({
       title, artist, settings, sceneInfo, mix,
-      need: ask, exclude: baseExclude, temperature: temp,
+      need: ask, exclude: baseExclude, rejected, temperature: temp,
     });
     emit(first);
-    if (out.length < ask) {
-      const more = await pullVerified({
-        title, artist, settings, sceneInfo, mix,
-        need: ask - out.length,
-        exclude: baseExclude.concat(out),
-        temperature: temp,
-      });
-      emit(more);
-    }
   }
+  await fillRemainder();
   return { tracks: out.slice(0, ask), sceneInfo };
+
+  async function fillRemainder() {
+    if (out.length >= ask) return;
+    if (out.length === 0 && settings.allowSameArtist) {
+      try {
+        emit(await confirmedArtistTracks(title, artist, baseExclude.concat(out), Math.min(2, ask)));
+      } catch (_e) { /* Danach andere Interpreten. */ }
+    }
+    if (out.length >= ask) return;
+    try {
+      emit(await relatedArtistTracks(title, artist, baseExclude.concat(out), ask - out.length));
+    } catch (_e) { /* Die KI füllt den Rest. */ }
+  }
 }
 
 async function openaiMusicRecommendStreamHandler(req, res) {
@@ -2080,7 +2426,7 @@ async function openaiMusicRecommendStreamHandler(req, res) {
   };
   const forKey = `${title}|${artist}`;
   const emitted = new Set([trackKey(title, artist)]);
-  for (const entry of mapExclude(data.exclude, 20)) {
+  for (const entry of mapExclude(data.exclude, 80)) {
     const key = trackKey(entry.title, entry.artist);
     if (key) emitted.add(key);
   }
@@ -2114,12 +2460,17 @@ async function openaiMusicRecommendStreamHandler(req, res) {
       familiarity: settings.familiarity,
       allowSameArtist: settings.allowSameArtist,
       count: ask,
-      exclude: mapExclude(data.exclude, 20),
+      exclude: mapExclude(data.exclude, 80),
       bpm: mix.bpm,
       camelot: mix.camelot,
       onTrack: publish,
     });
     await writeChain;
+    try {
+      await rememberSharedSuggestions(title, artist, settings, published);
+    } catch (_e) {
+      // Die Antwort ist schon raus. Der nächste DJ liest nur, was wirklich liegt.
+    }
   } catch (_e) { /* Suche bricht sichtbar ab */ }
   res.write(`${JSON.stringify({ done: true })}\n`);
   res.end();

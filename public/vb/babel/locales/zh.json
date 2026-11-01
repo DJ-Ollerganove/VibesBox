@@ -187,7 +187,7 @@
   "main_contact_title": "联系我们",
   "main_feature_auto_body": "",
   "main_feature_auto_title": "",
-  "main_feature_dj_body": "通过应用专业管理所有点歌。全面掌控派对节奏，即时响应舞池。",
+  "main_feature_dj_body": "通过应用专业管理所有点歌，适用于 iOS 和 Android。扩展模块 VibesBox Sync 适用于 Mac 或 Windows。全面掌控派对节奏，即时响应舞池。",
   "main_feature_dj_title": "面向 DJ",
   "main_feature_guest_body": "通过二维码在浏览器中快速访问。无需安装应用。轻松无障碍地发送点歌。",
   "main_feature_guest_title": "面向嘉宾",
@@ -462,5 +462,12 @@
   "song_blacklist_mode_block_hint": "客人会看到礼貌提示。不会保存点歌。",
   "song_blacklist_guest_blocked_title": "无法点歌",
   "song_blacklist_live_hint": "{song} 已自动移至已拒绝。",
-  "select_language": "选择语言"
+  "select_language": "选择语言",
+  "sync_page_title": "VibesBox Sync",
+  "sync_page_meta_description": "下载适用于 Windows 和 Mac 的 VibesBox Sync。",
+  "sync_page_heading": "在此下载 VibesBox Sync",
+  "sync_page_windows": "适用于 Windows：",
+  "sync_page_mac": "适用于 macOS：",
+  "sync_page_download": "下载",
+  "sync_page_version": "版本 {version}"
 }

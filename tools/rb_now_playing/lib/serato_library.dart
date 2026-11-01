@@ -8,6 +8,7 @@ import 'dj_library_source.dart';
 import 'library_match.dart';
 import 'tool_i18n.dart';
 import 'rekordbox_history.dart';
+import 'virtualdj_library.dart';
 
 class SeratoLibrarySource implements DjLibrarySource {
   SeratoLibrarySource(this.overridePath);
@@ -130,6 +131,7 @@ WHERE IFNULL(name, '') != ''
 SELECT
   he.name AS title,
   he.artist AS artist,
+  he.file_name AS fileName,
   he.bpm AS bpm,
   he."key" AS musicalKey,
   he.length_sec AS lengthSec,
@@ -152,14 +154,23 @@ LIMIT 50
     for (final row in rows) {
       historyName ??= textOrNull(row['historyName']);
       final title = textOrNull(row['title']) ?? toolI18n.text('unknownTitle');
+      var artist = textOrNull(row['artist']) ?? '';
+      if (artist.isEmpty) {
+        final fromFile = virtualDjResolveTitleArtist(
+          taggedTitle: null,
+          taggedArtist: null,
+          path: textOrNull(row['fileName']) ?? '',
+        );
+        if (fromFile.artist.isNotEmpty) artist = fromFile.artist;
+      }
       tracks.add(
         HistoryTrack(
           trackNo: n,
           title: title,
-          artist: textOrNull(row['artist']) ?? '',
+          artist: artist,
           playedAt: _unix(intOrNull(row['startTime'])),
           historyName: historyName ?? '',
-          bpm: doubleOrNull(row['bpm']),
+          bpm: _analyzedBpm(row['bpm']),
           musicalKey: textOrNull(row['musicalKey']),
           length: _length(intOrNull(row['lengthSec'])),
         ),
@@ -198,7 +209,7 @@ WHERE IFNULL(name, '') != ''
           id: textOrNull(row['id']) ?? title,
           title: title,
           artist: textOrNull(row['artist']) ?? '',
-          bpm: doubleOrNull(row['bpm']),
+          bpm: _analyzedBpm(row['bpm']),
           musicalKey: textOrNull(row['musicalKey']),
           lengthSec: intOrNull(row['lengthSec']),
           playCount: intOrNull(row['playCount']) ?? 0,
@@ -342,6 +353,12 @@ String _copyForRead(String path) {
   return copy.path;
 }
 
+double? _analyzedBpm(Object? value) {
+  final bpm = doubleOrNull(value);
+  if (bpm == null || bpm <= 0) return null;
+  return bpm;
+}
+
 String? seratoPortableToPath(String? raw) {
   if (raw == null || raw.isEmpty) return null;
   final dragged = toDragLocation(raw);
@@ -367,7 +384,7 @@ List<LibraryTrack> parseSeratoDatabaseV2(Uint8List bytes) {
         id: location ?? title,
         title: title,
         artist: _tlvText(fields['tart']) ?? '',
-        bpm: doubleOrNull(_tlvText(fields['tbpm'])),
+        bpm: _analyzedBpm(_tlvText(fields['tbpm'])),
         musicalKey: _tlvText(fields['tkey']),
         lengthSec: parseSeratoLength(_tlvText(fields['tlen'])),
         playCount: _tlvUint(fields['utpc']) ?? 0,

@@ -34,7 +34,7 @@
   }
 
   function loadLangScript(langCode, onDone, jsPath) {
-    var bust = window.IS_DEBUG ? ('?v=' + Date.now()) : ('?v=' + (window.PWA_LANG_ASSET_V || window.VB_LANG_ASSET_V || '20260909l10n'));
+    var bust = window.IS_DEBUG ? ('?v=' + Date.now()) : ('?v=' + (window.PWA_LANG_ASSET_V || window.VB_LANG_ASSET_V || '20261007srhr'));
     var scriptUrl = (jsPath && (jsPath.indexOf('/') !== -1 || jsPath.indexOf('.js') !== -1))
       ? (jsPath.indexOf('?') !== -1 ? jsPath : jsPath + bust)
       : '/vb/lang/' + langCode + '.js' + bust;
@@ -72,7 +72,7 @@
     return list.length ? list.map(function (e) { return e.code; })
       : ((window.DEFAULT_PWA_LANGUAGES && window.DEFAULT_PWA_LANGUAGES.length)
         ? window.DEFAULT_PWA_LANGUAGES.map(function (e) { return e.code; })
-        : ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi']);
+        : ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'it', 'uk', 'hi', 'sq', 'vi', 'ro', 'sr', 'bg', 'hr', 'hu']);
   }
 
   function syncDeleteAccountDom(lang) {

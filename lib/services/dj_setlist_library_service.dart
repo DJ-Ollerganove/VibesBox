@@ -77,6 +77,7 @@ class DjSetlistLibraryService {
     List<String>? partyIds,
     Map<String, String>? partyNames,
     String? existingId,
+    String? occasionId,
   }) async {
     final col = _col();
     if (col == null) throw StateError('Nicht angemeldet');
@@ -117,6 +118,22 @@ class DjSetlistLibraryService {
       'targetCount': tracks.length,
       'updatedAt': FieldValue.serverTimestamp(),
     };
+    var occasion = SecurityHelper.sanitize(occasionId ?? '', maxLength: 40);
+    List<EventSetlistTrack>? previous;
+    if (existingId != null && existingId.isNotEmpty) {
+      final snap = await col.doc(id).get();
+      final data = snap.data();
+      if (data != null) {
+        previous = EventSetlistTrack.listFrom(data['tracks']);
+        if (occasion.isEmpty) {
+          occasion = SecurityHelper.sanitize(
+            (data['occasionId'] as String?) ?? '',
+            maxLength: 40,
+          );
+        }
+      }
+    }
+    if (occasion.isNotEmpty) payload['occasionId'] = occasion;
     if (existingId == null || existingId.isEmpty) {
       payload['createdAt'] = FieldValue.serverTimestamp();
     }
@@ -137,6 +154,8 @@ class DjSetlistLibraryService {
     MusicCatalogService.instance.syncSetlistTracks(
       tracks,
       countAsSuggested: existingId == null || existingId.isEmpty,
+      occasionId: occasion,
+      previous: previous,
     );
     return id;
   }
@@ -179,10 +198,20 @@ class DjSetlistLibraryService {
       },
       SetOptions(merge: true),
     );
+    final occasion =
+        SecurityHelper.sanitize((data['occasionId'] as String?) ?? '', maxLength: 40);
     MusicCatalogService.instance.syncSetlistTracks(
       tracks,
       countAsSuggested: false,
+      occasionId: occasion,
+      previous: item.tracks,
     );
+    if (occasion.isNotEmpty) {
+      await FirebaseFirestore.instance.collection('dj_setlists').doc(pid).set(
+        <String, dynamic>{'occasionId': occasion},
+        SetOptions(merge: true),
+      );
+    }
   }
 
   Future<void> replaceTracks({
@@ -192,7 +221,15 @@ class DjSetlistLibraryService {
     final col = _col();
     if (col == null || id.isEmpty || id.startsWith('party_')) return;
     try {
-      await col.doc(id).update({
+      final ref = col.doc(id);
+      final snap = await ref.get();
+      final data = snap.data() ?? <String, dynamic>{};
+      final occasion = SecurityHelper.sanitize(
+        (data['occasionId'] as String?) ?? '',
+        maxLength: 40,
+      );
+      final previous = EventSetlistTrack.listFrom(data['tracks']);
+      await ref.update({
         'tracks': tracks.map((e) => e.toJson()).toList(),
         'targetCount': tracks.length,
         'updatedAt': FieldValue.serverTimestamp(),
@@ -200,6 +237,8 @@ class DjSetlistLibraryService {
       MusicCatalogService.instance.syncSetlistTracks(
         tracks,
         countAsSuggested: false,
+        occasionId: occasion,
+        previous: previous,
       );
     } catch (e) {
       debugLog('DjSetlistLibraryService.replaceTracks: $e');

@@ -8,7 +8,9 @@
   window.DEFAULT_PWA_LANGUAGES = [
     { code: "sq", name: "Albanian", icon: "sq", js_path: "/vb/lang/sq.js" },
     { code: "ar", name: "Arabic", icon: "ar", js_path: "/vb/lang/ar.js" },
+    { code: "bg", name: "Bulgarian", icon: "bg", js_path: "/vb/lang/bg.js" },
     { code: "zh", name: "Chinese", icon: "zh", js_path: "/vb/lang/zh.js" },
+    { code: "hr", name: "Croatian", icon: "hr", js_path: "/vb/lang/hr.js" },
     { code: "cs", name: "Czech", icon: "cs", js_path: "/vb/lang/cs.js" },
     { code: "nl", name: "Dutch", icon: "nl", js_path: "/vb/lang/nl.js" },
     { code: "en", name: "English", icon: "en", js_path: "/vb/lang/en.js" },
@@ -16,11 +18,14 @@
     { code: "de", name: "German", icon: "de", js_path: "/vb/lang/de.js" },
     { code: "el", name: "Greek", icon: "el", js_path: "/vb/lang/el.js" },
     { code: "hi", name: "Hindi", icon: "hi", js_path: "/vb/lang/hi.js" },
+    { code: "hu", name: "Hungarian", icon: "hu", js_path: "/vb/lang/hu.js" },
     { code: "it", name: "Italian", icon: "it", js_path: "/vb/lang/it.js" },
     { code: "ja", name: "Japanese", icon: "ja", js_path: "/vb/lang/ja.js" },
     { code: "pl", name: "Polish", icon: "pl", js_path: "/vb/lang/pl.js" },
     { code: "pt", name: "Portuguese", icon: "pt", js_path: "/vb/lang/pt.js" },
+    { code: "ro", name: "Romanian", icon: "ro", js_path: "/vb/lang/ro.js" },
     { code: "ru", name: "Russian", icon: "ru", js_path: "/vb/lang/ru.js" },
+    { code: "sr", name: "Serbian", icon: "sr", js_path: "/vb/lang/sr.js" },
     { code: "es", name: "Spanish", icon: "es", js_path: "/vb/lang/es.js" },
     { code: "th", name: "Thai", icon: "th", js_path: "/vb/lang/th.js" },
     { code: "tr", name: "Turkish", icon: "tr", js_path: "/vb/lang/tr.js" },
@@ -51,6 +56,11 @@
       "pl": "lang_polish",
       "cs": "lang_czech",
       "th": "lang_thai",
-      "ar": "lang_arabic"
+      "ar": "lang_arabic",
+      "ro": "lang_romanian",
+      "sr": "lang_serbian",
+      "bg": "lang_bulgarian",
+      "hr": "lang_croatian",
+      "hu": "lang_hungarian"
   };
 })();

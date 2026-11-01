@@ -21,6 +21,7 @@ class SetlistExportMenu {
     bool showSaveToLibrary = true,
     /// Wenn gesetzt: Party-Zuordnung aktualisiert diese Library-Liste (1→viele Partys).
     String? libraryListId,
+    String? occasionId,
   }) async {
     if (tracks.isEmpty || !context.mounted) return libraryListId;
     final l = AppLocalizations.of(context)!;
@@ -73,6 +74,7 @@ class SetlistExportMenu {
                         tracks,
                         resolvedTitle,
                         libraryListId: activeLibId.isEmpty ? null : activeLibId,
+                        occasionId: occasionId,
                       );
                       if (id != null && id.isNotEmpty) activeLibId = id;
                     },
@@ -89,6 +91,7 @@ class SetlistExportMenu {
                           tracks,
                           resolvedTitle,
                           existingId: activeLibId.isEmpty ? null : activeLibId,
+                          occasionId: occasionId,
                         );
                         if (id != null && id.isNotEmpty) activeLibId = id;
                       },
@@ -223,6 +226,7 @@ class SetlistExportMenu {
     List<EventSetlistTrack> tracks,
     String listTitle, {
     String? existingId,
+    String? occasionId,
   }) async {
     Navigator.pop(sheetContext);
     try {
@@ -230,6 +234,7 @@ class SetlistExportMenu {
         title: listTitle,
         tracks: tracks,
         existingId: existingId,
+        occasionId: occasionId,
       );
       if (!pageContext.mounted) return id;
       showVibesSnackBar(
@@ -269,6 +274,7 @@ class SetlistExportMenu {
     List<EventSetlistTrack> tracks,
     String listTitle, {
     String? libraryListId,
+    String? occasionId,
   }) async {
     Navigator.pop(sheetContext);
     await Future<void>.delayed(const Duration(milliseconds: 280));
@@ -294,6 +300,7 @@ class SetlistExportMenu {
         partyId: choice.partyId,
         tracks: tracks,
         partyName: choice.partyName,
+        occasionId: occasionId,
       );
       final libId = libraryListId?.trim() ?? '';
       String resolvedId;
@@ -313,6 +320,7 @@ class SetlistExportMenu {
           partyName: choice.partyName,
           partyIds: <String>[choice.partyId],
           partyNames: <String, String>{choice.partyId: choice.partyName},
+          occasionId: occasionId,
         );
       }
       if (!pageContext.mounted) return resolvedId;

@@ -15,8 +15,8 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <!-- reCAPTCHA Enterprise: defer verhindert Render-Blockierung des Hauptdokuments -->
   <script defer src="https://www.google.com/recaptcha/enterprise.js?render=6LdoeDcsAAAAAIORb90GjRovm2tW5qE4v9q5J-u5"></script>
-  <script src="/vb/scripts/default-pwa-languages.js"></script>
-  <script src="/vb/scripts/generated/party-locale-opts.js"></script>
+  <script src="/vb/scripts/default-pwa-languages.js?v=8"></script>
+  <script src="/vb/scripts/generated/party-locale-opts.js?v=4"></script>
   <script src="/pwa-text-direction.js?v=2"></script>
   <script>
     (function () {
@@ -33,7 +33,7 @@
     })();
   </script>
   <script src="/lang-menu-columns.js"></script>
-  <script src="/lang_menu_shared.js?v=9"></script>
+  <script src="/lang_menu_shared.js?v=10"></script>
   <link rel="stylesheet" href="/pwa-rtl.css?v=2">
   <script src="/legal-modal-shared.js?v=2"></script>
   <!-- Party-Code-Prüfung nur noch in /vb/ (party_shared.js dort) -->
@@ -151,7 +151,7 @@
           var codes = list.length ? list.map(function (e) { return e.code; })
             : ((window.DEFAULT_PWA_LANGUAGES && window.DEFAULT_PWA_LANGUAGES.length)
               ? window.DEFAULT_PWA_LANGUAGES.map(function (e) { return e.code; })
-              : ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt']);
+              : ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'ro', 'sr', 'bg', 'hr', 'hu']);
           if (typeof window.resolvePwaLanguage === 'function') return window.resolvePwaLanguage(codes);
           return (navigator.language && navigator.language.split('-')[0]) || 'en';
         } catch (e) {
@@ -225,7 +225,7 @@
             var codes = list.length ? list.map(function (e) { return e.code; })
               : ((window.DEFAULT_PWA_LANGUAGES && window.DEFAULT_PWA_LANGUAGES.length)
                 ? window.DEFAULT_PWA_LANGUAGES.map(function (e) { return e.code; })
-                : ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt']);
+                : ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'ro', 'sr', 'bg', 'hr', 'hu']);
             var lang = (typeof window.getEffectiveLangForMenu === 'function')
               ? window.getEffectiveLangForMenu()
               : ((typeof window.resolvePwaLanguage === 'function')
@@ -268,7 +268,7 @@
       }
       /** Lädt Sprachdatei. jsPath optional (z. B. "/vb/lang/de.js"), sonst /vb/lang/<langCode>.js */
       function loadLangScript(langCode, onDone, jsPath) {
-      var bust = window.IS_DEBUG ? ('?v=' + Date.now()) : ('?v=' + (window.PWA_LANG_ASSET_V || window.VB_LANG_ASSET_V || '20260909l10n'));
+      var bust = window.IS_DEBUG ? ('?v=' + Date.now()) : ('?v=' + (window.PWA_LANG_ASSET_V || window.VB_LANG_ASSET_V || '20261007srhr'));
         var scriptUrl = (jsPath && (jsPath.indexOf('/') !== -1 || jsPath.indexOf('.js') !== -1))
           ? (jsPath.indexOf('?') !== -1 ? jsPath : jsPath + bust)
           : '/vb/lang/' + langCode + '.js' + bust;
@@ -324,7 +324,7 @@
         var codes = list.length ? list.map(function(e) { return e.code; })
           : ((window.DEFAULT_PWA_LANGUAGES && window.DEFAULT_PWA_LANGUAGES.length)
             ? window.DEFAULT_PWA_LANGUAGES.map(function(e) { return e.code; })
-            : ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt']);
+            : ['en', 'de', 'fr', 'ru', 'zh', 'es', 'tr', 'pt', 'ro', 'sr', 'bg', 'hr', 'hu']);
         var urlParams = new URLSearchParams(window.location.search);
         var rawLangParam = (urlParams.get('lang') || '').trim();
         var hadUrlLang = !!rawLangParam;
@@ -1577,7 +1577,7 @@
         </div>
         <div class="feature-card">
           <h3 data-i18n="main_feature_dj_title">Für DJs</h3>
-          <p data-i18n="main_feature_dj_body">Professionelles Management aller Musikwünsche per App. Behalte die volle Kontrolle über den Flow der Party und reagiere sofort auf die Tanzfläche.</p>
+          <p data-i18n="main_feature_dj_body">Professionelles Management aller Musikwünsche per App für iOS und Android. Als Erweiterungsmodul gibt es VibesBox Sync für Mac oder Windows. Behalte die volle Kontrolle über den Flow der Party und reagiere sofort auf die Tanzfläche.</p>
         </div>
       </div>
     </section>

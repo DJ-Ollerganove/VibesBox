@@ -185,7 +185,12 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
     final when = seen is Timestamp
         ? _formatDateTimeShort(seen.toDate())
         : '–';
-    return 'VibesBox Sync · ${os.isEmpty ? '–' : os} · $version · zuletzt $when';
+    final l = AppLocalizations.of(context)!;
+    return l.vibesbox_sync_install_line(
+      os: os.isEmpty ? '–' : os,
+      version: version,
+      when: when,
+    );
   }
 
   // Lade alle Rollen-Namen in einen Cache
@@ -1005,14 +1010,15 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
                 _detailRow(l.profile_birthday, birthdayStr),
               ],
               const SizedBox(height: 16),
-              _sectionTitle('VibesBox Sync'),
+              _sectionTitle(l.vibesbox_sync_title),
+              _SyncAccessSwitch(userId: userId, initiallyOn: data['vibesbox_sync_access'] == true),
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: _syncInstallsByUser[userId] == null ||
                         _syncInstallsByUser[userId]!.isEmpty
-                    ? const Text(
-                        'Kein Sync-Tool',
-                        style: TextStyle(color: Colors.white54, fontSize: 14),
+                    ? Text(
+                        l.vibesbox_sync_no_tool,
+                        style: const TextStyle(color: Colors.white54, fontSize: 14),
                       )
                     : _syncInstallLines(userId, onDark: true),
               ),
@@ -1929,6 +1935,19 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
                                   style: Theme.of(context).textTheme.bodySmall
                                       ?.copyWith(color: Colors.grey[500]),
                                 ),
+                                if (data['vibesbox_sync_access'] == true) ...[
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    l.vibesbox_sync_unlocked,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(
+                                          color: Colors.orange,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                  ),
+                                ],
                                 const SizedBox(height: 6),
                                 // Alle Geräte dieses DJs (je Gerät ein Eintrag in users.devices)
                                 Builder(
@@ -2123,6 +2142,77 @@ class _BenutzerVerwaltungPageState extends State<BenutzerVerwaltungPage> {
                 },
               ),
             ),
+    );
+  }
+}
+
+/// Admin setzt `users/{uid}.vibesbox_sync_access`. Der Nutzer kann das Feld nicht selbst schreiben.
+class _SyncAccessSwitch extends StatefulWidget {
+  const _SyncAccessSwitch({required this.userId, required this.initiallyOn});
+
+  final String userId;
+  final bool initiallyOn;
+
+  @override
+  State<_SyncAccessSwitch> createState() => _SyncAccessSwitchState();
+}
+
+class _SyncAccessSwitchState extends State<_SyncAccessSwitch> {
+  late bool _on;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _on = widget.initiallyOn;
+  }
+
+  Future<void> _set(bool value) async {
+    if (_busy) return;
+    setState(() {
+      _on = value;
+      _busy = true;
+    });
+    try {
+      await FirebaseFirestore.instance.collection('users').doc(widget.userId).set(
+        SecurityHelper.sanitizeMap({'vibesbox_sync_access': value}),
+        SetOptions(merge: true),
+      );
+    } catch (e) {
+      debugLog('VibesBox-Sync-Freigabe: $e');
+      if (mounted) {
+        setState(() => _on = !value);
+        final l = AppLocalizations.of(context)!;
+        showVibesSnackBar(
+          context,
+          SnackBar(
+            content: Text(l.vibesbox_sync_grant_failed('$e')),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
+    return SwitchListTile(
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      activeThumbColor: Colors.orange,
+      title: Text(
+        l.vibesbox_sync_show_in_settings,
+        style: const TextStyle(color: Colors.white, fontSize: 14),
+      ),
+      subtitle: Text(
+        _on ? l.vibesbox_sync_access_on : l.vibesbox_sync_access_off,
+        style: const TextStyle(color: Colors.white54, fontSize: 12),
+      ),
+      value: _on,
+      onChanged: _busy ? null : _set,
     );
   }
 }

@@ -133,6 +133,37 @@
       <path fill="#fff" d="M300 280h40v90h-40z"/>
       <path fill="none" stroke="#fff" stroke-width="10" d="M250 370c40 35 100 35 140 0"/>
     </symbol>
+    <!-- flag-ro (Romania) -->
+    <symbol id="flag-ro" viewBox="0 0 640 480">
+      <path fill="#002b7f" d="M0 0h213.4v480H0z"/>
+      <path fill="#fcd116" d="M213.4 0h213.3v480H213.4z"/>
+      <path fill="#ce1126" d="M426.7 0H640v480H426.7z"/>
+    </symbol>
+    <!-- flag-sr (Serbia) -->
+    <symbol id="flag-sr" viewBox="0 0 640 480">
+      <path fill="#c6363c" d="M0 0h640v160H0z"/>
+      <path fill="#0c4076" d="M0 160h640v160H0z"/>
+      <path fill="#fff" d="M0 320h640v160H0z"/>
+    </symbol>
+    <!-- flag-bg (Bulgaria) -->
+    <symbol id="flag-bg" viewBox="0 0 640 480">
+      <path fill="#fff" d="M0 0h640v160H0z"/>
+      <path fill="#00966e" d="M0 160h640v160H0z"/>
+      <path fill="#d62612" d="M0 320h640v160H0z"/>
+    </symbol>
+    <!-- flag-hr (Croatia) -->
+    <symbol id="flag-hr" viewBox="0 0 640 480">
+      <path fill="#ff0000" d="M0 0h640v160H0z"/>
+      <path fill="#fff" d="M0 160h640v160H0z"/>
+      <path fill="#171796" d="M0 320h640v160H0z"/>
+      <path fill="#ff0000" d="M292 188h14v14h-14zm28 0h14v14h-14zm28 0h14v14h-14zM306 202h14v14h-14zm28 0h14v14h-14zM292 216h14v14h-14zm28 0h14v14h-14zm28 0h14v14h-14zM306 230h14v14h-14zm28 0h14v14h-14zM292 244h14v14h-14zm28 0h14v14h-14zm28 0h14v14h-14z"/>
+    </symbol>
+    <!-- flag-hu (Hungary) -->
+    <symbol id="flag-hu" viewBox="0 0 640 480">
+      <path fill="#ce2939" d="M0 0h640v160H0z"/>
+      <path fill="#fff" d="M0 160h640v160H0z"/>
+      <path fill="#477050" d="M0 320h640v160H0z"/>
+    </symbol>
     <!-- Fallback: Weltkugel (Standard-Icon bei fehlendem/neuem Icon) -->
     <symbol id="flag-globe" viewBox="0 0 24 24">
       <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.5"/>

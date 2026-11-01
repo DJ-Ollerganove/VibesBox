@@ -187,7 +187,7 @@
   "main_contact_title": "Контакт",
   "main_feature_auto_body": "",
   "main_feature_auto_title": "",
-  "main_feature_dj_body": "Професійне керування всіма запитами пісень через додаток. Тримайте повний контроль над потоком вечірки та миттєво реагуйте на танцпол.",
+  "main_feature_dj_body": "Професійне керування всіма запитами пісень через додаток для iOS та Android. Як модуль розширення є VibesBox Sync для Mac або Windows. Тримайте повний контроль над потоком вечірки та миттєво реагуйте на танцпол.",
   "main_feature_dj_title": "Для діджеїв",
   "main_feature_guest_body": "Швидкий доступ через QR-код прямо в браузері. Встановлення програми не потрібно. Надсилайте музичні запити легко та без перешкод.",
   "main_feature_guest_title": "Для гостей",
@@ -462,5 +462,12 @@
   "song_blacklist_mode_block_hint": "Гість бачить ввічливе повідомлення. Бажання не зберігається.",
   "song_blacklist_guest_blocked_title": "Бажання неможливе",
   "song_blacklist_live_hint": "{song} автоматично у Відхилені.",
-  "select_language": "Виберіть мову"
+  "select_language": "Виберіть мову",
+  "sync_page_title": "VibesBox Sync",
+  "sync_page_meta_description": "Завантажте VibesBox Sync для Windows і Mac.",
+  "sync_page_heading": "Тут можна завантажити VibesBox Sync",
+  "sync_page_windows": "Для Windows:",
+  "sync_page_mac": "Для macOS:",
+  "sync_page_download": "Завантажити",
+  "sync_page_version": "Версія {version}"
 }

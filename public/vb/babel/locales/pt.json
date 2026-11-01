@@ -187,7 +187,7 @@
   "main_contact_title": "Contacto",
   "main_feature_auto_body": "",
   "main_feature_auto_title": "",
-  "main_feature_dj_body": "Gestão profissional de todos os pedidos via app. Controlo total do decorrer da festa e reação imediata à pista.",
+  "main_feature_dj_body": "Gestão profissional de todos os pedidos via app para iOS e Android. Como módulo de extensão há o VibesBox Sync para Mac ou Windows. Controlo total do decorrer da festa e reação imediata à pista.",
   "main_feature_dj_title": "Para DJs",
   "main_feature_guest_body": "Acesso rápido via código QR no browser. Sem instalar app. Envia pedidos de músicas de forma simples e sem obstáculos.",
   "main_feature_guest_title": "Para convidados",
@@ -462,5 +462,12 @@
   "song_blacklist_mode_block_hint": "O convidado vê uma mensagem educada. Nenhum pedido é guardado.",
   "song_blacklist_guest_blocked_title": "Pedido não possível",
   "song_blacklist_live_hint": "{song} enviado automaticamente para Recusados.",
-  "select_language": "Selecionar idioma"
+  "select_language": "Selecionar idioma",
+  "sync_page_title": "VibesBox Sync",
+  "sync_page_meta_description": "Transfere o VibesBox Sync para Windows e Mac.",
+  "sync_page_heading": "Aqui podes transferir o VibesBox Sync",
+  "sync_page_windows": "Para Windows:",
+  "sync_page_mac": "Para macOS:",
+  "sync_page_download": "Transferir",
+  "sync_page_version": "Versão {version}"
 }

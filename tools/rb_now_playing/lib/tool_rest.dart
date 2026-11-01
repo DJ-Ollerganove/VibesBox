@@ -12,6 +12,32 @@ class ToolRestClient {
 
   final String _apiKey = DefaultFirebaseOptions.windows.apiKey;
 
+  /// Callable ohne Auth — Cloud Functions Flutter-Plugin fehlt unter Windows.
+  Future<Map<String, dynamic>> redeemRbToolCode(String code) async {
+    final uri = Uri.parse(
+      'https://$_region-$_projectId.cloudfunctions.net/redeemRbToolCode',
+    );
+    final decoded = await _postJson(uri, {
+      'data': {'code': code},
+    });
+    final data = decoded['result'] is Map
+        ? Map<String, dynamic>.from(decoded['result'] as Map)
+        : decoded['data'] is Map
+            ? Map<String, dynamic>.from(decoded['data'] as Map)
+            : decoded;
+    final customToken = (data['customToken'] ?? '').toString();
+    final sessionId = (data['sessionId'] ?? '').toString();
+    final ownerUid = (data['ownerUid'] ?? '').toString();
+    if (customToken.isEmpty || sessionId.isEmpty || ownerUid.isEmpty) {
+      throw StateError('Server-Antwort unvollständig.');
+    }
+    return {
+      'customToken': customToken,
+      'sessionId': sessionId,
+      'ownerUid': ownerUid,
+    };
+  }
+
   Future<Map<String, dynamic>> signInWithCustomToken(String customToken) async {
     final uri = Uri.parse(
       'https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=$_apiKey',
@@ -286,9 +312,9 @@ class ToolRestClient {
     try {
       final req = await client.postUrl(uri);
       req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $idToken');
-      req.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
+      req.headers.contentType = ContentType.json;
       req.headers.set(HttpHeaders.acceptHeader, 'application/x-ndjson');
-      req.write(jsonEncode({
+      req.add(utf8.encode(jsonEncode({
         'title': title,
         'artist': artist,
         'scope': scope,
@@ -298,8 +324,8 @@ class ToolRestClient {
         if (bpm != null) 'bpm': bpm,
         if (camelot != null && camelot.isNotEmpty) 'camelot': camelot,
         'exclude': exclude,
-      }));
-      final res = await req.close().timeout(const Duration(seconds: 12));
+      })));
+      final res = await req.close().timeout(const Duration(seconds: 45));
       if (res.statusCode < 200 || res.statusCode >= 300) {
         await res.drain<void>();
         return;
@@ -307,7 +333,7 @@ class ToolRestClient {
       var pending = '';
       await for (final chunk in res
           .transform(utf8.decoder)
-          .timeout(const Duration(seconds: 28))) {
+          .timeout(const Duration(seconds: 55))) {
         pending += chunk;
         final lines = pending.split('\n');
         pending = lines.removeLast();

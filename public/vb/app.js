@@ -6269,6 +6269,11 @@
           sq: 'lang_albanian',
           vi: 'lang_vietnamese',
           ar: 'lang_arabic',
+          ro: 'lang_romanian',
+          sr: 'lang_serbian',
+          bg: 'lang_bulgarian',
+          hr: 'lang_croatian',
+          hu: 'lang_hungarian',
         };
       
       // Aktuelle Sprache bestimmen

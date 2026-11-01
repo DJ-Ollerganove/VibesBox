@@ -104,6 +104,31 @@
     "time_style": "intl_12",
     "time_suffix": "",
     "text_direction": "rtl"
+  },
+  "ro": {
+    "time_style": "colon_suffix",
+    "time_suffix": "",
+    "text_direction": "ltr"
+  },
+  "sr": {
+    "time_style": "colon_suffix",
+    "time_suffix": " ч",
+    "text_direction": "ltr"
+  },
+  "bg": {
+    "time_style": "colon_suffix",
+    "time_suffix": "",
+    "text_direction": "ltr"
+  },
+  "hr": {
+    "time_style": "colon_suffix",
+    "time_suffix": " h",
+    "text_direction": "ltr"
+  },
+  "hu": {
+    "time_style": "colon_suffix",
+    "time_suffix": "",
+    "text_direction": "ltr"
   }
 };
 })();

@@ -74,6 +74,8 @@ class _VibesBoxSyncSettingsSectionState
     try {
       final result = await RbToolService.instance.createCode();
       if (!mounted) return;
+      await VibesBoxSyncService.instance.attachAfterPairingCode();
+      if (!mounted) return;
       setState(() => _creating = false);
       await showDialog<void>(
         context: context,
@@ -93,9 +95,7 @@ class _VibesBoxSyncSettingsSectionState
   @override
   Widget build(BuildContext context) {
     final sync = VibesBoxSyncService.instance;
-    if (!sync.isVisibleForCurrentUser) {
-      return const SizedBox.shrink();
-    }
+    final allowed = sync.isVisibleForCurrentUser;
     final l = AppLocalizations.of(context)!;
     final enabled = sync.enabled;
     final connected = sync.connected;
@@ -106,7 +106,7 @@ class _VibesBoxSyncSettingsSectionState
       height: 1.35,
     );
 
-    return Column(
+    final column = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
@@ -121,7 +121,7 @@ class _VibesBoxSyncSettingsSectionState
             Text(
               connected
                   ? l.vibesbox_sync_connected
-                  : l.translate('vibesbox_sync_not_connected'),
+                  : l.vibesbox_sync_not_connected,
               style: TextStyle(
                 color: connected ? Colors.greenAccent : Colors.white54,
                 fontSize: 13,
@@ -139,7 +139,7 @@ class _VibesBoxSyncSettingsSectionState
                     child: Text(
                       _disconnecting
                           ? '…'
-                          : l.translate('vibesbox_sync_disconnect'),
+                          : l.vibesbox_sync_disconnect,
                     ),
                   )
                 : TextButton(
@@ -153,30 +153,30 @@ class _VibesBoxSyncSettingsSectionState
                     child: Text(
                       _creating
                           ? l.admin_tool_creating_code
-                          : l.translate('vibesbox_sync_connect'),
+                          : l.vibesbox_sync_connect,
                     ),
                   ),
             if (connected && device.isNotEmpty)
               Text(
-                l.tp('vibesbox_sync_with_device', {'device': device}),
+                l.vibesbox_sync_with_device(device),
                 style: const TextStyle(color: Colors.white70, fontSize: 12),
               ),
           ],
         ),
         const SizedBox(height: 8),
-        Text(l.translate('vibesbox_sync_about'), style: muted),
+        Text(l.vibesbox_sync_about, style: muted),
         Wrap(
           spacing: 12,
           children: [
             TextButton(
               onPressed: () => _openDownload(VibesBoxSyncSettingsSection.macDownloadUrl),
-              child: Text(l.translate('vibesbox_sync_mac')),
+              child: Text(l.vibesbox_sync_mac),
             ),
             TextButton(
               onPressed: () => _openDownload(
                 VibesBoxSyncSettingsSection.windowsDownloadUrl,
               ),
-              child: Text(l.translate('vibesbox_sync_windows')),
+              child: Text(l.vibesbox_sync_windows),
             ),
           ],
         ),
@@ -185,13 +185,41 @@ class _VibesBoxSyncSettingsSectionState
           dense: true,
           activeThumbColor: UIConstants.appOrange,
           title: Text(
-            l.translate('vibesbox_sync_switch'),
+            l.vibesbox_sync_switch,
             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
           ),
           value: enabled,
           onChanged: _onToggle,
         ),
         Text(l.vibesbox_sync_hint, style: muted),
+      ],
+    );
+    if (allowed) return column;
+    return Stack(
+      children: [
+        IgnorePointer(
+          child: ColorFiltered(
+            colorFilter: const ColorFilter.matrix(<double>[
+              0.2126, 0.7152, 0.0722, 0, 0,
+              0.2126, 0.7152, 0.0722, 0, 0,
+              0.2126, 0.7152, 0.0722, 0, 0,
+              0, 0, 0, 0.55, 0,
+            ]),
+            child: column,
+          ),
+        ),
+        Positioned(
+          top: 0,
+          right: 0,
+          child: Text(
+            l.vibesbox_sync_coming_soon,
+            style: const TextStyle(
+              color: Colors.red,
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -215,6 +243,7 @@ class _VibesBoxSyncCodeDialog extends StatefulWidget {
 class _VibesBoxSyncCodeDialogState extends State<_VibesBoxSyncCodeDialog> {
   Timer? _countdown;
   Timer? _connectWatch;
+  bool _popScheduled = false;
 
   int get _remainingMs {
     return (widget.result.expiresAtMillis -
@@ -235,7 +264,7 @@ class _VibesBoxSyncCodeDialogState extends State<_VibesBoxSyncCodeDialog> {
     _countdown = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
       if (_remainingMs <= 0) {
-        Navigator.of(context).maybePop();
+        _popWhenReady();
         return;
       }
       setState(() {});
@@ -243,7 +272,7 @@ class _VibesBoxSyncCodeDialogState extends State<_VibesBoxSyncCodeDialog> {
     _connectWatch = Timer.periodic(const Duration(milliseconds: 400), (_) {
       if (!mounted) return;
       if (VibesBoxSyncService.instance.connected) {
-        Navigator.of(context).maybePop();
+        _popWhenReady();
       }
     });
     VibesBoxSyncService.instance.addListener(_onSync);
@@ -252,8 +281,18 @@ class _VibesBoxSyncCodeDialogState extends State<_VibesBoxSyncCodeDialog> {
   void _onSync() {
     if (!mounted) return;
     if (VibesBoxSyncService.instance.connected) {
-      Navigator.of(context).maybePop();
+      _popWhenReady();
     }
+  }
+
+  void _popWhenReady() {
+    if (_popScheduled) return;
+    _popScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _popScheduled = false;
+      if (!mounted) return;
+      Navigator.of(context).maybePop();
+    });
   }
 
   @override
@@ -318,7 +357,7 @@ class _VibesBoxSyncCodeDialogState extends State<_VibesBoxSyncCodeDialog> {
         ),
         TextButton(
           onPressed: () => Navigator.of(context).maybePop(),
-          child: const Text('OK'),
+          child: Text(l.ok),
         ),
       ],
     );

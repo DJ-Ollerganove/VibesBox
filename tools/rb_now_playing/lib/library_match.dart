@@ -245,7 +245,8 @@ bool isSameWork({
 String workKeyOf(String title, String artist) {
   final t = identityTitleOf(title).replaceAll(' ', '');
   final a = identityArtistOf(artist).replaceAll(' ', '');
-  if (t.length < 2) return '';
+  if (t.isEmpty) return '';
+  if (t.length < 2 && RegExp(r'^[a-z0-9]+$').hasMatch(t)) return '';
   return '$t|$a';
 }
 
@@ -306,6 +307,49 @@ List<Map<String, dynamic>> withoutSameAsPlaying(
     if (out.length >= keep) break;
   }
   return out;
+}
+
+/// „Gleicher Interpret“ heißt höchstens zwei Songs, aus heißt keiner.
+List<Map<String, dynamic>> capSeedArtist(
+  List<Map<String, dynamic>> items, {
+  required String seedArtist,
+  required bool allowSameArtist,
+  int maxSame = 2,
+}) {
+  final credits = _artistCredits(seedArtist);
+  if (credits.isEmpty) return items;
+  var same = 0;
+  final out = <Map<String, dynamic>>[];
+  for (final item in items) {
+    final isSame = sharesPlayingArtist(
+      seedArtist,
+      (item['artist'] ?? '').toString(),
+    );
+    if (isSame && (!allowSameArtist || same >= maxSame)) continue;
+    if (isSame) same += 1;
+    out.add(item);
+  }
+  return out;
+}
+
+bool sharesPlayingArtist(String seed, String row) {
+  final left = _artistCredits(seed);
+  final right = _artistCredits(row);
+  if (left.isEmpty || right.isEmpty) return false;
+  for (final a in left) {
+    for (final b in right) {
+      if (a == b) return true;
+    }
+  }
+  return false;
+}
+
+List<String> _artistCredits(String raw) {
+  final text = _fold(raw).replaceAll(_parenOrBracket, ' ');
+  return [
+    for (final part in text.split(_artistJoin))
+      if (_squash(part).length > 1) _squash(part),
+  ];
 }
 
 String identityTitleOf(String raw) {
@@ -428,6 +472,15 @@ String _fold(String raw) {
 }
 
 String _squash(String raw) {
+  final latin = _squashLatin(raw);
+  if (latin.isNotEmpty) return latin;
+  return raw
+      .replaceAll(RegExp(r'[^\p{L}\p{N}]+', unicode: true), ' ')
+      .trim()
+      .replaceAll(RegExp(r'\s+'), ' ');
+}
+
+String _squashLatin(String raw) {
   final buf = StringBuffer();
   var space = false;
   for (final unit in raw.codeUnits) {

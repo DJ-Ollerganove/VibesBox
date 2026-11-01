@@ -121,6 +121,36 @@
       "name": "Arabic",
       "icon": "ar",
       "langKey": "lang_arabic"
+    },
+    {
+      "code": "ro",
+      "name": "Romanian",
+      "icon": "ro",
+      "langKey": "lang_romanian"
+    },
+    {
+      "code": "sr",
+      "name": "Serbian",
+      "icon": "sr",
+      "langKey": "lang_serbian"
+    },
+    {
+      "code": "bg",
+      "name": "Bulgarian",
+      "icon": "bg",
+      "langKey": "lang_bulgarian"
+    },
+    {
+      "code": "hr",
+      "name": "Croatian",
+      "icon": "hr",
+      "langKey": "lang_croatian"
+    },
+    {
+      "code": "hu",
+      "name": "Hungarian",
+      "icon": "hu",
+      "langKey": "lang_hungarian"
     }
   ]
 }

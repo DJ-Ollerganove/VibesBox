@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import '../../l10n/app_localizations.dart';
 import '../../utils/formatting_utils.dart';
 import '../../widgets/common/pwa_widget_cell.dart';
 import 'total_statistics_card.dart';
 import 'live_guest_stats_view.dart';
+import '../../models/user_model.dart';
+import '../../services/user_service.dart';
 import '../../utils/debug_log.dart';
 import '../../utils/wish_paths.dart';
 import 'stats_pie_chart_shared.dart';
@@ -1091,7 +1092,10 @@ class _PartyInfo {
   });
 }
 
-/// Widget für Login-Statistik
+/// Widget für Login-Statistik.
+/// Liest `loginCount` / `lastLogin` aus dem schon laufenden User-Stream.
+/// Ein FutureBuilder mit neuem Future in build() wurde bei jedem
+/// Startseiten-Rebuild neu gestartet und blieb auf dem Ladekreis hängen.
 class _LoginStatisticsCard extends StatelessWidget {
   final Widget Function(BuildContext context, Widget child) cardBuilder;
 
@@ -1099,72 +1103,32 @@ class _LoginStatisticsCard extends StatelessWidget {
     required this.cardBuilder,
   });
 
-  Future<Map<String, dynamic>> _loadLoginData() async {
-    try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) {
-        return {'loginCount': 0, 'lastLogin': null};
-      }
-
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .get();
-
-      if (!userDoc.exists) {
-        return {'loginCount': 0, 'lastLogin': null};
-      }
-
-      final userData = userDoc.data();
-      final loginCountValue = userData?['loginCount'];
-      int loginCount = 0;
-      if (loginCountValue is int) {
-        loginCount = loginCountValue;
-      } else if (loginCountValue is num) {
-        loginCount = loginCountValue.toInt();
-      }
-      
-      final lastLoginTimestamp = userData?['lastLogin'] as Timestamp?;
-      final lastLogin = lastLoginTimestamp?.toDate();
-
-      return {
-        'loginCount': loginCount,
-        'lastLogin': lastLogin,
-      };
-    } catch (e) {
-      debugLog('❌ Fehler beim Laden der Login-Daten: $e');
-      return {'loginCount': 0, 'lastLogin': null};
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
-    return FutureBuilder<Map<String, dynamic>>(
-      future: _loadLoginData(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
+    return ValueListenableBuilder<UserModel?>(
+      valueListenable: UserService().currentUser,
+      builder: (context, user, _) {
+        if (user == null) {
           return cardBuilder(
             context,
             const Center(child: CircularProgressIndicator()),
           );
         }
 
-        final loginCount = snapshot.data!['loginCount'] as int;
-        final lastLogin = snapshot.data!['lastLogin'] as DateTime?;
+        final loginCount = user.loginCount ?? 0;
+        final lastLogin = user.lastLogin?.toDate();
+        final lastLoginText = lastLogin == null
+            ? '--'
+            : FormattingUtils.formatDateTimeCommaBetweenDateAndTime(
+                lastLogin,
+                context,
+              );
 
-        String lastLoginText = '--';
-        if (lastLogin != null) {
-          lastLoginText =
-              FormattingUtils.formatDateTimeCommaBetweenDateAndTime(lastLogin, context);
-        }
-
-        // Login-Zelle mit orangem Rahmen (konsistent zu anderen Karten)
         return PwaWidgetCell(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Header: Icon + Titel (dezent, kleiner)
               Row(
                 mainAxisAlignment: MainAxisAlignment.start,
                 children: [

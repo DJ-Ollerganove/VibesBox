@@ -18,6 +18,17 @@ const CALLABLE_OPTS = {
 };
 
 const MAX_TRACKS = 80;
+const POOL_CAP = 200;
+const OCCASION_OK = new Set([
+  'wedding',
+  'birthday',
+  'corporate',
+  'club',
+  'graduation',
+  'village_festival',
+  'private_party',
+  'other',
+]);
 
 function clip(raw, maxLen) {
   const s = String(raw ?? '').trim();
@@ -293,12 +304,109 @@ async function upsertMusicCatalogTracksHandler(request) {
     upserted += 1;
   }
 
+  const occasionId = clip(data.occasionId, 40);
+  let pooled = 0;
+  if (OCCASION_OK.has(occasionId)) {
+    try {
+      pooled = await mergeOccasionPool(
+        occasionId,
+        data.poolAdded,
+        data.poolRetired,
+      );
+    } catch (e) {
+      console.warn(
+        'upsertMusicCatalogTracks: occasion pool',
+        e && e.message ? e.message : e,
+      );
+    }
+  }
+
   return {
     ok: true,
     upserted,
     counted: countAsSuggested,
+    pooled,
     truncated: rawTracks.length > mapped.length,
   };
+}
+
+function songKey(title, artist) {
+  return `${String(title || '').trim().toLowerCase()}|${String(artist || '').trim().toLowerCase()}`;
+}
+
+/**
+ * Ein Doc pro Anlass. Nur Titel, die neu dazukommen oder wegfallen.
+ * Unveränderte Songs (nur Reihenfolge) schreiben hier nichts.
+ */
+async function mergeOccasionPool(occasionId, addedRaw, retiredRaw) {
+  const added = [];
+  const retired = [];
+  const seenAdd = new Set();
+  const seenRet = new Set();
+  for (const raw of Array.isArray(addedRaw) ? addedRaw : []) {
+    const title = clip(raw && (raw.title || raw.t), 200);
+    const artist = clip(raw && (raw.artist || raw.a), 200);
+    if (!title || !artist) continue;
+    const key = songKey(title, artist);
+    if (seenAdd.has(key)) continue;
+    seenAdd.add(key);
+    added.push({ title, artist });
+    if (added.length >= POOL_CAP) break;
+  }
+  for (const raw of Array.isArray(retiredRaw) ? retiredRaw : []) {
+    const title = clip(raw && (raw.title || raw.t), 200);
+    const artist = clip(raw && (raw.artist || raw.a), 200);
+    if (!title || !artist) continue;
+    const key = songKey(title, artist);
+    if (seenRet.has(key)) continue;
+    seenRet.add(key);
+    retired.push({ title, artist });
+    if (retired.length >= POOL_CAP) break;
+  }
+  if (!added.length && !retired.length) return 0;
+
+  const ref = db.collection('setlist_occasion_pool').doc(occasionId);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const prev =
+      snap.exists && Array.isArray(snap.data().songs) ? snap.data().songs : [];
+    const map = new Map();
+    for (const row of prev) {
+      const title = clip(row && row.t, 200);
+      const artist = clip(row && row.a, 200);
+      if (!title || !artist) continue;
+      map.set(songKey(title, artist), {
+        t: title,
+        a: artist,
+        n: Math.max(1, Number(row.n) || 1),
+      });
+    }
+    for (const row of retired) {
+      const key = songKey(row.title, row.artist);
+      const cur = map.get(key);
+      if (!cur) continue;
+      cur.n -= 1;
+      if (cur.n <= 0) map.delete(key);
+    }
+    for (const row of added) {
+      const key = songKey(row.title, row.artist);
+      const cur = map.get(key);
+      if (cur) cur.n += 1;
+      else map.set(key, { t: row.title, a: row.artist, n: 1 });
+    }
+    let songs = [...map.values()];
+    songs.sort((x, y) => y.n - x.n || String(x.t).localeCompare(String(y.t)));
+    if (songs.length > POOL_CAP) songs = songs.slice(0, POOL_CAP);
+    tx.set(
+      ref,
+      {
+        songs,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  });
+  return added.length + retired.length;
 }
 
 /**

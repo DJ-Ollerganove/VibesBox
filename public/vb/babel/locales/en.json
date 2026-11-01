@@ -187,7 +187,7 @@
   "main_contact_title": "Contact",
   "main_feature_auto_body": "",
   "main_feature_auto_title": "",
-  "main_feature_dj_body": "Professional management of all song requests via app. Keep full control over the party flow and react instantly to the dancefloor.",
+  "main_feature_dj_body": "Professional management of all song requests via app for iOS and Android. As an extension module, VibesBox Sync is available for Mac or Windows. Keep full control over the party flow and react instantly to the dancefloor.",
   "main_feature_dj_title": "For DJs",
   "main_feature_guest_body": "Quick access via QR code right in the browser. No app installation needed. Send music requests easily and without barriers.",
   "main_feature_guest_title": "For guests",
@@ -462,5 +462,12 @@
   "song_blacklist_mode_block_hint": "The guest sees a polite message. No request is saved.",
   "song_blacklist_guest_blocked_title": "Request not possible",
   "song_blacklist_live_hint": "{song} automatically moved to Rejected.",
-  "select_language": "Select Language"
+  "select_language": "Select Language",
+  "sync_page_title": "VibesBox Sync",
+  "sync_page_meta_description": "Download VibesBox Sync for Windows and Mac.",
+  "sync_page_heading": "Download VibesBox Sync here",
+  "sync_page_windows": "For Windows:",
+  "sync_page_mac": "For macOS:",
+  "sync_page_download": "Download",
+  "sync_page_version": "Version {version}"
 }

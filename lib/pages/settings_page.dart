@@ -255,15 +255,17 @@ class _SettingsPageState extends State<SettingsPage> {
                     VibesBoxSyncService.instance,
                   ]),
                   builder: (context, _) {
-                    if (!VibesBoxSyncService.instance.isVisibleForCurrentUser) {
-                      return const SizedBox.shrink();
-                    }
+                    final allowed =
+                        VibesBoxSyncService.instance.isVisibleForCurrentUser;
                     return Container(
                       margin: const EdgeInsets.only(bottom: 16),
                       decoration: BoxDecoration(
                         color: const Color(0xFF1E1E1E),
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.orange, width: 1.5),
+                        border: Border.all(
+                          color: allowed ? Colors.orange : Colors.white24,
+                          width: 1.5,
+                        ),
                       ),
                       child: const Padding(
                         padding: EdgeInsets.all(12.0),
