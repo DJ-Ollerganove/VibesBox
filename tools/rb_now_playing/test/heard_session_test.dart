@@ -71,4 +71,16 @@ void main() {
     );
     expect(missing.map((t) => t.title).toList(), ['80er Partymix', 'Mi Gente']);
   });
+
+  test('Party-Songs kommen ältester zuerst, nur einmal', () {
+    final tracks = partyHeardTracks(const [
+      {'title': 'Neu', 'artist': 'B'},
+      {'title': 'Alt', 'artist': 'A'},
+      {'title': 'Neu', 'artist': 'B'},
+      {'title': '  ', 'artist': 'C'},
+    ]);
+    expect(tracks.map((t) => t.title).toList(), ['Alt', 'Neu']);
+    expect(tracks.last.artist, 'B');
+    expect(tracks.first.historyName, 'party');
+  });
 }

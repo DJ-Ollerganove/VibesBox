@@ -7,6 +7,41 @@ import 'tool_gate.dart';
 import 'tool_i18n.dart';
 import 'tool_session.dart';
 
+class ToolStartupSplash extends StatelessWidget {
+  const ToolStartupSplash({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      backgroundColor: Colors.transparent,
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _StartupLogo(),
+            SizedBox(height: 18),
+            Image(
+              image: AssetImage('assets/vibesbox_wordmark.png'),
+              height: 42,
+              fit: BoxFit.contain,
+              filterQuality: FilterQuality.high,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StartupLogo extends StatelessWidget {
+  const _StartupLogo();
+
+  @override
+  Widget build(BuildContext context) {
+    return _logo(240);
+  }
+}
+
 class ToolWelcomePage extends StatefulWidget {
   const ToolWelcomePage({super.key, required this.onAccepted});
 
@@ -36,15 +71,14 @@ class _ToolWelcomePageState extends State<ToolWelcomePage> {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(28, 36, 28, 28),
               children: [
-                Center(child: _logo(92)),
-                const SizedBox(height: 18),
-                const Text(
-                  'VibesBox Sync',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF22E7FF),
+                Center(child: _logo(220)),
+                const SizedBox(height: 16),
+                Center(
+                  child: Image.asset(
+                    'assets/vibesbox_wordmark.png',
+                    height: 42,
+                    fit: BoxFit.contain,
+                    filterQuality: FilterQuality.high,
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -152,7 +186,7 @@ class _ToolConnectPageState extends State<ToolConnectPage> {
                 child: ListView(
                   padding: const EdgeInsets.fromLTRB(28, 48, 28, 28),
                   children: [
-                    Center(child: _logo(72)),
+                    Center(child: _logo(150)),
                     const SizedBox(height: 16),
                     Text(
                       toolI18n.text('gateConnectTitle'),
@@ -236,7 +270,7 @@ class ToolUpdatePage extends StatelessWidget {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(28, 48, 28, 28),
               children: [
-                Center(child: _logo(72)),
+                Center(child: _logo(150)),
                 const SizedBox(height: 16),
                 Text(
                   toolI18n.text('updateRequiredTitle'),
@@ -344,7 +378,9 @@ class ToolLegalFooter extends StatelessWidget {
           toolI18n.text('settingsLegal'),
           style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 8),
+        _logo(72),
+        const SizedBox(height: 6),
         _link(toolI18n.text('gatePrivacy'), kPrivacyUrl),
         _link(toolI18n.text('gateImprint'), kImprintUrl),
         _link(toolI18n.text('gateTerms'), kTermsUrl),
@@ -375,14 +411,12 @@ class ToolLegalFooter extends StatelessWidget {
 }
 
 Widget _logo(double size) {
-  return ClipRRect(
-    borderRadius: BorderRadius.circular(18),
-    child: Image.asset(
-      'assets/vibesbox_logo.png',
-      width: size,
-      height: size,
-      fit: BoxFit.cover,
-    ),
+  return Image.asset(
+    'assets/vibesbox_logo.png',
+    width: size,
+    height: size,
+    fit: BoxFit.contain,
+    filterQuality: FilterQuality.high,
   );
 }
 

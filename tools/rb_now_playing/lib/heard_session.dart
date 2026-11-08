@@ -31,6 +31,35 @@ bool historyHeadIsIdle(
   return now.difference(track.playedAt!) >= nowPlayingHold(track);
 }
 
+/// Party-History, neuester Eintrag zuerst. Ergebnis: ältester zuerst.
+/// Leere Titel fallen weg. Derselbe Titel bleibt einmal, und zwar als letzter.
+List<HistoryTrack> partyHeardTracks(List<Map<String, String>> newestFirst) {
+  final picked = <({String title, String artist})>[];
+  final seen = <String>{};
+  for (final row in newestFirst) {
+    final title = (row['title'] ?? '').trim();
+    final artist = (row['artist'] ?? '').trim();
+    if (title.isEmpty) continue;
+    final key = '${title.toLowerCase()}|${artist.toLowerCase()}';
+    if (!seen.add(key)) continue;
+    picked.add((title: title, artist: artist));
+  }
+  final ordered = picked.reversed.toList();
+  return [
+    for (var i = 0; i < ordered.length; i++)
+      HistoryTrack(
+        trackNo: i + 1,
+        title: ordered[i].title,
+        artist: ordered[i].artist,
+        playedAt: null,
+        historyName: 'party',
+        bpm: null,
+        musicalKey: null,
+        length: null,
+      ),
+  ];
+}
+
 /// Titel der laufenden History, die noch nicht in [heardIdentities] sind.
 /// [historyNewestFirst] ist die History (neuester zuerst). Ergebnis: ältester zuerst.
 List<HistoryTrack> missingSessionTracks({

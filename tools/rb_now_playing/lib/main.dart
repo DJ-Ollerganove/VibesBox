@@ -186,12 +186,23 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
   final List<_Heard> _heard = [];
   int _browse = 0;
   String _lastRecFp = '';
+  bool _awaitingNew = false;
+  bool _bootHeadLatched = false;
+  String _bootHeadKey = '';
+  bool _tookLiveSong = false;
+  String? _restoredPartyId;
+  int _restoredPlayedStamp = -1;
+  final Set<String> _seenOpenIds = {};
+  String? _seenParty;
+  bool _seenBaselined = false;
+  bool _primedWaitSuggestions = false;
   var _tidalReady = false;
   var _djPrefsGen = 0;
   var _gateReady = false;
   var _consentOk = false;
   var _armed = false;
   var _updateDismissed = false;
+  var _splash = true;
   SyncToolPolicy _policy = const SyncToolPolicy.empty();
 
   @override
@@ -207,6 +218,10 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     _tidal.addListener(_onTidal);
     unawaited(_prepareDjWatch());
     unawaited(_bootGate());
+    Future<void>.delayed(const Duration(milliseconds: 1400), () {
+      if (!mounted) return;
+      setState(() => _splash = false);
+    });
   }
 
   Future<void> _prepareDjWatch() async {
@@ -391,15 +406,52 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
       final sameDeck = _deckKey(_snapshot) == _deckKey(effective);
       _snapshot = effective;
       if (!mounted) return;
-      _seedHeard(snapshot.history);
-      if (!mounted) return;
       if (!sameDeck || _error != null) {
         setState(() => _error = null);
       }
+      if (!_wishboard.settled) return;
+      final partyId = _wishboard.partyId ?? '';
+      final partyOn = partyId.isNotEmpty;
+      if (partyOn && partyId != _restoredPartyId && _tookLiveSong) {
+        _tookLiveSong = false;
+        _bootHeadLatched = false;
+        _heard.clear();
+      }
+      if (partyOn && !_tookLiveSong) {
+        _installPartyHeard();
+        if (!_bootHeadLatched) {
+          _bootHeadLatched = true;
+          _bootHeadKey = _workKey(effective.idle ? null : effective.nowPlaying);
+          _awaitingNew = true;
+          _browse = _heard.length;
+        }
+        final head = _workKey(effective.idle ? null : effective.nowPlaying);
+        if (_awaitingNew && head.isNotEmpty && head != _bootHeadKey) {
+          _awaitingNew = false;
+          _tookLiveSong = true;
+          _primedWaitSuggestions = false;
+        }
+      } else if (!partyOn) {
+        _awaitingNew = false;
+        _tookLiveSong = true;
+        _bootHeadLatched = true;
+        _restoredPartyId = null;
+      }
+      final hold = _awaitingNew;
       if (_wishboard.sendRecognition) {
-        unawaited(widget.session.pushLive(effective));
+        unawaited(
+          widget.session.pushLive(
+            effective,
+            hold: hold,
+            skipHistory: !partyOn || hold,
+          ),
+        );
       } else {
         unawaited(widget.session.pushPresence());
+      }
+      if (hold) {
+        _primeLastSuggestions();
+        return;
       }
       _captureHeard(effective);
       _autoSuggestLatest();
@@ -427,7 +479,10 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
         final markId = playing.identity;
         final partyReady = (_wishboard.partyId ?? '').isNotEmpty &&
             widget.session.isConnected;
-        if (partyReady && markId != _markedPlayId && markId != _markingId) {
+        if (partyReady &&
+            !_awaitingNew &&
+            markId != _markedPlayId &&
+            markId != _markingId) {
           _markingId = markId;
           final title = playing.title;
           final artist = playing.artist;
@@ -569,6 +624,7 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
   }
 
   void _onWishboard() {
+    _baselineOpenSeen();
     _enqueueTidalLookups();
     _dropAlreadyPlayed();
     final openFp = _openWishMarkFingerprint();
@@ -642,7 +698,10 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     unawaited(_fetchSuggestions(hit.track, gen));
   }
 
-  _Heard? get _shownHit => _heard.isEmpty ? null : _heard[_browse];
+  _Heard? get _shownHit {
+    if (_browse < 0 || _browse >= _heard.length) return null;
+    return _heard[_browse];
+  }
 
   bool get _viewingLatest =>
       _heard.isNotEmpty && _browse == _heard.length - 1;
@@ -650,31 +709,93 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
   String _cacheKey(HistoryTrack track) =>
       '${track.title.trim().toLowerCase()}|${track.artist.trim().toLowerCase()}|${_wishboard.recFingerprint}';
 
-  void _seedHeard(HistorySnapshot history) {
-    final missing = missingSessionTracks(
-      heardIdentities: [for (final hit in _heard) hit.track.identity],
-      historyNewestFirst: history.tracks,
-    );
-    if (missing.isEmpty) return;
-    var browse = _browse;
-    for (final track in missing) {
-      final hit = _Heard(track, _cacheKey(track));
-      var at = _heard.length;
-      final when = track.playedAt;
-      if (when != null) {
-        for (var i = 0; i < _heard.length; i++) {
-          final other = _heard[i].track.playedAt;
-          if (other != null && other.isAfter(when)) {
-            at = i;
-            break;
-          }
-        }
-      }
-      _heard.insert(at, hit);
-      if (at <= browse) browse++;
+  String _workKey(HistoryTrack? track) {
+    if (track == null) return '';
+    return '${track.title.trim().toLowerCase()}|${track.artist.trim().toLowerCase()}';
+  }
+
+  void _baselineOpenSeen() {
+    final id = _wishboard.partyId;
+    if (id != _seenParty) {
+      _seenParty = id;
+      _seenOpenIds.clear();
+      _seenBaselined = false;
     }
-    _browse = browse.clamp(0, _heard.length - 1);
-    setState(() {});
+    if (id == null || id.isEmpty || _seenBaselined || _wishboard.loading) {
+      return;
+    }
+    for (final wish in _wishboard.wishes) {
+      if (wish.matchesTab('offen')) _seenOpenIds.add(wish.id);
+    }
+    _seenBaselined = true;
+  }
+
+  int _unseenOpenSongs() {
+    var count = 0;
+    for (final row in _wishboard.rowsFor(
+      'offen',
+      library: _library.index,
+      tidal: _tidal,
+    )) {
+      if (row.items.any((item) => !_seenOpenIds.contains(item.id))) count++;
+    }
+    return count;
+  }
+
+  void _markAllOpenSeen() {
+    for (final wish in _wishboard.wishes) {
+      if (wish.matchesTab('offen')) _seenOpenIds.add(wish.id);
+    }
+  }
+
+  void _markWishRowSeen(WishRow row) {
+    for (final item in row.items) {
+      _seenOpenIds.add(item.id);
+    }
+    if (mounted) setState(() {});
+  }
+
+  /// Nur die schon erkannten Songs dieser Party. Die DJ-History bleibt draußen.
+  void _installPartyHeard() {
+    final id = _wishboard.partyId;
+    if (id == null || id.isEmpty || _tookLiveSong) return;
+    if (_restoredPartyId == id &&
+        _restoredPlayedStamp == _wishboard.playedStamp) {
+      return;
+    }
+    _restoredPartyId = id;
+    _restoredPlayedStamp = _wishboard.playedStamp;
+    _primedWaitSuggestions = false;
+    _heard
+      ..clear()
+      ..addAll([
+        for (final track in partyHeardTracks(_wishboard.playedTracks))
+          _Heard(track, _cacheKey(track)),
+      ]);
+    _browse = _heard.length;
+    _suggestions = const [];
+    _suggesting = false;
+    _autoDoneKey = _heard.isEmpty ? null : _heard.last.cacheKey;
+    if (mounted) setState(() {});
+  }
+
+  void _primeLastSuggestions() {
+    if (!_awaitingNew || _heard.isEmpty || _primedWaitSuggestions) return;
+    final last = _heard.last;
+    _autoDoneKey = last.cacheKey;
+    if (last.suggestions.isNotEmpty) {
+      _primedWaitSuggestions = true;
+      _suggestions = [
+        for (final row in last.suggestions) Map<String, dynamic>.from(row),
+      ];
+      if (_workKey(last.track) == _bootHeadKey) {
+        _sendSuggestions(last.track, _suggestions, hold: true);
+      }
+      if (mounted) setState(() {});
+      return;
+    }
+    if (last.storeChecked || last.searching) return;
+    unawaited(_restoreStored(last, showWhileWaiting: true));
   }
 
   void _captureHeard(LiveSnapshot effective) {
@@ -744,9 +865,15 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
   }
 
   void _stepHeard(int delta) {
-    if (_heard.isEmpty) return;
-    final next = (_browse + delta).clamp(0, _heard.length - 1);
+    final maxIndex = _awaitingNew ? _heard.length : _heard.length - 1;
+    if (maxIndex < 0) return;
+    final next = (_browse + delta).clamp(0, maxIndex);
     if (next == _browse) return;
+    if (next >= _heard.length) {
+      setState(() => _browse = next);
+      _primeLastSuggestions();
+      return;
+    }
     final hit = _heard[next];
     if (hit.suggestions.isEmpty) {
       final copied = _suggestionsLike(hit);
@@ -776,7 +903,10 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
 
   /// Nach einem Neustart ist die History wieder da, die Vorschläge nur
   /// noch in song_suggestions. Einmal lesen, keine neue Suche.
-  Future<void> _restoreStored(_Heard hit) async {
+  Future<void> _restoreStored(
+    _Heard hit, {
+    bool showWhileWaiting = false,
+  }) async {
     if (hit.storeChecked || hit.suggestions.isNotEmpty || hit.searching) {
       return;
     }
@@ -798,7 +928,8 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     if (!mounted) return;
     hit.searching = false;
     if (stored.isEmpty) {
-      if (identical(_shownHit, hit)) setState(() {});
+      if (showWhileWaiting) _primedWaitSuggestions = true;
+      if (identical(_shownHit, hit) || showWhileWaiting) setState(() {});
       return;
     }
     final want = _wishboard.recCount.clamp(1, 20);
@@ -818,12 +949,22 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     hit.suggestions = [
       for (final row in ready) Map<String, dynamic>.from(row),
     ];
-    if (!identical(_shownHit, hit)) return;
+    final waitingHere = showWhileWaiting &&
+        _awaitingNew &&
+        _heard.isNotEmpty &&
+        identical(hit, _heard.last);
+    if (!identical(_shownHit, hit) && !waitingHere) return;
     setState(() {
       _suggestions = [
         for (final row in hit.suggestions) Map<String, dynamic>.from(row),
       ];
     });
+    if (waitingHere && _workKey(hit.track) == _bootHeadKey) {
+      _primedWaitSuggestions = true;
+      _sendSuggestions(hit.track, hit.suggestions, hold: true);
+    } else if (waitingHere) {
+      _primedWaitSuggestions = true;
+    }
     _enqueueTidalLookups();
   }
 
@@ -848,16 +989,20 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
 
   void _sendSuggestions(
     HistoryTrack track,
-    List<Map<String, dynamic>> items,
-  ) {
+    List<Map<String, dynamic>> items, {
+    bool hold = false,
+  }) {
     if (!widget.session.isConnected || !_wishboard.sendRecognition) return;
     if (_heard.isNotEmpty && _heard.last.track.identity != track.identity) {
       return;
     }
+    final noParty = (_wishboard.partyId ?? '').isEmpty;
     unawaited(widget.session.pushSuggestions(
       title: track.title,
       artist: track.artist,
       suggestions: items,
+      hold: hold,
+      skipHistory: hold || noParty,
     ));
   }
 
@@ -1337,6 +1482,9 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
             body: Center(child: CircularProgressIndicator()),
           );
         }
+        if (_splash && _consentOk) {
+          return const ToolStartupSplash();
+        }
         if (!_consentOk) {
           return ToolWelcomePage(
             onAccepted: () async {
@@ -1375,13 +1523,11 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                     ),
                   Row(
                     children: [
-                      const Text(
-                        'VibesBox Sync',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF22E7FF),
-                        ),
+                      Image.asset(
+                        'assets/vibesbox_wordmark.png',
+                        height: 28,
+                        fit: BoxFit.contain,
+                        filterQuality: FilterQuality.high,
                       ),
                       const Spacer(),
                       IconButton(
@@ -1420,29 +1566,44 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                   else
                     _NowPlayingCard(
                       hit: _shownHit,
+                      waiting: _awaitingNew && _browse >= _heard.length,
                       canPrev: _browse > 0,
-                      canNext: _browse < _heard.length - 1,
+                      canNext: _browse <
+                          (_awaitingNew
+                              ? _heard.length
+                              : (_heard.isEmpty ? 0 : _heard.length - 1)),
                       onPrev: () => _stepHeard(-1),
                       onNext: () => _stepHeard(1),
                     ),
                   const SizedBox(height: 6),
                   _MainTabs(
                     index: _mainTab,
+                    unseen: _unseenOpenSongs(),
                     onChanged: (i) {
+                      if (i == 1) _markAllOpenSeen();
                       setState(() => _mainTab = i);
-                      if (i == 1) _showLatestHeard();
+                      if (i != 1) return;
+                      if (_awaitingNew) {
+                        setState(() => _browse = _heard.length);
+                        _primeLastSuggestions();
+                      } else {
+                        _showLatestHeard();
+                      }
                     },
                   ),
                   const SizedBox(height: 6),
                   Expanded(
                     child: _mainTab == 1
                         ? _SuggestionsPane(
-                            loading: _shownHit?.searching ?? false,
+                            loading: _shownHit?.searching ??
+                                (_awaitingNew &&
+                                    _heard.isNotEmpty &&
+                                    _heard.last.searching),
                             enabled: _wishboard.recEnabled,
                             isOpenWish: _suggestionIsOpenWish,
                             onOpenWish: _openSuggestionWish,
                             items: _suggestionsForUi(),
-                            idle: _heard.isEmpty,
+                            idle: _heard.isEmpty && !_awaitingNew,
                             onReload: (widget.session.isConnected &&
                                     _shownHit != null &&
                                     _wishboard.recEnabled)
@@ -1457,6 +1618,7 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                             connected: widget.session.isConnected,
                             tab: wishTab,
                             onTab: (tab) => setState(() => _wishTab = tab),
+                            onSeenWish: _markWishRowSeen,
                             tabColor: _tabColor,
                           ),
                   ),
@@ -1565,10 +1727,15 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
 }
 
 class _MainTabs extends StatelessWidget {
-  const _MainTabs({required this.index, required this.onChanged});
+  const _MainTabs({
+    required this.index,
+    required this.onChanged,
+    this.unseen = 0,
+  });
 
   final int index;
   final ValueChanged<int> onChanged;
+  final int unseen;
 
   @override
   Widget build(BuildContext context) {
@@ -1578,14 +1745,14 @@ class _MainTabs extends StatelessWidget {
       ),
       child: Row(
         children: [
-          _mainTabBtn('VibesBox', 0),
-          _mainTabBtn(toolI18n.text('suggestions'), 1),
+          _mainTabBtn('VibesBox', 0, unseen),
+          _mainTabBtn(toolI18n.text('suggestions'), 1, 0),
         ],
       ),
     );
   }
 
-  Widget _mainTabBtn(String label, int i) {
+  Widget _mainTabBtn(String label, int i, int badge) {
     final active = index == i;
     return Expanded(
       child: InkWell(
@@ -1600,15 +1767,41 @@ class _MainTabs extends StatelessWidget {
               ),
             ),
           ),
-          child: Text(
-            label,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              letterSpacing: 1.4,
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              color: active ? Colors.white : Colors.white54,
-            ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                label,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  letterSpacing: 1.4,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: active ? Colors.white : Colors.white54,
+                ),
+              ),
+              if (badge > 0) ...[
+                const SizedBox(width: 6),
+                Container(
+                  constraints: const BoxConstraints(minWidth: 18),
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE53935),
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  child: Text(
+                    badge > 99 ? '99+' : '$badge',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0,
+                    ),
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
       ),
@@ -1625,6 +1818,7 @@ class _VibesBoxPane extends StatelessWidget {
     required this.connected,
     required this.tab,
     required this.onTab,
+    required this.onSeenWish,
     required this.tabColor,
   });
 
@@ -1635,6 +1829,7 @@ class _VibesBoxPane extends StatelessWidget {
   final bool connected;
   final String tab;
   final ValueChanged<String> onTab;
+  final ValueChanged<WishRow> onSeenWish;
   final Color Function(String tab) tabColor;
 
   String _tabLabel(String tab) {
@@ -1721,6 +1916,7 @@ class _VibesBoxPane extends StatelessWidget {
                   dragEnabled: library.allowDeckDrag,
                   showTranslation: wishboard.showGreetingTranslations,
                   pinnedWishIds: wishboard.pinnedWishIds,
+                  onSeen: tab == 'offen' ? onSeenWish : null,
                 ),
         ),
       ],
@@ -1782,6 +1978,7 @@ class _WishListView extends StatefulWidget {
     required this.dragEnabled,
     required this.showTranslation,
     this.pinnedWishIds = const [],
+    this.onSeen,
   });
 
   final ToolSession session;
@@ -1792,6 +1989,7 @@ class _WishListView extends StatefulWidget {
   final bool dragEnabled;
   final bool showTranslation;
   final List<String> pinnedWishIds;
+  final ValueChanged<WishRow>? onSeen;
 
   @override
   State<_WishListView> createState() => _WishListViewState();
@@ -1855,6 +2053,7 @@ class _WishListViewState extends State<_WishListView> {
                   canDown: widget.tab == 'offen' && global < rows.length - 1,
                   showTranslation: widget.showTranslation,
                   pinnedWishIds: widget.pinnedWishIds,
+                  onSeen: widget.onSeen,
                 ),
               );
             },
@@ -1898,6 +2097,7 @@ class _WishCard extends StatelessWidget {
     required this.canDown,
     required this.showTranslation,
     this.pinnedWishIds = const [],
+    this.onSeen,
   });
 
   final ToolSession session;
@@ -1908,6 +2108,7 @@ class _WishCard extends StatelessWidget {
   final bool canDown;
   final bool showTranslation;
   final List<String> pinnedWishIds;
+  final ValueChanged<WishRow>? onSeen;
 
   @override
   Widget build(BuildContext context) {
@@ -1917,17 +2118,20 @@ class _WishCard extends StatelessWidget {
       borderRadius: BorderRadius.circular(10),
       child: InkWell(
         borderRadius: BorderRadius.circular(10),
-        onTap: () => _openWishDetail(
-          context,
-          session,
-          partyId,
-          row,
-          tab,
-          canUp,
-          canDown,
-          showTranslation,
-          pinnedWishIds: pinnedWishIds,
-        ),
+        onTap: () {
+          onSeen?.call(row);
+          _openWishDetail(
+            context,
+            session,
+            partyId,
+            row,
+            tab,
+            canUp,
+            canDown,
+            showTranslation,
+            pinnedWishIds: pinnedWishIds,
+          );
+        },
         child: SizedBox(
           height: 64,
           width: double.infinity,
@@ -2844,6 +3048,7 @@ class _Heard {
 class _NowPlayingCard extends StatelessWidget {
   const _NowPlayingCard({
     required this.hit,
+    required this.waiting,
     required this.canPrev,
     required this.canNext,
     required this.onPrev,
@@ -2851,6 +3056,7 @@ class _NowPlayingCard extends StatelessWidget {
   });
 
   final _Heard? hit;
+  final bool waiting;
   final bool canPrev;
   final bool canNext;
   final VoidCallback onPrev;
@@ -2870,7 +3076,7 @@ class _NowPlayingCard extends StatelessWidget {
           ? Padding(
               padding: const EdgeInsets.only(bottom: 4),
               child: Text(
-                toolI18n.text('nothingPlaying'),
+                toolI18n.text(waiting ? 'noNewSong' : 'nothingPlaying'),
                 style: const TextStyle(color: Colors.white70, fontSize: 12),
               ),
             )

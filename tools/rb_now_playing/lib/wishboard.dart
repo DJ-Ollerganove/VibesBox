@@ -154,6 +154,9 @@ class Wishboard extends ChangeNotifier {
   String? djName;
   String? error;
   bool loading = false;
+
+  /// Erst nach dem ersten Party-Abruf. Davor ist „keine Party“ noch unbekannt.
+  bool settled = false;
   List<WishItem> wishes = const [];
   List<SetlistItem> setlist = const [];
   DateTime? _lastHeavyAt;
@@ -465,6 +468,10 @@ class Wishboard extends ChangeNotifier {
       notifyListeners();
     } finally {
       _busy = false;
+      if (!settled) {
+        settled = true;
+        notifyListeners();
+      }
       final id = partyId;
       if (_session.isConnected && id != null && id.isNotEmpty) {
         unawaited(_ensureLive(id));

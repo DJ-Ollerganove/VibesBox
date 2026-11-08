@@ -37,6 +37,8 @@
       { "source": "/vb/**", "destination": "/vb/index.html" },
       { "source": "/sync", "destination": "/sync/index.html" },
       { "source": "/sync/", "destination": "/sync/index.html" },
+      { "source": "/sync/download", "destination": "/sync/download.html" },
+      { "source": "/sync/download/", "destination": "/sync/download.html" },
       { "source": "**", "destination": "/index.html" }
     ],
     "headers": [
@@ -142,6 +144,18 @@
       },
       {
         "source": "/sync/index.html",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/sync/download.html",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/sync/sync.css",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
+      },
+      {
+        "source": "/sync/page.js",
         "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }]
       },
       {

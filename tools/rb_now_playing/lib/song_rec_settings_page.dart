@@ -187,108 +187,15 @@ class _SongRecSettingsPageState extends State<SongRecSettingsPage> {
                 ),
               ),
               const SizedBox(height: 8),
-              _GroupFrame(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-              _SectionTitle(toolI18n.text('songRec')),
-              const SizedBox(height: 4),
-              if (!connected)
-                Text(
-                  toolI18n.text('connectFirst'),
-                  style: _hintStyle,
-                )
-              else ...[
-                Text(
-                  toolI18n.text('recBody'),
-                  style: _hintStyle,
-                ),
-                if (_error != null) ...[
-                  const SizedBox(height: 10),
-                  Text(
-                    _error!,
-                    style: const TextStyle(color: Color(0xFFFF8A80), fontSize: 12),
-                  ),
-                ],
-                const SizedBox(height: 6),
-                _switchRow(
-                  label: toolI18n.text('suggestions'),
-                  value: enabled,
-                  onChanged: (v) => _apply(enabled: v),
-                ),
-                if (enabled) ...[
-                  const SizedBox(height: 6),
-                  Text(toolI18n.text('scope'), style: _labelStyle),
-                  const SizedBox(height: 4),
-                  _ChipRow(
-                    value: widget.wishboard.recScope,
-                    options: [
-                      ('strict', toolI18n.text('scopeStrict')),
-                      ('similar', toolI18n.text('scopeSimilar')),
-                      ('bold', toolI18n.text('scopeBold')),
-                    ],
-                    onSelected: (v) => _apply(scope: v),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(toolI18n.text('familiarity'), style: _labelStyle),
-                  const SizedBox(height: 4),
-                  _ChipRow(
-                    value: widget.wishboard.recFamiliarity,
-                    options: [
-                      ('hits', toolI18n.text('famHits')),
-                      ('mix', toolI18n.text('famMix')),
-                    ],
-                    onSelected: (v) => _apply(familiarity: v),
-                  ),
-                  const SizedBox(height: 6),
-                  _switchRow(
-                    label: toolI18n.text('sameArtist'),
-                    hint: toolI18n.text('sameArtistHint'),
-                    value: widget.wishboard.recAllowSameArtist,
-                    onChanged: (v) => _apply(allowSameArtist: v),
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          toolI18n.text('countLabel'),
-                          style: _labelStyle,
-                        ),
-                      ),
-                      DropdownButton<int>(
-                        value: widget.wishboard.recCount,
-                        isDense: true,
-                        dropdownColor: const Color(0xFF1D1D28),
-                        underline: const SizedBox.shrink(),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        items: [
-                          for (var n = 1; n <= 20; n++)
-                            DropdownMenuItem<int>(
-                              value: n,
-                              child: Text('$n'),
-                            ),
-                        ],
-                        onChanged: (v) {
-                          if (v == null) return;
-                          unawaited(_apply(count: v));
-                        },
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    toolI18n.text('countHint'),
-                    style: _hintStyle,
-                  ),
-                ],
-              ],
-                  ],
-                ),
+              _SongRecCard(
+                connected: connected,
+                enabled: enabled,
+                scope: widget.wishboard.recScope,
+                familiarity: widget.wishboard.recFamiliarity,
+                allowSameArtist: widget.wishboard.recAllowSameArtist,
+                count: widget.wishboard.recCount,
+                error: _error,
+                onApply: _apply,
               ),
               const ToolLegalFooter(),
             ],
@@ -302,6 +209,228 @@ class _SongRecSettingsPageState extends State<SongRecSettingsPage> {
     final local = at.toLocal();
     String two(int n) => n.toString().padLeft(2, '0');
     return '${two(local.day)}.${two(local.month)}.${local.year} ${two(local.hour)}:${two(local.minute)}';
+  }
+}
+
+const _songTitle = TextStyle(
+  color: Colors.white,
+  fontSize: 12,
+  fontWeight: FontWeight.w600,
+  height: 1.2,
+);
+
+const _songHint = TextStyle(
+  color: Colors.white54,
+  fontSize: 10,
+  height: 1.25,
+  fontWeight: FontWeight.w400,
+);
+
+/// Dieselbe Anordnung wie das Song-Vorschläge-Widget in der App.
+class _SongRecCard extends StatelessWidget {
+  const _SongRecCard({
+    required this.connected,
+    required this.enabled,
+    required this.scope,
+    required this.familiarity,
+    required this.allowSameArtist,
+    required this.count,
+    required this.error,
+    required this.onApply,
+  });
+
+  final bool connected;
+  final bool enabled;
+  final String scope;
+  final String familiarity;
+  final bool allowSameArtist;
+  final int count;
+  final String? error;
+  final Future<void> Function({
+    bool? enabled,
+    String? scope,
+    String? familiarity,
+    bool? allowSameArtist,
+    int? count,
+  }) onApply;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E1E1E),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFFF8800)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(toolI18n.text('songRec'), style: _songTitle.copyWith(fontWeight: FontWeight.w700)),
+          if (!connected)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(toolI18n.text('connectFirst'), style: _songHint),
+            )
+          else ...[
+            if (error != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                error!,
+                style: const TextStyle(color: Color(0xFFFF8A80), fontSize: 12),
+              ),
+            ],
+            _AppChoiceRow(
+              value: enabled,
+              title: toolI18n.text(enabled ? 'recOn' : 'recOff'),
+              hint: toolI18n.text('recEnabledBody'),
+              onChanged: (v) => onApply(enabled: v),
+            ),
+            if (enabled) ...[
+              const SizedBox(height: 6),
+              Text(toolI18n.text('scope'), style: _songTitle),
+              const SizedBox(height: 2),
+              Text(toolI18n.text('scopeBody'), style: _songHint),
+              _AppChoiceRow(
+                value: scope == 'strict',
+                title: toolI18n.text('scopeStrict'),
+                onChanged: (_) {
+                  if (scope == 'strict') return;
+                  onApply(scope: 'strict');
+                },
+              ),
+              _AppChoiceRow(
+                value: scope == 'similar',
+                title: toolI18n.text('scopeSimilar'),
+                onChanged: (_) {
+                  if (scope == 'similar') return;
+                  onApply(scope: 'similar');
+                },
+              ),
+              _AppChoiceRow(
+                value: scope == 'bold',
+                title: toolI18n.text('scopeBold'),
+                onChanged: (_) {
+                  if (scope == 'bold') return;
+                  onApply(scope: 'bold');
+                },
+              ),
+              Text(toolI18n.text('familiarity'), style: _songTitle),
+              const SizedBox(height: 2),
+              Text(toolI18n.text('famBody'), style: _songHint),
+              _AppChoiceRow(
+                value: familiarity == 'hits',
+                title: toolI18n.text('famHits'),
+                onChanged: (_) {
+                  if (familiarity == 'hits') return;
+                  onApply(familiarity: 'hits');
+                },
+              ),
+              _AppChoiceRow(
+                value: familiarity == 'mix',
+                title: toolI18n.text('famMix'),
+                onChanged: (_) {
+                  if (familiarity == 'mix') return;
+                  onApply(familiarity: 'mix');
+                },
+              ),
+              _AppChoiceRow(
+                value: allowSameArtist,
+                title: toolI18n.text('sameArtist'),
+                hint: toolI18n.text('sameArtistHint'),
+                onChanged: (v) => onApply(allowSameArtist: v),
+              ),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(toolI18n.text('countLabel'), style: _songTitle),
+                  ),
+                  DropdownButton<int>(
+                    value: count.clamp(1, 20),
+                    isDense: true,
+                    dropdownColor: const Color(0xFF2A2A2A),
+                    underline: const SizedBox.shrink(),
+                    style: _songTitle,
+                    items: [
+                      for (var n = 1; n <= 20; n++)
+                        DropdownMenuItem<int>(value: n, child: Text('$n')),
+                    ],
+                    onChanged: (v) {
+                      if (v == null || v == count) return;
+                      onApply(count: v);
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(toolI18n.text('countHint'), style: _songHint),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _AppChoiceRow extends StatelessWidget {
+  const _AppChoiceRow({
+    required this.value,
+    required this.title,
+    this.hint,
+    required this.onChanged,
+  });
+
+  final bool value;
+  final String title;
+  final String? hint;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    const orange = Color(0xFFFF8800);
+    final mark = 14.0 * MediaQuery.textScalerOf(context).scale(1);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: InkWell(
+        onTap: () => onChanged(!value),
+        borderRadius: BorderRadius.circular(8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 1),
+              child: SizedBox(
+                width: mark,
+                height: mark,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: orange),
+                  ),
+                  child: value
+                      ? Icon(Icons.check, size: mark * 0.78, color: orange)
+                      : null,
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: _songTitle),
+                  if (hint != null && hint!.trim().isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Text(hint!, style: _songHint),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -818,59 +947,4 @@ Widget _switchRow({
       ),
     ],
   );
-}
-
-class _ChipRow extends StatelessWidget {
-  const _ChipRow({
-    required this.value,
-    required this.options,
-    required this.onSelected,
-  });
-
-  final String value;
-  final List<(String, String)> options;
-  final ValueChanged<String> onSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 4,
-      runSpacing: 4,
-      children: [
-        for (final option in options)
-          GestureDetector(
-            onTap: () {
-              if (value == option.$1) return;
-              onSelected(option.$1);
-            },
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: value == option.$1
-                    ? const Color(0xFFFF8800)
-                    : const Color(0xFF1D1D28),
-                borderRadius: BorderRadius.circular(3),
-                border: Border.all(
-                  color: value == option.$1
-                      ? const Color(0xFFFF8800)
-                      : Colors.white24,
-                  width: 0.6,
-                ),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                child: Text(
-                  option.$2,
-                  style: TextStyle(
-                    color: value == option.$1 ? Colors.black : Colors.white,
-                    fontSize: 10,
-                    height: 1.15,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
 }

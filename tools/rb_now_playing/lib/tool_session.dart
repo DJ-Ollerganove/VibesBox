@@ -311,9 +311,13 @@ class ToolSession extends ChangeNotifier {
     });
   }
 
-  Future<void> pushLive(LiveSnapshot snapshot) async {
+  Future<void> pushLive(
+    LiveSnapshot snapshot, {
+    bool hold = false,
+    bool skipHistory = false,
+  }) async {
     if (!isConnected || _sessionId == null || _ownerUid == null) return;
-    final fingerprint = snapshot.fingerprint();
+    final fingerprint = '${snapshot.fingerprint()}|$hold|$skipHistory';
     if (fingerprint == _lastFingerprint || fingerprint == _queuedFingerprint) {
       return;
     }
@@ -340,6 +344,8 @@ class ToolSession extends ChangeNotifier {
                 'suggestions': kept,
                 if (sameSong && previous['suggestionsFor'] != null)
                   'suggestionsFor': previous['suggestionsFor'],
+                if (hold) 'hold': true,
+                if (skipHistory || hold) 'skipHistory': true,
               };
         await _rest.setLiveDoc(
           idToken: _idToken!,
@@ -367,6 +373,8 @@ class ToolSession extends ChangeNotifier {
     required String title,
     required String artist,
     required List<Map<String, dynamic>> suggestions,
+    bool hold = false,
+    bool skipHistory = false,
   }) async {
     if (!isConnected || _sessionId == null || _ownerUid == null) return;
     final t = title.trim();
@@ -387,6 +395,11 @@ class ToolSession extends ChangeNotifier {
         'artist': a,
         'suggestions': slim,
         'suggestionsFor': '$t|$a',
+        if (hold || _lastNowPlaying?['hold'] == true) 'hold': true,
+        if (skipHistory ||
+            hold ||
+            _lastNowPlaying?['skipHistory'] == true)
+          'skipHistory': true,
       };
       await _rest.setLiveDoc(
         idToken: _idToken!,
