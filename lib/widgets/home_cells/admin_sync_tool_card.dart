@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -27,7 +28,12 @@ class _AdminSyncToolCardState extends State<AdminSyncToolCard> {
   var _macRequired = false;
   var _winRequired = false;
   var _loading = true;
+  var _statsLoading = true;
+  var _active = 0;
+  var _activeSources = const <String>[];
+  var _downloads = const <String>[];
   var _saving = false;
+  var _savingAccess = false;
   String? _message;
 
   static final _digits = [
@@ -50,6 +56,62 @@ class _AdminSyncToolCardState extends State<AdminSyncToolCard> {
   void initState() {
     super.initState();
     _load();
+    _loadStats();
+  }
+
+  Future<void> _loadStats() async {
+    final l = AppLocalizations.of(context);
+    if (mounted && !_statsLoading) {
+      setState(() => _statsLoading = true);
+    }
+    try {
+      final raw = await FirebaseFunctions.instanceFor(region: 'us-central1')
+          .httpsCallable('getSyncAdminStats')
+          .call();
+      final data = raw.data is Map
+          ? Map<String, dynamic>.from(raw.data as Map)
+          : const <String, dynamic>{};
+      final sessions = data['sessions'];
+      final downloads = data['downloads'];
+      final sources = <String>[];
+      if (sessions is List) {
+        for (final row in sessions) {
+          if (row is! Map) continue;
+          final source = (row['source'] ?? '').toString().trim();
+          if (source.isNotEmpty) sources.add(source);
+        }
+      }
+      final lines = <String>[];
+      if (downloads is List && l != null) {
+        for (final row in downloads) {
+          if (row is! Map) continue;
+          final file = (row['file'] ?? '').toString();
+          final version = (row['version'] ?? '').toString();
+          final count = row['count'];
+          if (file.isEmpty) continue;
+          lines.add(l.admin_sync_download_row(file, version, '$count'));
+        }
+      }
+      final activeRaw = data['active'];
+      final active = activeRaw is int
+          ? activeRaw
+          : activeRaw is num
+              ? activeRaw.round()
+              : int.tryParse('$activeRaw') ?? sources.length;
+      if (!mounted) return;
+      setState(() {
+        _active = active;
+        _activeSources = sources;
+        _downloads = lines;
+        _statsLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _statsLoading = false;
+        _message = e.toString();
+      });
+    }
   }
 
   @override
@@ -74,10 +136,10 @@ class _AdminSyncToolCardState extends State<AdminSyncToolCard> {
           .doc('sync_tool')
           .get();
       final data = doc.data() ?? const <String, dynamic>{};
-      final shared = (data['min_version'] ?? data['latest_version'] ?? '')
+      final shared = (data['latest_version'] ?? data['min_version'] ?? '')
           .toString();
-      final mac = _first(data['mac_min_version'], _first(data['mac_latest_version'], shared));
-      final win = _first(data['win_min_version'], _first(data['win_latest_version'], shared));
+      final mac = _first(data['mac_latest_version'], _first(data['mac_min_version'], shared));
+      final win = _first(data['win_latest_version'], _first(data['win_min_version'], shared));
       final macParts = _parts(mac);
       final winParts = _parts(win);
       _macMajor.text = macParts[0];
@@ -99,6 +161,20 @@ class _AdminSyncToolCardState extends State<AdminSyncToolCard> {
     if (mounted) setState(() => _loading = false);
   }
 
+  Future<void> _setEnabledForAll(bool value) async {
+    setState(() => _savingAccess = true);
+    try {
+      await FirebaseFirestore.instance.collection('admin_config').doc('sync_tool').set(
+        {'enabled_for_all': value},
+        SetOptions(merge: true),
+      );
+    } catch (e) {
+      if (mounted) setState(() => _message = e.toString());
+    } finally {
+      if (mounted) setState(() => _savingAccess = false);
+    }
+  }
+
   Future<void> _save() async {
     final macUrl = _macUrl.text.trim();
     final winUrl = _winUrl.text.trim();
@@ -107,24 +183,24 @@ class _AdminSyncToolCardState extends State<AdminSyncToolCard> {
       setState(() => _message = l.vibesbox_sync_admin_https);
       return;
     }
-    final macVersion = _compose(_macMajor, _macMinor, _macPatch);
-    final winVersion = _compose(_winMajor, _winMinor, _winPatch);
+    final macVersion = _storeVersion(_compose(_macMajor, _macMinor, _macPatch));
+    final winVersion = _storeVersion(_compose(_winMajor, _winMinor, _winPatch));
     setState(() {
       _saving = true;
       _message = null;
     });
     try {
       await FirebaseFirestore.instance.collection('admin_config').doc('sync_tool').set({
-        'mac_latest_version': _macRequired ? macVersion : '',
+        'mac_latest_version': macVersion,
         'mac_min_version': _macRequired ? macVersion : '',
         'mac_url': macUrl,
         'mac_note': _macNote.text.trim(),
-        'win_latest_version': _winRequired ? winVersion : '',
+        'win_latest_version': winVersion,
         'win_min_version': _winRequired ? winVersion : '',
         'win_url': winUrl,
         'win_note': _winNote.text.trim(),
         'updated_at': FieldValue.serverTimestamp(),
-      });
+      }, SetOptions(merge: true));
       if (mounted) setState(() => _message = l.vibesbox_sync_admin_saved);
     } catch (e) {
       if (mounted) setState(() => _message = e.toString());
@@ -165,15 +241,21 @@ class _AdminSyncToolCardState extends State<AdminSyncToolCard> {
     return '${cell(major)}.${cell(minor)}.${cell(patch)}';
   }
 
+  String _storeVersion(String composed) => composed == '0.0.0' ? '' : composed;
+
+  String _versionLabel(Map<String, dynamic> data, String platform) {
+    final latest = (data['${platform}_latest_version'] ?? '').toString().trim();
+    final minimum = (data['${platform}_min_version'] ?? '').toString().trim();
+    final shown = latest.isNotEmpty ? latest : minimum;
+    if (shown.isEmpty) return '—';
+    if (minimum.isNotEmpty) return '$shown · Pflicht';
+    return shown;
+  }
+
   bool _urlOk(String value) {
     if (value.isEmpty) return true;
     final uri = Uri.tryParse(value);
     return uri != null && uri.isScheme('https') && uri.host.isNotEmpty;
-  }
-
-  String _liveCell(Object? raw) {
-    final t = (raw ?? '').toString().trim();
-    return t.isEmpty ? '—' : t;
   }
 
   @override
@@ -203,8 +285,8 @@ class _AdminSyncToolCardState extends State<AdminSyncToolCard> {
         final data = snapshot.data?.data() ?? const <String, dynamic>{};
         final l = AppLocalizations.of(context)!;
         final liveLine = l.vibesbox_sync_admin_live(
-          _liveCell(data['mac_min_version']),
-          _liveCell(data['win_min_version']),
+          _versionLabel(data, 'mac'),
+          _versionLabel(data, 'win'),
         );
         return Container(
           padding: const EdgeInsets.all(16),
@@ -216,6 +298,93 @@ class _AdminSyncToolCardState extends State<AdminSyncToolCard> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Text(
+                l.admin_sync_active_title,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _statsLoading
+                    ? '…'
+                    : l.admin_sync_active_count('$_active'),
+                style: const TextStyle(color: Color(0xFFC4C4C4), fontSize: 13),
+              ),
+              for (final source in _activeSources)
+                Text(
+                  source,
+                  style: const TextStyle(color: Colors.white70, fontSize: 13),
+                ),
+              const SizedBox(height: 10),
+              Text(
+                l.admin_sync_downloads_title,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              if (_statsLoading)
+                const Text('…', style: TextStyle(color: Colors.white54))
+              else if (_downloads.isEmpty)
+                Text(
+                  l.admin_sync_downloads_empty,
+                  style: const TextStyle(color: Color(0xFFC4C4C4), fontSize: 13),
+                )
+              else
+                for (final line in _downloads)
+                  Text(
+                    line,
+                    style: const TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  onPressed: _statsLoading ? null : _loadStats,
+                  child: const Text('Aktualisieren'),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          l.translate('admin_sync_unlock_all'),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          l.translate('admin_sync_unlock_all_hint'),
+                          style: const TextStyle(
+                            color: Color(0xFFC4C4C4),
+                            fontSize: 13,
+                            height: 1.3,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Switch(
+                    value: data['enabled_for_all'] == true,
+                    onChanged: _savingAccess ? null : _setEnabledForAll,
+                    activeThumbColor: Colors.orange,
+                    activeTrackColor: Colors.orange.withValues(alpha: 0.45),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
               Text(
                 l.vibesbox_sync_title,
                 style: Theme.of(context).textTheme.titleMedium?.copyWith(

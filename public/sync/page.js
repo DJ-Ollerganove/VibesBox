@@ -1,5 +1,5 @@
 (function () {
-  var SYNC_LANG_ASSET_V = '20261108sync2';
+  var SYNC_LANG_ASSET_V = '20261108sync3';
   var syncVersions = { windows: '', mac: '' };
 
   function packFor(lang) {

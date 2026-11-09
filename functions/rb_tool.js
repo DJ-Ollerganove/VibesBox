@@ -4,13 +4,14 @@
  */
 const crypto = require('crypto');
 const admin = require('firebase-admin');
-const { onCall, HttpsError } = require('firebase-functions/v2/https');
+const { onCall, onRequest, HttpsError } = require('firebase-functions/v2/https');
 
 const { buildTrackPayload } = require('./saved_tracks');
 
 const db = admin.firestore();
 const FieldValue = admin.firestore.FieldValue;
 const Timestamp = admin.firestore.Timestamp;
+const recognitionLog = require('./recognition_log');
 
 const CODE_TTL_MS = 10 * 60 * 1000;
 const RATE_WINDOW_MS = 15 * 60 * 1000;
@@ -61,14 +62,26 @@ function generateTenDigitCode() {
 }
 
 /**
- * Pairing vom Handy. „Verbinden“ ist für die Plattform-Admin-UID und für
- * users.vibesbox_sync_access freigegeben. users.admin bleibt zusätzlich erlaubt.
+ * Pairing vom Handy. Plattform-Admin, users.admin, users.vibesbox_sync_access,
+ * oder jeder DJ wenn admin_config/sync_tool.enabled_for_all gesetzt ist.
  */
+async function syncEnabledForAll() {
+  const snap = await db.collection('admin_config').doc('sync_tool').get();
+  return snap.exists && snap.data()?.enabled_for_all === true;
+}
+
 async function assertCallerAdmin(uid) {
   if (uid === PLATFORM_ADMIN_UID) return;
   const snap = await db.collection('users').doc(uid).get();
   const data = snap.exists ? snap.data() : null;
   if (data?.admin === true || data?.vibesbox_sync_access === true) return;
+  if (await syncEnabledForAll()) {
+    const roleId = String(data?.role_id || '').trim();
+    if (roleId) {
+      const role = await db.collection('roles').doc(roleId).get();
+      if (String(role.data()?.name || '') === 'DJ') return;
+    }
+  }
   throw new HttpsError('permission-denied', 'Nur Admin.');
 }
 
@@ -148,12 +161,9 @@ async function createRbToolCodeHandler(request) {
   }
   const uid = request.auth.uid;
   await assertCallerAdmin(uid);
+  // Nur der noch unbenutzte Code wird ersetzt. Die laufende Verbindung
+  // bleibt, bis dieser neue Code auf einem Sync eingelöst wird.
   await revokePendingCodeForOwner(uid);
-  await deactivateOwnerSessions(uid, 'new_code');
-  await db.collection(COL_LIVE).doc(uid).set({
-    connected: false,
-    updatedAt: FieldValue.serverTimestamp(),
-  }, { merge: true });
 
   const expiresAt = Timestamp.fromMillis(Date.now() + CODE_TTL_MS);
   let code = null;
@@ -278,6 +288,16 @@ async function redeemRbToolCodeHandler(request) {
   }
 
   await deactivateOwnerSessions(ownerUid, 'replaced');
+  await db.collection(COL_LIVE).doc(ownerUid).set({
+    connected: false,
+    source: '',
+    installId: '',
+    sessionId,
+    nowPlaying: null,
+    decks: [],
+    history: [],
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
 
   await db.runTransaction(async (tx) => {
     const fresh = await tx.get(codeRef);
@@ -337,20 +357,30 @@ async function revokeRbToolSessionHandler(request) {
       endedReason: 'logout',
       endedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
-    await db.collection(COL_STATE).doc(ownerUid).set({
-      activeSessionId: FieldValue.delete(),
-      updatedAt: FieldValue.serverTimestamp(),
-    }, { merge: true });
+    const stateRef = db.collection(COL_STATE).doc(ownerUid);
+    const stateSnap = await stateRef.get();
+    if (String(stateSnap.data()?.activeSessionId || '') === sessionId) {
+      await stateRef.set({
+        activeSessionId: FieldValue.delete(),
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
   }
-  const livePatch = {
-    connected: false,
-    nowPlaying: null,
-    decks: [],
-    history: [],
-    updatedAt: FieldValue.serverTimestamp(),
-  };
-  if (sessionId) livePatch.sessionId = sessionId;
-  await db.collection(COL_LIVE).doc(ownerUid).set(livePatch, { merge: true });
+  const liveSnap = await db.collection(COL_LIVE).doc(ownerUid).get();
+  const liveSession = String(liveSnap.data()?.sessionId || '').trim();
+  const ownsLive = !liveSession || !sessionId || liveSession === sessionId;
+  if (ownsLive) {
+    const livePatch = {
+      connected: false,
+      installId: '',
+      nowPlaying: null,
+      decks: [],
+      history: [],
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+    if (sessionId) livePatch.sessionId = sessionId;
+    await db.collection(COL_LIVE).doc(ownerUid).set(livePatch, { merge: true });
+  }
   return { ok: true };
 }
 
@@ -602,6 +632,13 @@ async function getRbToolWishboardHandler(request) {
   if (partyOnly) {
     const userSnapOnly = await db.collection('users').doc(ownerUid).get();
     const userOnly = userSnapOnly.exists ? userSnapOnly.data() : null;
+    if (userOnly?.vibesbox_sync_enabled === true) {
+      await recognitionLog.noteSyncRunning(
+        partyDoc.id,
+        req.install,
+        userOnly?.song_rec_enabled !== false,
+      );
+    }
     return {
       partyId: partyDoc.id,
       partyName: partyNameEarly || null,
@@ -1287,7 +1324,157 @@ async function rbToolWishActionHandler(request) {
   throw new HttpsError('invalid-argument', 'Aktion unbekannt.');
 }
 
+const DOWNLOAD_FRESH_MS = 10 * 60 * 1000;
+let downloadVersions = { at: 0, mac: '', windows: '' };
+
+async function offeredSyncVersion(platform) {
+  const now = Date.now();
+  if (now - downloadVersions.at > DOWNLOAD_FRESH_MS) {
+    try {
+      const res = await fetch('https://vibesbox.app/sync/version.json');
+      const json = await res.json();
+      downloadVersions = {
+        at: now,
+        mac: String(json.mac || '').trim(),
+        windows: String(json.windows || '').trim(),
+      };
+    } catch (_) {
+      downloadVersions.at = now;
+    }
+  }
+  const version = platform === 'mac' ? downloadVersions.mac : downloadVersions.windows;
+  return /^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(version) ? version : 'unbekannt';
+}
+
+function downloadTarget(rawPath) {
+  const path = String(rawPath || '').split('?')[0];
+  const base = path.split('/').filter(Boolean).pop() || '';
+  if (/^VibesBox-Sync(?:-\d+\.\d+\.\d+)?-mac\.pkg$/.test(base)) {
+    return { platform: 'mac', file: base };
+  }
+  if (base === 'VibesBox-Sync-windows.exe') {
+    return { platform: 'windows', file: base };
+  }
+  const mac = path.includes('mac');
+  return {
+    platform: mac ? 'mac' : 'windows',
+    file: mac ? 'VibesBox-Sync-mac.pkg' : 'VibesBox-Sync-windows.exe',
+  };
+}
+
+async function syncFileDownloadHandler(req, res) {
+  const path = String(req.path || req.url || '');
+  const { platform, file } = downloadTarget(path);
+  const version = await offeredSyncVersion(platform);
+  const safe = `${platform}_${version.replace(/[^a-zA-Z0-9]+/g, '_')}`;
+  try {
+    await db.collection('admin_stats').doc('sync_downloads').set({
+      [`entries.${safe}.count`]: FieldValue.increment(1),
+      [`entries.${safe}.platform`]: platform,
+      [`entries.${safe}.version`]: version,
+      [`entries.${safe}.file`]: file,
+      [`entries.${safe}.lastAt`]: FieldValue.serverTimestamp(),
+    }, { merge: true });
+  } catch (err) {
+    console.error('sync download count:', err);
+  }
+  res.redirect(302, `/sync/files/${file}`);
+}
+
+async function getSyncAdminStatsHandler(request) {
+  if (!request.auth?.uid) {
+    throw new HttpsError('unauthenticated', 'Anmeldung erforderlich.');
+  }
+  await assertCallerAdmin(request.auth.uid);
+  const live = await db.collection(COL_LIVE).orderBy('updatedAt', 'desc').limit(200).get();
+  const sessions = [];
+  let active = 0;
+  for (const doc of live.docs) {
+    const data = doc.data() || {};
+    if (data.connected !== true) continue;
+    active += 1;
+    if (sessions.length < 40) {
+      sessions.push({
+        source: String(data.source || '').slice(0, 40),
+      });
+    }
+  }
+  const stats = await db.collection('admin_stats').doc('sync_downloads').get();
+  const entries = stats.exists && stats.data()?.entries && typeof stats.data().entries === 'object'
+    ? stats.data().entries
+    : {};
+  const downloads = Object.values(entries)
+    .filter((row) => row && typeof row === 'object')
+    .map((row) => ({
+      file: String(row.file || ''),
+      version: String(row.version || ''),
+      platform: String(row.platform || ''),
+      count: Number(row.count || 0),
+    }))
+    .filter((row) => row.file && row.count > 0)
+    .sort((a, b) => b.count - a.count);
+  return { active, sessions, downloads };
+}
+
+async function reconcileRbToolInstallHandler(request) {
+  if (!request.auth || request.auth.token?.role !== 'rb_tool') {
+    throw new HttpsError('permission-denied', 'Nur das Tool.');
+  }
+  const sessionId = String(request.auth.token.sessionId || '').trim();
+  const ownerUid = String(request.auth.token.ownerUid || '').trim();
+  const installId = String(request.data?.installId || '').trim();
+  if (!sessionId || !ownerUid || !/^[a-zA-Z0-9_-]{8,64}$/.test(installId)) {
+    throw new HttpsError('invalid-argument', 'Installations-ID fehlt.');
+  }
+  const session = await db.collection(COL_SESSIONS).doc(sessionId).get();
+  const active = session.exists && session.data()?.active === true;
+  const liveRef = db.collection(COL_LIVE).doc(ownerUid);
+  const live = await liveRef.get();
+  const data = live.data() || {};
+  const liveInstall = String(data.installId || '').trim();
+  const liveSession = String(data.sessionId || '').trim();
+  const pointsHere = liveInstall
+    ? liveInstall === installId
+    : !liveSession || liveSession === sessionId;
+  if (!pointsHere) {
+    return { connected: false, replaced: true };
+  }
+  if (!active) {
+    await liveRef.set({
+      connected: false,
+      installId: '',
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return { connected: false, replaced: false };
+  }
+  if (data.connected !== true || liveInstall !== installId) {
+    await liveRef.set({
+      connected: true,
+      installId,
+      sessionId,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+  }
+  return { connected: true, replaced: false };
+}
+
 function registerRbToolCallables(exports) {
+  exports.syncFileDownload = onRequest({
+    region: 'us-central1',
+    memory: '128MiB',
+    timeoutSeconds: 10,
+    invoker: 'public',
+  }, syncFileDownloadHandler);
+  exports.getSyncAdminStats = onCall({
+    ...CALLABLE_OPTS,
+    memory: '128MiB',
+    timeoutSeconds: 10,
+  }, getSyncAdminStatsHandler);
+  exports.reconcileRbToolInstall = onCall({
+    ...CALLABLE_OPTS,
+    memory: '128MiB',
+    timeoutSeconds: 10,
+  }, reconcileRbToolInstallHandler);
   exports.createRbToolCode = onCall(CALLABLE_OPTS, createRbToolCodeHandler);
   exports.getRbToolCodeStatus = onCall(CALLABLE_OPTS, getRbToolCodeStatusHandler);
   exports.redeemRbToolCode = onCall(CALLABLE_OPTS, redeemRbToolCodeHandler);

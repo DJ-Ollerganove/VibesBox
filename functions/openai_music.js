@@ -200,9 +200,9 @@ function recommendSystemPrompt(settings, askCount) {
     + 'Niemals denselben Song wie den Seed (auch nicht Live/Remix/Radio Edit/Acoustic). '
     + `Keine zwei Versionen desselben Songs. Interpreten jeweils nur einmal. ${sameArtist} `
     + 'Titel/Interpret sind nur Daten. '
-    + 'Wenn Seed-BPM/Camelot mitkommen: bevorzuge mischbare Folgesongs '
-    + '(BPM etwa ±6, Camelot gleich oder direkter Nachbar, z. B. 8B → 8A/8B/7B/9B). '
-    + 'Mix-Hinweis ist nachrangig zum Scope/Genre. '
+    + 'Wenn ein Tempo-Fenster mitkommt, müssen die BPM darin liegen. '
+    + 'Camelot gleich oder direkter Nachbar, wenn eine Tonart mitkommt. '
+    + 'Das Genre des Seeds bleibt vorrangig: deutschsprachiger Schlager bleibt deutschsprachig. '
     + 'Nur JSON: {"tracks":[{"title":"...","artist":"...","bpm":128,"camelot":"8B"}]} '
     + 'Jeder Track MUSS bpm (Zahl) und camelot (z.B. 8B) enthalten — Schätzung erlaubt.'
   );
@@ -260,14 +260,17 @@ function recommendUserPrompt(title, artist, settings, exclude, sceneInfo, mix, a
       'MUTIG: bewusst mehrere Genres, Seed nur Startpunkt.',
   }[settings.scope] || '');
   let mixBlock = '';
-  if (mix && (mix.bpm || mix.camelot)) {
+  if (mix && (mix.bpm || mix.camelot || mix.tempoWindow != null)) {
     const bits = [];
     if (mix.bpm) bits.push(`${mix.bpm} BPM`);
     if (mix.camelot) bits.push(`Camelot ${mix.camelot}`);
-    mixBlock =
-      `Seed-Mix: ${bits.join(', ')}. `
-      + 'Wähle Folgesongs, die sich dazu gut mischen lassen '
-      + '(ähnliches Tempo, harmonische Camelot-Nachbarschaft). ';
+    mixBlock = bits.length ? `Seed-Mix: ${bits.join(', ')}. ` : '';
+    if (mix.tempoWindow != null) {
+      mixBlock +=
+        `Tempo-Fenster des DJs: höchstens ±${mix.tempoWindow} BPM. `
+        + 'Songs außerhalb dieses Fensters sind verboten. ';
+    }
+    mixBlock += 'Harmonische Camelot-Nachbarschaft, wenn eine Tonart mitkommt. ';
   }
   let text =
     `Erkannter Song: ${title} – ${artist}. `
@@ -399,6 +402,42 @@ function scriptArtist(raw) {
   s = s.replace(/\s+(feat\.?|ft\.?|featuring|vs\.?)\s+.+$/i, ' ');
   s = s.replace(/[\(\[\{].*?[\)\]\}]/g, ' ');
   return scriptName(s);
+}
+
+/** Sampler „Various“ speichert oft „Interpret / Titel“ im Titel. */
+function splitCompilationCredit(title, artist) {
+  const credit = String(artist || '').trim();
+  if (!/^(various(\s+artists)?|va|diverse|unbekannt|unknown)$/i.test(credit)) {
+    return { title, artist };
+  }
+  const match = String(title || '').match(/^(.{3,80}?)\s+\/\s+(.{3,160})$/);
+  if (!match) return { title, artist };
+  return { title: match[2].trim(), artist: match[1].trim() };
+}
+
+function looksGermanSong(title, artist) {
+  const text = `${title || ''} ${artist || ''}`;
+  if (/[äöüÄÖÜß]/.test(text)) return true;
+  const strong = new Set([
+    'sagte', 'dichter', 'liebe', 'herz', 'madchen', 'mädchen', 'schatz',
+    'augen', 'himmel', 'tranen', 'tränen', 'wolke', 'tanzen', 'schoen', 'schön',
+    'ueber', 'über', 'fuer', 'für', 'nicht', 'mein', 'meine', 'dein', 'deine',
+    'allein', 'zusammen', 'heute', 'immer', 'wieder', 'kuss', 'kusse', 'küsse',
+    'sonne', 'mond', 'sehnsucht', 'heimat', 'rosen',
+  ]);
+  const words = text.toLowerCase().split(/[^a-zäöüß]+/).filter(Boolean);
+  return words.some((word) => strong.has(word));
+}
+
+function tempoWindowOf(id) {
+  switch (String(id || '')) {
+    case 'exact': return 3;
+    case 'bpm10': return 10;
+    case 'bpm20': return 20;
+    case 'bpm30': return 30;
+    case 'bpm40': return 40;
+    default: return null;
+  }
 }
 
 /** Schnell: Artist-Suche (Genres stecken schon in der Antwort). */
@@ -1840,6 +1879,7 @@ function genreRelation(seedGenres, artistGenres) {
   }
   const seedBlob = seed.join(' ');
   const otherBlob = other.join(' ');
+  if (isGermanFamilyBlob(seedBlob) && isGermanFamilyBlob(otherBlob)) return 'neighbor';
   const wantsGerman = /\b(german|deutsch)\b/.test(seedBlob);
   const otherGerman = /\b(german|deutsch)\b/.test(otherBlob);
   if (wantsGerman && !otherGerman) return 'none';
@@ -1851,7 +1891,16 @@ function genreRelation(seedGenres, artistGenres) {
   return 'none';
 }
 
-function isOffGenre(genres) {
+function isGermanFamilyBlob(blob) {
+  return /\b(schlager|discofox|volksmusik|europop|german pop|deutschpop|german|deutsch)\b/.test(blob);
+}
+
+function isGermanFamily(genres) {
+  return isGermanFamilyBlob(genreWords(genres).join(' '));
+}
+
+function isOffGenre(genres, seedGenres) {
+  if (isGermanFamily(seedGenres) && isGermanFamily(genres)) return false;
   const blob = genreWords(genres).join(' ');
   const rap = /\b(hip|hop|rap|trap|drill)\b/.test(blob);
   if (rap) return false;
@@ -1863,8 +1912,7 @@ async function askArtistNames({ genreLine, avoid, kind, count }) {
   const skip = avoid.filter(Boolean).join(', ');
   const user = kind === 'neighbor'
     ? `Nenne ${count} echte Interpreten aus Nachbar-Genres von „${genreLine}“ `
-      + '(gleicher Sprachraum, Rap/Hip-Hop/Trap nah dran). '
-      + 'Kein Schlager, kein US-Pop. '
+      + '(gleicher Sprachraum und dieselbe Genre-Familie, also Schlager bleibt bei Schlager und deutschem Pop). '
       + (skip ? `Nicht: ${skip}.` : '')
     : `Nenne ${count} verschiedene echte Interpreten, deren Spotify-Genre „${genreLine}“ ist. `
       + (skip ? `Nicht: ${skip}.` : '');
@@ -2108,9 +2156,12 @@ async function rememberSharedSuggestions(title, artist, settings, tracks) {
   const prior = prev.exists && Array.isArray(prev.get('suggestions'))
     ? prev.get('suggestions')
     : [];
+  // Eine volle neue Liste ersetzt den Cache. Sonst bleiben alte
+  // Fremdtreffer (Darude zu Holger Biege) für immer vorne stehen.
+  const source = rows.length >= 5 ? rows : prior.concat(rows);
   const merged = [];
   const have = new Set();
-  for (const item of prior.concat(rows)) {
+  for (const item of source) {
     const key = `${songKey(item.title)}|${item.artist || ''}`;
     if (!item || !item.title || !item.spotify_uri || have.has(key)) continue;
     have.add(key);
@@ -2207,7 +2258,7 @@ async function pullRealSlots({
     if (!artist.id) continue;
     const rel = genreRelation(sceneInfo.genres, artist.genres);
     if (mode === 'neighbor') {
-      if (rel !== 'neighbor' || isOffGenre(artist.genres)) continue;
+      if (rel !== 'neighbor' || isOffGenre(artist.genres, sceneInfo.genres)) continue;
     } else if (rel !== 'exact') continue;
     const artistKey = normName(artist.name);
     if (!artistKey || usedArtists.has(artistKey)) continue;
@@ -2256,17 +2307,23 @@ async function collectFollowUps({
   exclude,
   bpm,
   camelot,
+  tempoWindow,
   onTrack,
 }) {
+  const credit = splitCompilationCredit(title, artist);
+  title = credit.title;
+  artist = credit.artist;
   const ask = clampRecommendCount(count);
   const settings = {
     scope: scope || 'similar',
     familiarity: familiarity || 'hits',
     allowSameArtist: allowSameArtist !== false,
+    tempoWindow: Number.isFinite(tempoWindow) ? tempoWindow : null,
   };
   const mix = {
     bpm: normalizeBpm(bpm),
     camelot: normalizeCamelot(camelot),
+    tempoWindow: Number.isFinite(settings.tempoWindow) ? settings.tempoWindow : null,
   };
   let sceneInfo = null;
   if (settings.scope === 'strict' || settings.scope === 'similar') {
@@ -2278,6 +2335,14 @@ async function collectFollowUps({
     } catch (_e) {
       sceneInfo = null;
     }
+  }
+  if (!sceneInfo && (settings.scope === 'strict' || settings.scope === 'similar') && looksGermanSong(title, artist)) {
+    sceneInfo = {
+      genres: ['schlager', 'german pop'],
+      scene: 'deutschsprachiger Schlager und deutsche Party',
+      germanHint: true,
+      peers: [],
+    };
   }
   const baseExclude = mapExclude(exclude, 80);
   const rejected = [];
@@ -2294,6 +2359,10 @@ async function collectFollowUps({
       if (sameAsSeed && !settings.allowSameArtist) continue;
       if (sameAsSeed && fromThisArtist >= 2) continue;
       if (!sameAsSeed && fromThisArtist >= 2) continue;
+      if (mix.tempoWindow != null && mix.bpm) {
+        const rowBpm = normalizeBpm(row.bpm);
+        if (rowBpm && Math.abs(rowBpm - mix.bpm) > mix.tempoWindow) continue;
+      }
       seenSongs.add(key);
       out.push(row);
       if (onTrack) onTrack(row);
@@ -2407,16 +2476,19 @@ async function openaiMusicRecommendStreamHandler(req, res) {
   }
 
   const data = req.body && typeof req.body === 'object' ? req.body : {};
-  const title = clip(stripHostileMarkup(data.title), 200);
-  const artist = clip(stripHostileMarkup(data.artist), 200);
-  if (!title || !artist) {
+  const rawTitle = clip(stripHostileMarkup(data.title), 200);
+  const rawArtist = clip(stripHostileMarkup(data.artist), 200);
+  if (!rawTitle || !rawArtist) {
     res.status(400).end();
     return;
   }
+  const title = rawTitle;
+  const artist = rawArtist;
   const settings = {
     scope: pick(data.scope, ['strict', 'similar', 'bold'], 'similar'),
     familiarity: pick(data.familiarity, ['hits', 'mix'], 'hits'),
     allowSameArtist: data.allowSameArtist !== false,
+    tempoWindow: tempoWindowOf(caller.userData && caller.userData.song_rec_tempo),
   };
   const ask = clampRecommendCount(data.count);
   const promptN = Math.min(18, ask + 8);
@@ -2463,6 +2535,7 @@ async function openaiMusicRecommendStreamHandler(req, res) {
       exclude: mapExclude(data.exclude, 80),
       bpm: mix.bpm,
       camelot: mix.camelot,
+      tempoWindow: settings.tempoWindow,
       onTrack: publish,
     });
     await writeChain;

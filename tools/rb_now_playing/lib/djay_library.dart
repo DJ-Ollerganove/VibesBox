@@ -406,10 +406,12 @@ double? extractDjayDouble(Uint8List blob, String key) {
     final isLetter = (byte >= 0x41 && byte <= 0x5a) || (byte >= 0x61 && byte <= 0x7a);
     if (isLetter) letters++;
   }
-  if (letters > 2) return null;
   final value = ByteData.sublistView(blob, keyPos - 8, keyPos)
       .getFloat64(0, Endian.little);
   if (!value.isFinite) return null;
+  // Mantissen von CFAbsoluteTime enthalten oft Buchstaben-Bytes (z. B. 0x41).
+  // Textreste wie der nackte Schlüssel playCount bleiben draußen.
+  if (letters > 2 && (value < 1e8 || value > 2e9)) return null;
   return value;
 }
 

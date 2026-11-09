@@ -96,11 +96,12 @@ Zuerst bauen:
 Test-BinaryMagic -Path $SetupExe -Magic ([byte[]](0x4D, 0x5A)) -MinBytes 5MB -Label 'Windows-Setup'
 
 $DestDir = Join-Path $RepoRoot 'public\sync'
-New-Item -ItemType Directory -Force -Path $DestDir | Out-Null
+$FileDir = Join-Path $DestDir 'files'
+New-Item -ItemType Directory -Force -Path $FileDir | Out-Null
 
 # Mac: feste Datei; echte PKG von Live holen (nie HTML speichern)
 $MacStable = "VibesBox-Sync-mac.pkg"
-$MacPath = Join-Path $DestDir $MacStable
+$MacPath = Join-Path $FileDir $MacStable
 $macOk = $false
 if (Test-Path $MacPath) {
   try {
@@ -149,15 +150,15 @@ if (-not $macOk) {
 }
 
 $DestName = "VibesBox-Sync-windows.exe"
-$DestPath = Join-Path $DestDir $DestName
+$DestPath = Join-Path $FileDir $DestName
 
-Write-Host "==> Kopiere Windows-Installer nach public\sync\$DestName" -ForegroundColor Cyan
+Write-Host "==> Kopiere Windows-Installer nach public\sync\files\$DestName" -ForegroundColor Cyan
 Copy-Item -Force $SetupExe $DestPath
 Test-BinaryMagic -Path $DestPath -Magic ([byte[]](0x4D, 0x5A)) -MinBytes 5MB -Label 'Windows-Hosting-EXE'
 Write-Host ("OK: {0} ({1} MB)" -f $DestPath, [math]::Round((Get-Item $DestPath).Length / 1MB, 1))
 
 # Alte versionsierte Windows-EXEs entfernen
-Get-ChildItem -Path $DestDir -Filter 'VibesBox-Sync-*-windows.exe' -ErrorAction SilentlyContinue |
+Get-ChildItem -Path $FileDir -Filter 'VibesBox-Sync-*-windows.exe' -ErrorAction SilentlyContinue |
   ForEach-Object {
     Write-Host ("Entferne alte versionsierte Datei: {0}" -f $_.Name) -ForegroundColor Yellow
     Remove-Item -Force $_.FullName

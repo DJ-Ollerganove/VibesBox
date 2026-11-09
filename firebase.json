@@ -11,19 +11,49 @@
   "hosting": {
     "public": "public",
     "ignore": ["firebase.json", "**/node_modules/**"],
-    "redirects": [
-      {
-        "source": "/download/vibesbox-sync-windows",
-        "destination": "/sync/VibesBox-Sync-windows.exe",
-        "type": 302
-      },
+    "rewrites": [
       {
         "source": "/download/vibesbox-sync-mac",
-        "destination": "/sync/VibesBox-Sync-mac.pkg",
-        "type": 302
-      }
-    ],
-    "rewrites": [
+        "function": {
+          "functionId": "syncFileDownload",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/download/vibesbox-sync-windows",
+        "function": {
+          "functionId": "syncFileDownload",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/sync/VibesBox-Sync-mac.pkg",
+        "function": {
+          "functionId": "syncFileDownload",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/sync/VibesBox-Sync-windows.exe",
+        "function": {
+          "functionId": "syncFileDownload",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/sync/*.pkg",
+        "function": {
+          "functionId": "syncFileDownload",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/sync/*.exe",
+        "function": {
+          "functionId": "syncFileDownload",
+          "region": "us-central1"
+        }
+      },
       { "source": "/invite", "destination": "/invite.html" },
       { "source": "/invite/**", "destination": "/invite.html" },
       { "source": "/dj", "destination": "/dj/index.html" },
@@ -166,7 +196,7 @@
         ]
       },
       {
-        "source": "/sync/VibesBox-Sync-windows.exe",
+        "source": "/sync/files/VibesBox-Sync-windows.exe",
         "headers": [
           { "key": "Content-Type", "value": "application/octet-stream" },
           { "key": "Content-Disposition", "value": "attachment; filename=\"VibesBox-Sync-windows.exe\"" },
@@ -174,7 +204,7 @@
         ]
       },
       {
-        "source": "/sync/VibesBox-Sync-mac.pkg",
+        "source": "/sync/files/VibesBox-Sync-mac.pkg",
         "headers": [
           { "key": "Content-Type", "value": "application/octet-stream" },
           { "key": "Content-Disposition", "value": "attachment; filename=\"VibesBox-Sync-mac.pkg\"" },
@@ -182,14 +212,14 @@
         ]
       },
       {
-        "source": "/sync/*.pkg",
+        "source": "/sync/files/*.pkg",
         "headers": [
           { "key": "Content-Type", "value": "application/octet-stream" },
           { "key": "Content-Disposition", "value": "attachment; filename=\"VibesBox-Sync-mac.pkg\"" }
         ]
       },
       {
-        "source": "/sync/*.exe",
+        "source": "/sync/files/*.exe",
         "headers": [
           { "key": "Content-Type", "value": "application/octet-stream" },
           { "key": "Content-Disposition", "value": "attachment; filename=\"VibesBox-Sync-windows.exe\"" }

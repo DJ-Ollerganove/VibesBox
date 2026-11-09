@@ -1870,6 +1870,7 @@ class ShazamService {
     String? camelot,
     String? musicalKey,
     int? durationSec,
+    bool skipHistory = false,
   }) async {
     final t = title.trim();
     final a = artist.trim();
@@ -1894,6 +1895,8 @@ class ShazamService {
     _resultController.add(songData);
 
     unawaited(_ensureExternalRecognitionKeepalive());
+
+    if (skipHistory) return true;
 
     final historyKey = '${t.toLowerCase()}|${a.toLowerCase()}';
     var saved = _lastHistoryPersistedKey == historyKey;

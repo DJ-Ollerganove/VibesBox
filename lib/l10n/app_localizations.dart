@@ -2047,6 +2047,27 @@ class AppLocalizations {
   String get vibesbox_sync_generate_code =>
       translate('vibesbox_sync_generate_code');
   String get vibesbox_sync_connected => translate('vibesbox_sync_connected');
+  String vibesbox_sync_logged_in(String device) =>
+      tp('vibesbox_sync_logged_in', {'device': device});
+  String get vibesbox_sync_logged_in_plain =>
+      translate('vibesbox_sync_logged_in_plain');
+  String vibesbox_sync_needs_code(String device) =>
+      tp('vibesbox_sync_needs_code', {'device': device});
+  String get vibesbox_sync_needs_code_plain =>
+      translate('vibesbox_sync_needs_code_plain');
+  String get admin_sync_active_title => translate('admin_sync_active_title');
+  String admin_sync_active_count(String count) =>
+      tp('admin_sync_active_count', {'count': count});
+  String get admin_sync_downloads_title =>
+      translate('admin_sync_downloads_title');
+  String get admin_sync_downloads_empty =>
+      translate('admin_sync_downloads_empty');
+  String admin_sync_download_row(String file, String version, String count) =>
+      tp('admin_sync_download_row', {
+        'file': file,
+        'version': version,
+        'count': count,
+      });
   String get vibesbox_sync_code_title => translate('vibesbox_sync_code_title');
   String get vibesbox_sync_code_body => translate('vibesbox_sync_code_body');
   String get vibesbox_sync_waiting => translate('vibesbox_sync_waiting');
@@ -2430,6 +2451,15 @@ class AppLocalizations {
   String get dj_quickstart_h1_permissions => translate('dj_quickstart_h1_permissions');
   String get dj_quickstart_h1_prewishes => translate('dj_quickstart_h1_prewishes');
   String get dj_quickstart_h1_vibesbox => translate('dj_quickstart_h1_vibesbox');
+  String get dj_quickstart_h1_browser => translate('dj_quickstart_h1_browser');
+  String get dj_quickstart_h1_sync => translate('dj_quickstart_h1_sync');
+  String get dj_quickstart_h1_songrec => translate('dj_quickstart_h1_songrec');
+  String get dj_quickstart_h1_blacklist =>
+      translate('dj_quickstart_h1_blacklist');
+  String get dj_quickstart_h1_setlist => translate('dj_quickstart_h1_setlist');
+  String get dj_quickstart_h1_wishbox_suggest =>
+      translate('dj_quickstart_h1_wishbox_suggest');
+  String get dj_quickstart_h1_display => translate('dj_quickstart_h1_display');
   String get dj_quickstart_p_b2b => translate('dj_quickstart_p_b2b');
   String get dj_quickstart_p_free_pro => translate('dj_quickstart_p_free_pro');
   String get dj_quickstart_p_grace => translate('dj_quickstart_p_grace');
@@ -2437,6 +2467,14 @@ class AppLocalizations {
   String get dj_quickstart_p_permissions => translate('dj_quickstart_p_permissions');
   String get dj_quickstart_p_prewishes => translate('dj_quickstart_p_prewishes');
   String get dj_quickstart_p_vibesbox => translate('dj_quickstart_p_vibesbox');
+  String get dj_quickstart_p_browser => translate('dj_quickstart_p_browser');
+  String get dj_quickstart_p_sync => translate('dj_quickstart_p_sync');
+  String get dj_quickstart_p_songrec => translate('dj_quickstart_p_songrec');
+  String get dj_quickstart_p_blacklist => translate('dj_quickstart_p_blacklist');
+  String get dj_quickstart_p_setlist => translate('dj_quickstart_p_setlist');
+  String get dj_quickstart_p_wishbox_suggest =>
+      translate('dj_quickstart_p_wishbox_suggest');
+  String get dj_quickstart_p_display => translate('dj_quickstart_p_display');
   String get dj_qr_no_guest_wishbox_title =>
       translate('dj_qr_no_guest_wishbox_title');
   String get dj_qr_no_guest_wishbox_body =>

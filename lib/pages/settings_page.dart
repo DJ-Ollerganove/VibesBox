@@ -6,12 +6,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../l10n/app_localizations.dart';
-import '../widgets/audio_settings_card.dart';
+import '../widgets/recognition_source_settings_card.dart';
 import '../widgets/song_recommendation_settings_card.dart';
 import '../widgets/song_blacklist_settings_card.dart';
 import '../widgets/custom_page_header.dart';
-import '../widgets/settings_help_dialog.dart';
-import '../widgets/settings_info_icon_button.dart';
+import '../widgets/settings_choice_row.dart';
 import '../services/pro_feature_guard.dart';
 import '../services/shazam_service.dart';
 import '../services/translation_settings_service.dart';
@@ -28,9 +27,7 @@ import '../config/app_config.dart';
 import '../models/user_model.dart';
 import '../pages/diagnostic_log_page.dart';
 import '../services/app_diagnostic_log_service.dart';
-import '../utils/ui_constants.dart';
 import '../app_scaffold_messenger.dart';
-import '../widgets/vibesbox_sync_settings_section.dart';
 import '../services/vibesbox_sync_service.dart';
 import 'package:vibesbox/l10n/text_direction_helper.dart';
 class SettingsPage extends StatefulWidget {
@@ -44,10 +41,36 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _showGreetingTranslations = true;
   bool _wishboxSuggestionsEnabled = true;
   bool _isLoading = true;
+  DjRecognitionChoice _inputChoice = DjRecognitionChoice.microphone;
   @override
   void initState() {
     super.initState();
+    VibesBoxSyncService.instance.addListener(_onSyncChoiceChanged);
     _loadSettings();
+  }
+
+  @override
+  void dispose() {
+    VibesBoxSyncService.instance.removeListener(_onSyncChoiceChanged);
+    super.dispose();
+  }
+
+  Future<void> _onSyncChoiceChanged() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || !mounted) return;
+    final stored = await DjRecognitionChoiceStore.read(uid);
+    if (!mounted || stored == null || stored == _inputChoice) return;
+    setState(() => _inputChoice = stored);
+  }
+
+  Future<void> _applySyncFlag(DjRecognitionChoice choice) async {
+    final sync = VibesBoxSyncService.instance;
+    if (choice == DjRecognitionChoice.sync && !sync.isVisibleForCurrentUser) {
+      return;
+    }
+    final want = choice == DjRecognitionChoice.sync;
+    if (sync.enabled == want) return;
+    await sync.setEnabled(want);
   }
 
   Future<void> _loadSettings() async {
@@ -56,6 +79,20 @@ class _SettingsPageState extends State<SettingsPage> {
       final wishboxSuggestions =
           await WishboxSuggestionsSettingsService.isEnabledForDj();
       final uid = FirebaseAuth.instance.currentUser?.uid;
+      var inputChoice = DjRecognitionChoice.microphone;
+      if (uid != null) {
+        final stored = await DjRecognitionChoiceStore.read(uid);
+        final sync = VibesBoxSyncService.instance;
+        if (stored == null &&
+            sync.enabled &&
+            sync.isVisibleForCurrentUser) {
+          inputChoice = DjRecognitionChoice.sync;
+          await DjRecognitionChoiceStore.save(uid, inputChoice);
+        } else {
+          inputChoice = stored ?? DjRecognitionChoice.microphone;
+          await _applySyncFlag(inputChoice);
+        }
+      }
       if (uid != null) {
         final guestSnap =
             await WishboxSuggestionsSettingsService.guestLiveRef(uid).get();
@@ -70,12 +107,22 @@ class _SettingsPageState extends State<SettingsPage> {
         setState(() {
           _showGreetingTranslations = enabled;
           _wishboxSuggestionsEnabled = wishboxSuggestions;
+          _inputChoice = inputChoice;
           _isLoading = false;
         });
       }
     } catch (e) {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  Future<void> _setInputChoice(DjRecognitionChoice choice) async {
+    if (choice == _inputChoice) return;
+    setState(() => _inputChoice = choice);
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    await DjRecognitionChoiceStore.save(uid, choice);
+    await _applySyncFlag(choice);
   }
 
   Future<void> _saveSetting(bool value) async {
@@ -173,47 +220,6 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  /// Fließtext strikt am Start (links in LTR), Switch am Ende (rechts in LTR).
-  Widget _djNotifySwitchRow({
-    required bool isRtl,
-    required String label,
-    required bool value,
-    required ValueChanged<bool>? onChanged,
-    required Color labelColor,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Directionality(
-        textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Expanded(
-              child: Align(
-                alignment: AlignmentDirectional.centerStart,
-                child: Text(
-                  label,
-                  textAlign: TextAlign.start,
-                  style: TextStyle(
-                    color: labelColor,
-                    fontSize: 13,
-                    height: 1.25,
-                  ),
-                ),
-              ),
-            ),
-            Switch(
-              value: value,
-              onChanged: onChanged,
-              activeThumbColor: UIConstants.appOrange,
-              activeTrackColor: UIConstants.appOrange.withValues(alpha: 0.42),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
@@ -252,71 +258,58 @@ class _SettingsPageState extends State<SettingsPage> {
                 ListenableBuilder(
                   listenable: Listenable.merge([
                     UserService().currentUser,
+                    UserService().sessionProStatus,
                     VibesBoxSyncService.instance,
                   ]),
                   builder: (context, _) {
-                    final allowed =
-                        VibesBoxSyncService.instance.isVisibleForCurrentUser;
+                    final djUser = UserService().currentUser.value;
+                    final canUse = ProFeatureGuard.canUseMusicRecognitionNow(
+                      user: user,
+                    );
+                    final session = UserService().sessionProStatus.value;
                     return Container(
+                      key: ValueKey(
+                        '${djUser?.planType}_${djUser?.trialUntil?.millisecondsSinceEpoch}_${session?.isActive}',
+                      ),
                       margin: const EdgeInsets.only(bottom: 16),
                       decoration: BoxDecoration(
                         color: const Color(0xFF1E1E1E),
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: allowed ? Colors.orange : Colors.white24,
-                          width: 1.5,
+                        border: Border.all(color: Colors.orange, width: 1.5),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(12.0),
+                        child: RecognitionSourceSettingsCard(
+                          choice: _inputChoice,
+                          canUsePremium: canUse,
+                          onChoice: (choice) {
+                            unawaited(_setInputChoice(choice));
+                          },
                         ),
                       ),
-                      child: const Padding(
-                        padding: EdgeInsets.all(12.0),
-                        child: VibesBoxSyncSettingsSection(),
-                      ),
-                    );
-                  },
-                ),
-              // Zelle 1: Audio/Mikrofon (Einstellungen bleiben unabhängig von VibesBox Sync)
-              if (user != null)
-                ValueListenableBuilder<SessionProStatus?>(
-                  valueListenable: UserService().sessionProStatus,
-                  builder: (context, session, _) {
-                    return ValueListenableBuilder<UserModel?>(
-                      valueListenable: UserService().currentUser,
-                      builder: (context, djUser, _) {
-                        final canUse = ProFeatureGuard.canUseMusicRecognitionNow(
-                          user: user,
-                        );
-                        return Container(
-                          key: ValueKey(
-                            '${djUser?.planType}_${djUser?.trialUntil?.millisecondsSinceEpoch}_${session?.isActive}',
-                          ),
-                          margin: const EdgeInsets.only(bottom: 16),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1E1E1E),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.orange, width: 1.5),
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.all(12.0),
-                            child: AudioSettingsCard(
-                              canUsePremium: canUse,
-                              cardBuilder: (context, child) => child,
-                            ),
-                          ),
-                        );
-                      },
                     );
                   },
                 ),
 
-              ValueListenableBuilder<UserModel?>(
-                valueListenable: UserService().currentUser,
-                builder: (context, userModel, _) {
+              ListenableBuilder(
+                listenable: Listenable.merge([
+                  UserService().currentUser,
+                  VibesBoxSyncService.instance,
+                ]),
+                builder: (context, _) {
+                  final userModel = UserService().currentUser.value;
                   if (user == null || userModel == null) {
                     return const SizedBox.shrink();
                   }
                   if (AppConfig.isGuestRole(userModel)) {
                     return const SizedBox.shrink();
                   }
+                  final sourceOn = _inputChoice ==
+                          DjRecognitionChoice.microphone ||
+                      (_inputChoice == DjRecognitionChoice.sync &&
+                          VibesBoxSyncService
+                              .instance.isVisibleForCurrentUser);
+                  if (!sourceOn) return const SizedBox.shrink();
                   return const SongRecommendationSettingsCard();
                 },
               ),
@@ -387,52 +380,18 @@ class _SettingsPageState extends State<SettingsPage> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Align(
-                                    alignment: AlignmentDirectional.topStart,
-                                    child: Text(
-                                      l.settings_section_notifications,
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 16,
-                                      ),
-                                      textAlign: TextAlign.start,
-                                    ),
-                                  ),
-                                ),
-                                SettingsInfoIconButton(
-                                  tooltip: l.settings_help_tooltip,
-                                  onPressed: () => showSettingsHelpFromL10n(
-                                    context,
-                                    titleKey: 'settings_section_notifications',
-                                    introKey: 'info_settings_notify_intro',
-                                    bullets: const [
-                                      (
-                                        'info_settings_notify_wishes',
-                                        'info_settings_notify_wishes_body',
-                                      ),
-                                      (
-                                        'info_settings_notify_sound',
-                                        'info_settings_notify_sound_body',
-                                      ),
-                                      (
-                                        'info_settings_notify_status',
-                                        'info_settings_notify_status_body',
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
+                            Text(
+                              l.settings_section_notifications,
+                              style: SettingsType.title.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
+                              textAlign: TextAlign.start,
                             ),
                             const SizedBox(height: 4),
-                            _djNotifySwitchRow(
-                              isRtl: isRtl,
-                              label: l.settings_notify_new_wishes,
+                            SettingsChoiceRow(
+                              title: l.settings_notify_new_wishes,
+                              hint: l.translate('info_settings_notify_wishes_body'),
                               value: notifyOn,
-                              labelColor: Colors.white70,
                               onChanged: (v) {
                                 unawaited((() async {
                                   final u =
@@ -456,13 +415,11 @@ class _SettingsPageState extends State<SettingsPage> {
                                 })());
                               },
                             ),
-                            _djNotifySwitchRow(
-                              isRtl: isRtl,
-                              label: l.settings_enable_notification_sound,
+                            SettingsChoiceRow(
+                              title: l.settings_enable_notification_sound,
+                              hint: l.translate('info_settings_notify_sound_body'),
                               value: soundOn,
-                              labelColor: notifyOn
-                                  ? Colors.white70
-                                  : Colors.white38,
+                              enabled: notifyOn,
                               onChanged: notifyOn
                                   ? (v) {
                                       unawaited((() async {
@@ -484,46 +441,42 @@ class _SettingsPageState extends State<SettingsPage> {
                                     }
                                   : null,
                             ),
-                            _djNotifySwitchRow(
-                              isRtl: isRtl,
-                              label: l.status_notification_enabled,
-                              value: statusBarOn,
-                              labelColor: Colors.white70,
-                              onChanged: (v) {
-                                unawaited((() async {
-                                  final u =
-                                      FirebaseAuth.instance.currentUser;
-                                  if (u == null) return;
-                                  await _onShowStatusNotificationToggle(
-                                    context,
-                                    u.uid,
-                                    v,
-                                  );
-                                })());
-                              },
-                            ),
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 4),
-                              child: Directionality(
-                                textDirection: isRtl
-                                    ? TextDirection.rtl
-                                    : TextDirection.ltr,
-                                child: Align(
-                                  alignment: AlignmentDirectional.centerStart,
-                                  child: Text(
-                                    l.shazamBackgroundHint,
-                                    textAlign: TextAlign.start,
-                                    style: TextStyle(
-                                      color: Colors.white.withValues(
-                                        alpha: 0.65,
+                            if (_inputChoice ==
+                                    DjRecognitionChoice.microphone ||
+                                (_inputChoice == DjRecognitionChoice.sync &&
+                                    VibesBoxSyncService
+                                        .instance.isVisibleForCurrentUser))
+                              SettingsChoiceRow(
+                                title: _inputChoice ==
+                                        DjRecognitionChoice.microphone
+                                    ? l.translate(
+                                        'settings_notify_source_mic_title',
+                                      )
+                                    : l.translate(
+                                        'settings_notify_source_sync_title',
                                       ),
-                                      fontSize: 12,
-                                      height: 1.3,
-                                    ),
-                                  ),
-                                ),
+                                hint: _inputChoice ==
+                                        DjRecognitionChoice.microphone
+                                    ? l.translate(
+                                        'settings_notify_source_mic_hint',
+                                      )
+                                    : l.translate(
+                                        'settings_notify_source_sync_hint',
+                                      ),
+                                value: statusBarOn,
+                                onChanged: (v) {
+                                  unawaited((() async {
+                                    final u =
+                                        FirebaseAuth.instance.currentUser;
+                                    if (u == null) return;
+                                    await _onShowStatusNotificationToggle(
+                                      context,
+                                      u.uid,
+                                      v,
+                                    );
+                                  })());
+                                },
                               ),
-                            ),
                           ],
                         ),
                       ),
@@ -556,50 +509,19 @@ class _SettingsPageState extends State<SettingsPage> {
                             ? CrossAxisAlignment.end
                             : CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  l.settings_wishbox_suggestions_title,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                  ),
-                                ),
-                              ),
-                              SettingsInfoIconButton(
-                                tooltip: l.settings_help_tooltip,
-                                onPressed: () => showSettingsHelpFromL10n(
-                                  context,
-                                  titleKey: 'settings_wishbox_suggestions_title',
-                                  introKey: 'info_settings_wishbox_intro',
-                                  bullets: const [
-                                    (
-                                      'info_settings_wishbox_toggle',
-                                      'info_settings_wishbox_toggle_body',
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          SwitchListTile(
-                            contentPadding: EdgeInsets.zero,
-                            title: Text(
-                              l.settings_wishbox_suggestions_subtitle,
-                              style: const TextStyle(
-                                color: Colors.white70,
-                                fontSize: 13,
-                              ),
+                          Text(
+                            l.settings_wishbox_suggestions_title,
+                            style: SettingsType.title.copyWith(
+                              fontWeight: FontWeight.bold,
                             ),
+                          ),
+                          SettingsChoiceRow(
+                            title: settingsPlainLabel(
+                              l.translate('info_settings_wishbox_toggle'),
+                            ),
+                            hint: l.translate('info_settings_wishbox_toggle_body'),
                             value: _wishboxSuggestionsEnabled,
-                            activeThumbColor: Colors.orange,
                             onChanged: _saveWishboxSuggestions,
-                            controlAffinity: isRtl
-                                ? ListTileControlAffinity.leading
-                                : ListTileControlAffinity.trailing,
                           ),
                         ],
                       ),
@@ -633,50 +555,21 @@ class _SettingsPageState extends State<SettingsPage> {
                             ? CrossAxisAlignment.end
                             : CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  l.translation_settings_title,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                  ),
-                                ),
-                              ),
-                              SettingsInfoIconButton(
-                                tooltip: l.settings_help_tooltip,
-                                onPressed: () => showSettingsHelpFromL10n(
-                                  context,
-                                  titleKey: 'translation_settings_title',
-                                  introKey: 'info_settings_translation_intro',
-                                  bullets: const [
-                                    (
-                                      'info_settings_translation_toggle',
-                                      'info_settings_translation_toggle_body',
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
+                          Text(
+                            l.translation_settings_title,
+                            style: SettingsType.title.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
-                          const SizedBox(height: 8),
-                          SwitchListTile(
-                            contentPadding: EdgeInsets.zero,
-                            title: Text(
-                              l.translation_settings_description,
-                              style: const TextStyle(
-                                color: Colors.white70,
-                                fontSize: 13,
-                              ),
+                          SettingsChoiceRow(
+                            title: settingsPlainLabel(
+                              l.translate('info_settings_translation_toggle'),
+                            ),
+                            hint: l.translate(
+                              'info_settings_translation_toggle_body',
                             ),
                             value: _showGreetingTranslations,
-                            activeThumbColor: Colors.orange,
                             onChanged: _saveSetting,
-                            controlAffinity: isRtl
-                                ? ListTileControlAffinity.leading
-                                : ListTileControlAffinity.trailing,
                           ),
                         ],
                       ),
@@ -702,17 +595,13 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                     title: Text(
                       l.diagnostic_log_title,
-                      style: const TextStyle(
-                        color: Colors.white,
+                      style: SettingsType.title.copyWith(
                         fontWeight: FontWeight.bold,
                       ),
                     ),
                     subtitle: Text(
                       l.diagnostic_log_settings_subtitle,
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.65),
-                        fontSize: 12,
-                      ),
+                      style: SettingsType.hint,
                     ),
                     trailing: const Icon(
                       Icons.chevron_right,

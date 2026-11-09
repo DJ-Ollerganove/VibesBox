@@ -15,6 +15,7 @@ import 'dj_source_factory.dart';
 import 'library_drag.dart';
 import 'library_match.dart';
 import 'library_store.dart';
+import 'music_search_rules.dart';
 import 'song_catalog.dart';
 import 'tidal_lookup.dart';
 import 'rekordbox_history.dart';
@@ -70,6 +71,7 @@ class _CopyTitleButton extends StatelessWidget {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  unawaited(MusicSearchRulesStore.instance.start());
   await toolI18n.load();
   final session = ToolSession();
   await session.restore();
@@ -136,7 +138,8 @@ class NowPlayingPage extends StatefulWidget {
   State<NowPlayingPage> createState() => _NowPlayingPageState();
 }
 
-class _NowPlayingPageState extends State<NowPlayingPage> {
+class _NowPlayingPageState extends State<NowPlayingPage>
+    with WidgetsBindingObserver {
   static const _cOffen = Color(0xFF2196F3);
   static const _cGespielt = Color(0xFF4CAF50);
   static const _cAbgelehnt = Color(0xFFFF9800);
@@ -216,6 +219,7 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     _library.addListener(_onLibrary);
     _djPrefs.addListener(_onDjPrefs);
     _tidal.addListener(_onTidal);
+    WidgetsBinding.instance.addObserver(this);
     unawaited(_prepareDjWatch());
     unawaited(_bootGate());
     Future<void>.delayed(const Duration(milliseconds: 1400), () {
@@ -242,6 +246,23 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
       _updateDismissed = dismissed;
     });
     _armIfAllowed();
+  }
+
+  Future<void> _reloadPolicy() async {
+    final policy = await SyncToolPolicy.load();
+    final dismissed = await UpdateDismissStore.isDismissed(policy.latest);
+    if (!mounted) return;
+    setState(() {
+      _policy = policy;
+      _updateDismissed = dismissed;
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_reloadPolicy());
+    }
   }
 
   void _armIfAllowed() {
@@ -334,6 +355,7 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     widget.session.removeListener(_onSessionChanged);
     _wishboard.removeListener(_onWishboard);
     _library.removeListener(_onLibrary);
@@ -1061,13 +1083,15 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     if (_suggestions.isEmpty) return;
     final now = _shownHit?.track;
     if (now == null) return;
-    final want = _wishboard.recCount.clamp(1, 20);
+    final want = _wishboard.recCount.clamp(
+      1,
+      MusicSearchRulesStore.instance.current.maxCount,
+    );
     final next = withoutSameAsPlaying(
       _suggestions,
       seedTitle: now.title,
       seedArtist: now.artist,
       keep: want,
-      alsoSkip: _playedSkip(),
     );
     if (next.length == _suggestions.length) return;
     _rememberHeard(now, next, searching: _suggesting);
@@ -1125,27 +1149,21 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     bool allowRefill = true,
   }) {
     if (!mounted || gen != _suggestGen) return;
-    final playedSkip = _playedSkip(skipShown);
+    final rules = MusicSearchRulesStore.instance.current;
     var quick = withoutSameAsPlaying(
       acc,
       seedTitle: track.title,
       seedArtist: track.artist,
       keep: want,
-      alsoSkip: playedSkip,
+      alsoSkip: skipShown,
     );
-    if (quick.isEmpty && acc.isNotEmpty) {
-      quick = withoutSameAsPlaying(
-        acc,
-        seedTitle: track.title,
+    if (rules.applyFilters) {
+      quick = capSeedArtist(
+        quick,
         seedArtist: track.artist,
-        keep: want,
+        allowSameArtist: _wishboard.recAllowSameArtist,
       );
     }
-    quick = capSeedArtist(
-      quick,
-      seedArtist: track.artist,
-      allowSameArtist: _wishboard.recAllowSameArtist,
-    );
     final needsRefill = allowRefill && !stillSearching && quick.length < want;
     if (quick.isEmpty && stillSearching) return;
     _slotGen = gen;
@@ -1261,8 +1279,21 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
   }) async {
     final keepPrevious = !bypassCache &&
         (skipShown.isNotEmpty || already.isNotEmpty);
-    final want = 20;
+    await MusicSearchRulesStore.instance.ensureReady();
+    if (!mounted || gen != _suggestGen) return;
+    final rules = MusicSearchRulesStore.instance.current;
+    // Eine Anfrage über 10 Titeln kommt von der KI leer zurück.
+    final want = _wishboard.recCount.clamp(1, rules.maxCount);
     try {
+      if (!rules.enabled) {
+        if (!keepPrevious && mounted && gen == _suggestGen) {
+          setState(() {
+            _suggesting = false;
+            if (_viewingTrack(track)) _suggestions = const [];
+          });
+        }
+        return;
+      }
       final acc = <Map<String, dynamic>>[...already];
       final skip = <Map<String, dynamic>>[];
       final seenSkip = <String>{};
@@ -1272,72 +1303,72 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
         if (key.isEmpty || !seenSkip.add(key)) continue;
         skip.add(row);
       }
-      var composed = false;
-      if (!keepPrevious) {
-        final stored = bypassCache
-            ? const <Map<String, dynamic>>[]
-            : await _catalog.readStoredPool(
-                track,
-                scope: _wishboard.recScope,
-                allowSameArtist: _wishboard.recAllowSameArtist,
-              );
-        if (!mounted || gen != _suggestGen) return;
-        final fromStore = capSeedArtist(
-          withoutSameAsPlaying(
-            stored,
-            seedTitle: track.title,
-            seedArtist: track.artist,
-            keep: want,
-          ),
-          seedArtist: track.artist,
-          allowSameArtist: _wishboard.recAllowSameArtist,
-        );
-        final unseen = withoutSameAsPlaying(
-          fromStore,
+      var ranKi = false;
+
+      void addRows(List<Map<String, dynamic>> rows) {
+        final fresh = withoutSameAsPlaying(
+          rows,
           seedTitle: track.title,
           seedArtist: track.artist,
           keep: want,
-          alsoSkip: _playedSkip(),
+          alsoSkip: [...acc, ...skip],
         );
-        if (unseen.length >= want) {
-          composed = true;
+        acc.addAll(fresh);
+        if (rules.applyFilters) {
+          final capped = capSeedArtist(
+            acc,
+            seedArtist: track.artist,
+            allowSameArtist: _wishboard.recAllowSameArtist,
+          );
           acc
             ..clear()
-            ..addAll(unseen);
-        } else {
+            ..addAll(capped);
+        }
+        if (acc.length > want) {
+          acc.removeRange(want, acc.length);
+        }
+      }
+
+      for (final step in rules.steps) {
+        if (!mounted || gen != _suggestGen) return;
+        if (acc.length >= want) break;
+        if (step == 'played_after') {
+          addRows(await _catalog.playedAfter(track));
+          if (acc.isNotEmpty) {
+            _showFoundSoFar(
+              track,
+              gen,
+              acc,
+              want,
+              stillSearching: true,
+              allowRefill: false,
+            );
+          }
+        } else if (step == 'recommended') {
+          if (bypassCache) continue;
+          addRows(await _catalog.readStoredPool(
+            track,
+            scope: _wishboard.recScope,
+            allowSameArtist: _wishboard.recAllowSameArtist,
+          ));
+          if (acc.isNotEmpty) {
+            _showFoundSoFar(
+              track,
+              gen,
+              acc,
+              want,
+              stillSearching: true,
+              allowRefill: false,
+            );
+          }
+        } else if (step == 'ki') {
+          ranKi = true;
           final raw = <Map<String, dynamic>>[];
           final seen = <String>{
-            for (final row in unseen)
+            for (final row in acc)
               '${row['title'] ?? ''}|${row['artist'] ?? ''}'.trim().toLowerCase(),
           };
-          if (unseen.isNotEmpty) {
-            composed = true;
-            _showFoundSoFar(
-              track,
-              gen,
-              unseen,
-              want,
-              stillSearching: true,
-              allowRefill: false,
-            );
-          }
-          void take(Map<String, dynamic> row) {
-            if (!mounted || gen != _suggestGen) return;
-            final key =
-                '${row['title'] ?? ''}|${row['artist'] ?? ''}'.trim().toLowerCase();
-            if (key.isEmpty || !seen.add(key)) return;
-            raw.add(row);
-            _showFoundSoFar(
-              track,
-              gen,
-              [...unseen, ...raw],
-              want,
-              stillSearching: true,
-              allowRefill: false,
-            );
-          }
-
-          final gap = (want - unseen.length).clamp(1, want);
+          final gap = (want - acc.length).clamp(1, rules.kiMax);
           await widget.session.recommendLive(
             title: track.title,
             artist: track.artist,
@@ -1347,9 +1378,23 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
             familiarity: _wishboard.recFamiliarity,
             allowSameArtist: _wishboard.recAllowSameArtist,
             count: gap,
-            exclude: _excludeFor(track, [...excludeExtra, ...fromStore]),
-            fresh: bypassCache || fromStore.isNotEmpty,
-            onTrack: take,
+            exclude: _excludeFor(track, [...skip, ...acc]),
+            fresh: bypassCache || acc.isNotEmpty,
+            onTrack: (row) {
+              if (!mounted || gen != _suggestGen) return;
+              final key =
+                  '${row['title'] ?? ''}|${row['artist'] ?? ''}'.trim().toLowerCase();
+              if (key.isEmpty || !seen.add(key)) return;
+              raw.add(row);
+              _showFoundSoFar(
+                track,
+                gen,
+                [...acc, ...raw],
+                want,
+                stillSearching: true,
+                allowRefill: false,
+              );
+            },
           );
           if (!mounted || gen != _suggestGen) return;
           if (raw.isNotEmpty) {
@@ -1367,54 +1412,10 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
               allowSameArtist: _wishboard.recAllowSameArtist,
             ));
           }
-          acc
-            ..clear()
-            ..addAll(unseen)
-            ..addAll(raw);
-          if (acc.isEmpty && fromStore.isNotEmpty) {
-            acc.addAll(fromStore);
-          }
+          addRows(raw);
         }
-      } else {
-        final raw = <Map<String, dynamic>>[];
-        final seen = <String>{};
-        final gap = (want - already.length).clamp(1, want);
-        // Bereits gezeigte Titel bleiben. skip blendet sie nur aus, wenn
-        // keine Keep-Liste da ist (erneute Suche).
-        final hide = already.isEmpty ? skip : const <Map<String, dynamic>>[];
-        await widget.session.recommendLive(
-          title: track.title,
-          artist: track.artist,
-          bpm: track.bpm,
-          camelot: camelotFromScaleName(track.musicalKey),
-          scope: _wishboard.recScope,
-          familiarity: _wishboard.recFamiliarity,
-          allowSameArtist: _wishboard.recAllowSameArtist,
-          count: gap,
-          exclude: _excludeFor(track, skip),
-          onTrack: (row) {
-            if (!mounted || gen != _suggestGen) return;
-            final key =
-                '${row['title'] ?? ''}|${row['artist'] ?? ''}'.trim().toLowerCase();
-            if (key.isEmpty || !seen.add(key)) return;
-            raw.add(row);
-            _showFoundSoFar(
-              track,
-              gen,
-              [...already, ...raw],
-              want,
-              skipShown: hide,
-              stillSearching: true,
-              allowRefill: false,
-            );
-          },
-        );
-        if (!mounted || gen != _suggestGen) return;
-        acc
-          ..clear()
-          ..addAll(already)
-          ..addAll(raw);
       }
+      final composed = !ranKi && acc.isNotEmpty;
       if (acc.isEmpty) {
         if (mounted && gen == _suggestGen) {
           _rememberHeard(

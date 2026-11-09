@@ -150,10 +150,32 @@ class UpdateDismissStore {
 class ToolInstallReporter {
   static const _gap = Duration(minutes: 15);
 
+  static Future<String> installId() async {
+    final file = _reportFile();
+    var deviceId = '';
+    Map<String, dynamic> data = {};
+    if (file.existsSync()) {
+      try {
+        final decoded = jsonDecode(await file.readAsString());
+        if (decoded is Map) {
+          data = Map<String, dynamic>.from(decoded);
+          deviceId = (data['deviceId'] ?? '').toString();
+        }
+      } catch (_) {}
+    }
+    if (!RegExp(r'^[a-zA-Z0-9_-]{8,64}$').hasMatch(deviceId)) {
+      deviceId = _newDeviceId();
+      data['deviceId'] = deviceId;
+      if (!file.parent.existsSync()) file.parent.createSync(recursive: true);
+      await file.writeAsString(jsonEncode(data));
+    }
+    return deviceId;
+  }
+
   static Future<Map<String, String>?> payloadIfDue({required String os}) async {
     final file = _reportFile();
     final now = DateTime.now().toUtc();
-    var deviceId = '';
+    final deviceId = await installId();
     DateTime? reportedAt;
     var reportedVersion = '';
     var reportedOs = '';
@@ -161,43 +183,20 @@ class ToolInstallReporter {
       try {
         final data = jsonDecode(await file.readAsString());
         if (data is Map) {
-          deviceId = (data['deviceId'] ?? '').toString();
           reportedVersion = (data['version'] ?? '').toString();
           reportedOs = (data['os'] ?? '').toString();
           reportedAt = DateTime.tryParse((data['reportedAt'] ?? '').toString());
         }
       } catch (_) {}
     }
-    if (!RegExp(r'^[a-zA-Z0-9_-]{8,64}$').hasMatch(deviceId)) {
-      deviceId = _newDeviceId();
-      reportedAt = null;
-    }
     final changed = reportedVersion != kSyncToolVersion || reportedOs != os;
     final due = reportedAt == null || now.difference(reportedAt.toUtc()) >= _gap;
     if (!changed && !due) return null;
-    if (!file.parent.existsSync()) file.parent.createSync(recursive: true);
-    if (!file.existsSync() || (dataDeviceChanged(file, deviceId))) {
-      await file.writeAsString(jsonEncode({
-        'deviceId': deviceId,
-        'version': reportedVersion,
-        'os': reportedOs,
-        'reportedAt': reportedAt?.toIso8601String() ?? '',
-      }));
-    }
     return {
       'deviceId': deviceId,
       'version': kSyncToolVersion,
       'os': os,
     };
-  }
-
-  static bool dataDeviceChanged(File file, String deviceId) {
-    try {
-      final data = jsonDecode(file.readAsStringSync());
-      return data is! Map || data['deviceId']?.toString() != deviceId;
-    } catch (_) {
-      return true;
-    }
   }
 
   static Future<void> markReported({required String os}) async {

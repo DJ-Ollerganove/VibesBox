@@ -191,6 +191,11 @@ class SongCatalogStore {
     } catch (_) {}
   }
 
+  /// Songs, die nach diesem Lied gespielt wurden, höchster Zähler zuerst.
+  Future<List<Map<String, dynamic>>> playedAfter(HistoryTrack seed) {
+    return _transitionTracks(seed);
+  }
+
   /// Genre/BPM-Pool (Cache/KI) nach echten Folgesongs sortieren.
   /// Ein Übergang ohne Mix-Metadaten kommt nur, wenn er schon im Pool liegt.
   Future<List<Map<String, dynamic>>> withTransitions(

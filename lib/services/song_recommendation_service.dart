@@ -3,6 +3,8 @@ import 'dart:async';
 import '../models/song_recommendation.dart';
 import '../utils/debug_log.dart';
 import '../utils/text_utils.dart';
+import 'music_search_rules_service.dart';
+import 'music_search_sources.dart';
 import 'openai_music_proxy_service.dart';
 import 'pro_feature_guard.dart';
 import 'recommendation_cache_service.dart';
@@ -84,6 +86,9 @@ class SongRecommendationService {
     final settings =
         await SongRecommendationSettingsService.instance.ensureLoaded();
     if (!settings.enabled) return const <SongRecommendation>[];
+    await MusicSearchRulesService.instance.ensureReady();
+    final rules = MusicSearchRulesService.instance.current;
+    if (!rules.enabled) return const <SongRecommendation>[];
 
     final extra = _cacheExtra(settings);
     final shownKey = _shownKey(t, a, extra);
@@ -91,7 +96,7 @@ class SongRecommendationService {
       _rememberShown(shownKey, alreadyShown);
     }
 
-    if (!refresh) {
+    if (!refresh && !rules.queriesCatalog) {
       final ram = RecommendationCacheService.instance.peekMemory(
         artist: a,
         title: t,
@@ -159,7 +164,8 @@ class SongRecommendationService {
     required String shownKey,
     required bool refresh,
   }) async {
-    if (!refresh) {
+    final rules = MusicSearchRulesService.instance.current;
+    if (!refresh && !rules.queriesCatalog) {
       final cached = await RecommendationCacheService.instance.read(
         artist: artist,
         title: title,
@@ -174,49 +180,18 @@ class SongRecommendationService {
     final exclude = List<SongRecommendation>.from(
       _shownItems[shownKey] ?? const <SongRecommendation>[],
     );
-    var pool = await _fromOpenAi(
+    final need = settings.count.clamp(1, rules.maxCount);
+    final items = await _byRules(
       title: title,
       artist: artist,
       bpm: bpm,
       camelot: camelot,
       settings: settings,
+      rules: rules,
       exclude: exclude,
-    );
-    pool = _withoutSeed(pool, title: title, artist: artist);
-    pool = _withoutAlreadyShown(pool, exclude);
-
-    final need = settings.count;
-    var items = _pickNeed(
-      pool,
-      seedArtist: artist,
-      maxSameArtist: settings.maxSameArtistCount,
       need: need,
+      skipRecommended: refresh,
     );
-
-    // Nachfüllen, bis die gewünschte Anzahl da ist (ein Extra-Call max.).
-    if (items.length < need) {
-      final fillExclude = <SongRecommendation>[
-        ...exclude,
-        ...items,
-      ];
-      var more = await _fromOpenAi(
-        title: title,
-        artist: artist,
-        bpm: bpm,
-        camelot: camelot,
-        settings: settings,
-        exclude: fillExclude,
-      );
-      more = _withoutSeed(more, title: title, artist: artist);
-      more = _withoutAlreadyShown(more, fillExclude);
-      final merged = <SongRecommendation>[...items, ...more];
-      items = _pickNeed(
-        merged,
-        seedArtist: artist,
-        maxSameArtist: settings.maxSameArtistCount,
-        need: need,
-      );
-    }
 
     if (items.length < need) {
       debugLog(
@@ -235,36 +210,6 @@ class SongRecommendationService {
       );
     }
     return items;
-  }
-
-  /// Genau bis zu 5: Diversify bevorzugen, Rest aus dem Pool nachfüllen.
-  static List<SongRecommendation> _pickNeed(
-    List<SongRecommendation> pool, {
-    required String seedArtist,
-    required int maxSameArtist,
-    required int need,
-  }) {
-    final diversified = _diversifyArtists(
-      pool,
-      seedArtist: seedArtist,
-      maxSameArtist: maxSameArtist,
-      need: need,
-    );
-    if (diversified.length >= need) {
-      return diversified.take(need).toList(growable: false);
-    }
-    final out = List<SongRecommendation>.from(diversified);
-    final keys = <String>{
-      for (final e in out) _workKey(e.title, e.artist),
-    };
-    for (final e in pool) {
-      if (out.length >= need) break;
-      final key = _workKey(e.title, e.artist);
-      if (key.isEmpty || keys.contains(key)) continue;
-      keys.add(key);
-      out.add(e);
-    }
-    return out;
   }
 
   Future<List<SongRecommendation>> _fromOpenAi({
@@ -311,7 +256,111 @@ class SongRecommendationService {
   }
 
   static String _cacheExtra(SongRecommendationSettings settings) =>
-      '${settings.cacheSuffix}_$_promptRev';
+      '${settings.cacheSuffix}_${MusicSearchRulesService.instance.fingerprint}_$_promptRev';
+
+  Future<List<SongRecommendation>> _byRules({
+    required String title,
+    required String artist,
+    double? bpm,
+    String? camelot,
+    required SongRecommendationSettings settings,
+    required MusicSearchRules rules,
+    required List<SongRecommendation> exclude,
+    required int need,
+    required bool skipRecommended,
+  }) async {
+    final out = <SongRecommendation>[];
+    final sameCap = rules.applyFilters ? settings.maxSameArtistCount : need;
+    var sameArtist = 0;
+    var followSongs = const <SongRecommendation>[];
+    var playedCounts = const <String, int>{};
+    if (rules.steps.contains('played_after') ||
+        rules.steps.contains('recommended')) {
+      final follow = await MusicSearchSources.followUps(
+        title: title,
+        artist: artist,
+      );
+      followSongs = follow.songs;
+      playedCounts = follow.counts;
+    }
+
+    void take(Iterable<SongRecommendation> rows) {
+      for (final row in rows) {
+        if (out.length >= need) return;
+        if (_isSameWork(
+          titleA: title,
+          artistA: artist,
+          titleB: row.title,
+          artistB: row.artist,
+        )) {
+          continue;
+        }
+        if (exclude.any(
+          (shown) => _isSameWork(
+            titleA: shown.title,
+            artistA: shown.artist,
+            titleB: row.title,
+            artistB: row.artist,
+          ),
+        )) {
+          continue;
+        }
+        if (out.any(
+          (shown) => _isSameWork(
+            titleA: shown.title,
+            artistA: shown.artist,
+            titleB: row.title,
+            artistB: row.artist,
+          ),
+        )) {
+          continue;
+        }
+        final same = _artistsClose(_artistCore(artist), _artistCore(row.artist));
+        if (same && sameArtist >= sameCap) continue;
+        if (same) sameArtist += 1;
+        out.add(row);
+      }
+    }
+
+    for (final step in rules.steps) {
+      if (out.length >= need) break;
+      if (step == 'played_after') {
+        take(followSongs);
+      } else if (step == 'recommended') {
+        if (skipRecommended) continue;
+        final stored = await MusicSearchSources.recommended(
+          title: title,
+          artist: artist,
+          playedCounts: playedCounts,
+        );
+        take(stored);
+      } else if (step == 'ki') {
+        final gap = (need - out.length).clamp(1, rules.kiMax);
+        var more = await _fromOpenAi(
+          title: title,
+          artist: artist,
+          bpm: bpm,
+          camelot: camelot,
+          settings: settings.copyWith(count: gap),
+          exclude: <SongRecommendation>[...exclude, ...out],
+        );
+        more = _withoutSeed(more, title: title, artist: artist);
+        take(more);
+        if (out.length < need) {
+          final fill = await _fromOpenAi(
+            title: title,
+            artist: artist,
+            bpm: bpm,
+            camelot: camelot,
+            settings: settings.copyWith(count: (need - out.length).clamp(1, rules.kiMax)),
+            exclude: <SongRecommendation>[...exclude, ...out],
+          );
+          take(_withoutSeed(fill, title: title, artist: artist));
+        }
+      }
+    }
+    return out;
+  }
 
   static String _shownKey(String title, String artist, String extra) =>
       '${title.toLowerCase()}|${artist.toLowerCase()}|$extra';
@@ -362,65 +411,6 @@ class SongRecommendationService {
         .toList();
   }
 
-  static List<SongRecommendation> _withoutAlreadyShown(
-    List<SongRecommendation> items,
-    List<SongRecommendation> exclude,
-  ) {
-    if (exclude.isEmpty) return items;
-    return items
-        .where(
-          (e) => !exclude.any(
-            (shown) => _isSameWork(
-              titleA: shown.title,
-              artistA: shown.artist,
-              titleB: e.title,
-              artistB: e.artist,
-            ),
-          ),
-        )
-        .toList();
-  }
-
-  /// Andere Interpreten zuerst; gleicher Interpret höchstens [maxSameArtist]-mal.
-  static List<SongRecommendation> _diversifyArtists(
-    List<SongRecommendation> items, {
-    required String seedArtist,
-    required int maxSameArtist,
-    required int need,
-  }) {
-    final seedCore = _artistCore(seedArtist);
-    final others = <SongRecommendation>[];
-    final same = <SongRecommendation>[];
-    final seenOther = <String>{};
-    final seenTitles = <String>{};
-    for (final e in items) {
-      final core = _artistCore(e.artist);
-      if (core.isEmpty) continue;
-      final titleKey = _titleCore(e.title);
-      if (titleKey.isEmpty) continue;
-      if (_alreadyHasWork(others, e) || _alreadyHasWork(same, e)) continue;
-      if (seenTitles.contains(titleKey)) continue;
-      final isSeed = seedCore.isNotEmpty && core == seedCore;
-      if (isSeed) {
-        if (same.length >= maxSameArtist) continue;
-        seenTitles.add(titleKey);
-        same.add(e);
-        continue;
-      }
-      if (seenOther.contains(core)) continue;
-      seenOther.add(core);
-      seenTitles.add(titleKey);
-      others.add(e);
-    }
-    if (maxSameArtist <= 0 || same.isEmpty) return others;
-    final takeSame = same.length.clamp(0, maxSameArtist);
-    final takeOthers = (need - takeSame).clamp(0, others.length);
-    return <SongRecommendation>[
-      ...others.take(takeOthers),
-      ...same.take(takeSame),
-    ];
-  }
-
   static String _titleNorm(String raw) {
     return normalizeTextForDuplicateCheck(raw, _versionKeywords);
   }
@@ -456,20 +446,6 @@ class SongRecommendationService {
       if (i < sw.length && w == sw[i]) i++;
     }
     return i == sw.length;
-  }
-
-  static bool _alreadyHasWork(
-    List<SongRecommendation> kept,
-    SongRecommendation next,
-  ) {
-    return kept.any(
-      (e) => _isSameWork(
-        titleA: e.title,
-        artistA: e.artist,
-        titleB: next.title,
-        artistB: next.artist,
-      ),
-    );
   }
 
   static String _workKey(String title, String artist) {

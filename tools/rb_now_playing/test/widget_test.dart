@@ -9,6 +9,7 @@ import 'package:rb_now_playing/engine_dj_library.dart';
 import 'package:rb_now_playing/library_match.dart';
 import 'package:rb_now_playing/library_store.dart';
 import 'package:rb_now_playing/mix_compat.dart';
+import 'package:rb_now_playing/music_search_rules.dart';
 import 'package:rb_now_playing/mixxx_library.dart';
 import 'package:rb_now_playing/rekordbox_cipher.dart';
 import 'package:rb_now_playing/serato_library.dart';
@@ -24,6 +25,32 @@ import 'package:rb_now_playing/virtualdj_library.dart';
 import 'package:sqlite3/sqlite3.dart';
 
 void main() {
+  test('Suchregeln: Reihenfolge aus dem Dokument, sonst die Standardfolge', () {
+    final parsed = MusicSearchRules.parse({
+      'enabled': true,
+      'apply_filters': false,
+      'max_count': 8,
+      'ki_max': 4,
+      'steps': [
+        {'id': 'ki', 'enabled': false},
+        {'id': 'recommended'},
+        'played_after',
+        {'id': 'unknown'},
+        {'id': 'recommended'},
+      ],
+    });
+    expect(parsed.applyFilters, isFalse);
+    expect(parsed.maxCount, 8);
+    expect(parsed.kiMax, 4);
+    expect(parsed.steps, ['recommended', 'played_after']);
+    expect(MusicSearchRules.parse(null).steps, [
+      'played_after',
+      'recommended',
+      'ki',
+    ]);
+    expect(MusicSearchRules.parse({'enabled': false}).enabled, isFalse);
+  });
+
   test('entpackt den Rekordbox-SQLCipher-Schlüssel', () {
     final key = rekordboxSqlCipherKey();
     expect(key.startsWith('402fd'), isTrue);
@@ -301,7 +328,7 @@ void main() {
     expect(compareSyncVersions('1.0.1', '1.0.2') < 0, isTrue);
     expect(compareSyncVersions('1.0.1+1', '1.0.1'), 0);
     expect(compareSyncVersions('1.0.2', '1.0.1') > 0, isTrue);
-    expect(kSyncToolVersion, '1.0.9');
+    expect(kSyncToolVersion, '1.0.10');
     expect(formatToolDevice('macos', 'Version 26.6.2 (Build 25G83)'), 'macOS 26.6.2');
     expect(formatToolDevice('windows', '10.0.22631'), 'Windows 11');
     expect(formatToolDevice('windows', '10.0.19045'), 'Windows 10');
@@ -796,6 +823,12 @@ CREATE TABLE database2 (
     expect(extractDjayDouble(analyzed, 'keySignatureIndex'), 4);
     expect(djayKeyName(4), 'Eb');
     expect(extractDjayDouble(analyzed, 'playCount'), isNull);
+    // Echte DJAY-Startzeit: die Mantisse enthält Buchstaben-Bytes, der Wert ist 2026.
+    final started = Uint8List.fromList([
+      0xa8, 0x1d, 0x80, 0x4d, 0xa3, 0x50, 0xc8, 0x41,
+      0x08, ...'startTime'.codeUnits, 0x00,
+    ]);
+    expect(extractDjayDouble(started, 'startTime'), closeTo(815875739, 1));
     final bookmark = _djayTsaf(_djayBookmarkParts(parts));
     expect(djayBookmarkPath(bookmark), file.path);
     file.deleteSync();

@@ -38,6 +38,23 @@ class ToolRestClient {
     };
   }
 
+  /// Startprüfung: diese Installation ist die gespeicherte Verbindung, oder nicht.
+  Future<Map<String, dynamic>> reconcileInstall({
+    required String idToken,
+    required String installId,
+  }) async {
+    final uri = Uri.parse(
+      'https://$_region-$_projectId.cloudfunctions.net/reconcileRbToolInstall',
+    );
+    final decoded = await _postJson(uri, {
+      'data': {'installId': installId},
+    }, bearer: idToken);
+    final data = decoded['result'] is Map
+        ? Map<String, dynamic>.from(decoded['result'] as Map)
+        : decoded;
+    return data;
+  }
+
   Future<Map<String, dynamic>> signInWithCustomToken(String customToken) async {
     final uri = Uri.parse(
       'https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=$_apiKey',

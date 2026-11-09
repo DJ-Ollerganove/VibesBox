@@ -495,11 +495,13 @@
   "sync_page_dj_title": "Logiciel DJ",
   "sync_page_dj_body": "Sync fonctionne actuellement avec Rekordbox, Virtual DJ, Serato DJ Pro, DJAY Pro, Traktor Pro, Mixxx et Engine DJ. Rekordbox sur Mac est le cas le plus testé. Pour les autres, Sync lit la bibliothèque et l’historique. La reconnaissance peut ne démarrer qu’après un court temps de lecture.",
   "sync_page_sys_title": "Systèmes",
-  "sync_page_sys_body": "VibesBox Sync existe pour macOS et Windows.",
+  "sync_page_sys_body": "macOS 12 ou plus récent. Windows 10 ou Windows 11, 64 bits.",
   "sync_page_links_title": "App et site VibesBox",
   "sync_page_link_site": "Vers le site VibesBox",
   "sync_page_link_apple": "VibesBox sur l’App Store",
   "sync_page_link_google": "VibesBox sur Google Play",
   "sync_page_dl_lead": "Choisis ton système. Le numéro de version est celui du fichier proposé ici.",
-  "sync_page_dl_back": "Retour à l’aperçu"
+  "sync_page_dl_back": "Retour à l’aperçu",
+  "sync_page_req_title": "Conditions",
+  "sync_page_pro_body": "VibesBox Sync ne fonctionne pour l’instant qu’avec l’app VibesBox en mode Pro."
 }

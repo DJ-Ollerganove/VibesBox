@@ -18,7 +18,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # of the product and file versions while build-number is used as the build suffix.
 # Android (versionName/versionCode): diese Zeile für Play Store / Android (z. B. 1.0.36+36).
 # iOS (TestFlight/App Store): nur ios/Flutter/Debug|Release|Profile.xcconfig (FLUTTER_BUILD_NAME / FLUTTER_BUILD_NUMBER).
-version: 1.1.71+71
+version: 1.1.73+73
 
 environment:
   sdk: ^3.10.3

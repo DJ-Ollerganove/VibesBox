@@ -74,6 +74,10 @@ class QuickstartPage extends StatelessWidget {
                       l.dj_quickstart_p_vibesbox,
                     ),
                     section(
+                      l.dj_quickstart_h1_browser,
+                      l.dj_quickstart_p_browser,
+                    ),
+                    section(
                       l.dj_quickstart_h1_free_pro,
                       l.dj_quickstart_p_free_pro,
                     ),
@@ -86,10 +90,34 @@ class QuickstartPage extends StatelessWidget {
                       l.dj_quickstart_h1_recognition,
                       l.dj_quickstart_p_recognition,
                     ),
+                    section(
+                      l.dj_quickstart_h1_sync,
+                      l.dj_quickstart_p_sync,
+                    ),
+                    section(
+                      l.dj_quickstart_h1_songrec,
+                      l.dj_quickstart_p_songrec,
+                    ),
+                    section(
+                      l.dj_quickstart_h1_blacklist,
+                      l.dj_quickstart_p_blacklist,
+                    ),
+                    section(
+                      l.dj_quickstart_h1_setlist,
+                      l.dj_quickstart_p_setlist,
+                    ),
                     section(l.dj_quickstart_h1_grace, l.dj_quickstart_p_grace),
                     section(l.dj_quickstart_h1_b2b, l.dj_quickstart_p_b2b),
                     section(l.dj_quickstart_h1_i18n, l.dj_quickstart_p_i18n),
+                    section(
+                      l.dj_quickstart_h1_wishbox_suggest,
+                      l.dj_quickstart_p_wishbox_suggest,
+                    ),
                     section(l.dj_quickstart_h1_home, l.dj_quickstart_p_home),
+                    section(
+                      l.dj_quickstart_h1_display,
+                      l.dj_quickstart_p_display,
+                    ),
                     section(
                       l.dj_quickstart_h1_notifications,
                       l.dj_quickstart_p_notifications,

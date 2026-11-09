@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 
 import 'rekordbox_live.dart';
+import 'tool_gate.dart';
 import 'tool_i18n.dart';
 import 'tool_rest.dart';
 import 'camelot.dart';
@@ -77,6 +78,7 @@ class ToolSession extends ChangeNotifier {
   String? _idToken;
   String? _refreshToken;
   int _expiryMs = 0;
+  String? _installId;
   String? _error;
   String? _lastFingerprint;
   String? _queuedFingerprint;
@@ -123,6 +125,8 @@ class ToolSession extends ChangeNotifier {
     _expiryMs = stored['expiryMs'] ?? 0;
     try {
       await _ensureFreshToken();
+      final kept = await _reconcileInstall();
+      if (!kept) return;
       notifyListeners();
       unawaited(_refreshOwnerLabel());
     } catch (_) {
@@ -168,9 +172,10 @@ class ToolSession extends ChangeNotifier {
       _expiryMs = tokens['expiryMs'] as int;
       await _refreshOwnerLabel();
       await _writeStore();
+      await _reconcileInstall();
       _busy = false;
       notifyListeners();
-      return true;
+      return isConnected;
     } catch (e) {
       _busy = false;
       _error = e.toString().replaceFirst('Bad state: ', '');
@@ -276,6 +281,55 @@ class ToolSession extends ChangeNotifier {
     } catch (_) {}
   }
 
+  Future<String> _ownInstallId() async {
+    final cached = _installId;
+    if (cached != null && cached.isNotEmpty) return cached;
+    final id = await ToolInstallReporter.installId();
+    _installId = id;
+    return id;
+  }
+
+  Future<Map<String, dynamic>> _withInstall(Map<String, dynamic> payload) async {
+    return {
+      ...payload,
+      'installId': await _ownInstallId(),
+    };
+  }
+
+  /// true, wenn diese Installation die gespeicherte Verbindung bleibt.
+  Future<bool> _reconcileInstall() async {
+    if (!isConnected) return false;
+    try {
+      final result = await _rest.reconcileInstall(
+        idToken: _idToken!,
+        installId: await _ownInstallId(),
+      );
+      if (result['connected'] == true) return true;
+      await _forgetLocal();
+      if (result['replaced'] == true) {
+        _error = toolI18n.text('replacedByOther');
+      }
+      notifyListeners();
+      return false;
+    } catch (error) {
+      await _dropIfReplaced(error);
+      return isConnected;
+    }
+  }
+
+  Future<void> _forgetLocal() async {
+    await _clearStore();
+    _sessionId = null;
+    _ownerUid = null;
+    _ownerLabel = null;
+    _idToken = null;
+    _refreshToken = null;
+    _expiryMs = 0;
+    _lastFingerprint = null;
+    _queuedFingerprint = null;
+    _lastNowPlaying = null;
+  }
+
   /// Verbunden bleiben, ohne den laufenden Song an die Musikerkennung zu schicken.
   void _enqueueLive(Future<void> Function() job) {
     _liveQueue = _liveQueue.then((_) => job()).catchError((Object _, StackTrace _) {});
@@ -294,17 +348,19 @@ class ToolSession extends ChangeNotifier {
         await _rest.setLiveDoc(
           idToken: _idToken!,
           ownerUid: _ownerUid!,
-          payload: {
+          payload: await _withInstall({
             'sessionId': _sessionId,
             'connected': true,
             'source': toolDeviceLabel(),
             'nowPlaying': null,
             'decks': const <Map<String, dynamic>>[],
             'history': const <Map<String, dynamic>>[],
-          },
+          }),
         );
         _lastNowPlaying = null;
         _lastFingerprint = fingerprint;
+      } catch (error) {
+        await _dropIfReplaced(error);
       } finally {
         if (_queuedFingerprint == fingerprint) _queuedFingerprint = null;
       }
@@ -350,19 +406,21 @@ class ToolSession extends ChangeNotifier {
         await _rest.setLiveDoc(
           idToken: _idToken!,
           ownerUid: _ownerUid!,
-          payload: {
+          payload: await _withInstall({
             'sessionId': _sessionId,
             'connected': true,
             'source': toolDeviceLabel(),
             'nowPlaying': nowPlaying,
             'decks': const <Map<String, dynamic>>[],
             'history': const <Map<String, dynamic>>[],
-          },
+          }),
         );
         _lastNowPlaying = nowPlaying == null
             ? null
             : Map<String, dynamic>.from(nowPlaying);
         _lastFingerprint = fingerprint;
+      } catch (error) {
+        await _dropIfReplaced(error);
       } finally {
         if (_queuedFingerprint == fingerprint) _queuedFingerprint = null;
       }
@@ -388,6 +446,7 @@ class ToolSession extends ChangeNotifier {
       if (slim.length >= 20) break;
     }
     _enqueueLive(() async {
+      try {
       await _ensureFreshToken();
       final base = <String, dynamic>{
         ...?_lastNowPlaying,
@@ -404,16 +463,19 @@ class ToolSession extends ChangeNotifier {
       await _rest.setLiveDoc(
         idToken: _idToken!,
         ownerUid: _ownerUid!,
-        payload: {
+        payload: await _withInstall({
           'sessionId': _sessionId,
           'connected': true,
           'source': toolDeviceLabel(),
           'nowPlaying': base,
           'decks': const <Map<String, dynamic>>[],
           'history': const <Map<String, dynamic>>[],
-        },
+        }),
       );
       _lastNowPlaying = base;
+    } catch (error) {
+      await _dropIfReplaced(error);
+    }
     });
   }
 
@@ -593,6 +655,17 @@ class ToolSession extends ChangeNotifier {
     );
   }
 
+  Future<void> _dropIfReplaced(Object error) async {
+    final text = '$error'.toLowerCase();
+    final rejected = text.contains('permission_denied') ||
+        text.contains('permission-denied') ||
+        text.contains('insufficient permissions');
+    if (!rejected || _sessionId == null) return;
+    await _forgetLocal();
+    _error = toolI18n.text('replacedByOther');
+    notifyListeners();
+  }
+
   Future<void> pushDisconnected() async {
     if (_sessionId == null || _ownerUid == null || _idToken == null) return;
     try {
@@ -600,14 +673,14 @@ class ToolSession extends ChangeNotifier {
       await _rest.setLiveDoc(
         idToken: _idToken!,
         ownerUid: _ownerUid!,
-        payload: {
+        payload: await _withInstall({
           'sessionId': _sessionId,
           'connected': false,
           'source': toolDeviceLabel(),
           'nowPlaying': null,
           'decks': const [],
           'history': const [],
-        },
+        }),
       );
     } catch (_) {}
   }

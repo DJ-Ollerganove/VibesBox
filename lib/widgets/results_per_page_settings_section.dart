@@ -3,8 +3,7 @@ import 'package:flutter/material.dart';
 import '../l10n/app_localizations.dart';
 import '../services/results_per_page_service.dart';
 import '../app_scaffold_messenger.dart';
-import 'settings_help_dialog.dart';
-import 'settings_info_icon_button.dart';
+import 'settings_choice_row.dart';
 
 /// DJ-Einstellung: Treffer pro Seite (Offen, Gespielt, Vorab-Liste, History, …).
 class ResultsPerPageSettingsSection extends StatefulWidget {
@@ -84,42 +83,9 @@ class _ResultsPerPageSettingsSectionState
           crossAxisAlignment:
               isRtl ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    l.results_per_page,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
-                ),
-                SettingsInfoIconButton(
-                  tooltip: l.settings_help_tooltip,
-                  onPressed: () => showSettingsHelpFromL10n(
-                    context,
-                    titleKey: 'results_per_page',
-                    introKey: 'info_settings_results_intro',
-                    bullets: const [
-                      (
-                        'info_settings_results_count',
-                        'info_settings_results_count_body',
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
             Text(
-              l.settings_results_per_page_hint,
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.65),
-                fontSize: 11,
-                height: 1.35,
-              ),
+              l.results_per_page,
+              style: SettingsType.title.copyWith(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
             if (_loading)
@@ -143,7 +109,7 @@ class _ResultsPerPageSettingsSectionState
                   value: _value,
                   dropdownColor: const Color(0xFF2A2A2A),
                   icon: const Icon(Icons.arrow_drop_down, color: Colors.orange),
-                  style: const TextStyle(color: Colors.white, fontSize: 16),
+                  style: SettingsType.title,
                   items: ResultsPerPageService.allowedValues
                       .map(
                         (n) => DropdownMenuItem<int>(
@@ -155,6 +121,13 @@ class _ResultsPerPageSettingsSectionState
                   onChanged: _onChanged,
                 ),
               ),
+            if (!_loading) ...[
+              const SizedBox(height: 4),
+              Text(
+                l.translate('info_settings_results_count_body'),
+                style: SettingsType.hint,
+              ),
+            ],
           ],
         ),
       ),

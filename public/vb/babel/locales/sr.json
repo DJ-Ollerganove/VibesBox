@@ -569,11 +569,13 @@
   "sync_page_dj_title": "DJ програм",
   "sync_page_dj_body": "Sync тренутно ради са Rekordbox, Virtual DJ, Serato DJ Pro, DJAY Pro, Traktor Pro, Mixxx и Engine DJ. Најтемељније је проверен Rekordbox на Mac-у. Код осталих програма Sync чита библиотеку и историју. Препознавање може да крене тек после кратког времена пуштања.",
   "sync_page_sys_title": "Системи",
-  "sync_page_sys_body": "VibesBox Sync постоји за macOS и Windows.",
+  "sync_page_sys_body": "macOS 12 или новији. Windows 10 или Windows 11, 64-битни.",
   "sync_page_links_title": "Апликација и сајт VibesBox",
   "sync_page_link_site": "На сајт VibesBox",
   "sync_page_link_apple": "VibesBox у App Store-у",
   "sync_page_link_google": "VibesBox на Google Play-у",
   "sync_page_dl_lead": "Изабери систем. Број верзије припада фајлу који је овде.",
-  "sync_page_dl_back": "Назад на преглед"
+  "sync_page_dl_back": "Назад на преглед",
+  "sync_page_req_title": "Услови",
+  "sync_page_pro_body": "VibesBox Sync тренутно ради само заједно са апликацијом VibesBox у Pro режиму."
 }

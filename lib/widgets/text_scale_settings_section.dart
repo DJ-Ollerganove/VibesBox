@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 
 import '../l10n/app_localizations.dart';
 import '../services/text_scale_service.dart';
-import 'settings_help_dialog.dart';
-import 'settings_info_icon_button.dart';
+import '../utils/ui_constants.dart';
+import 'settings_choice_row.dart';
 
 /// Schriftgrößen-Karte (Slider) — gleiche Darstellung wie in den DJ-Einstellungen,
 /// wiederverwendbar z. B. für Gast-Einstellungen.
@@ -86,65 +86,26 @@ class _TextScaleSettingsSectionState extends State<TextScaleSettingsSection> {
               ? CrossAxisAlignment.end
               : CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    l.settings_text_scale_title,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
-                ),
-                SettingsInfoIconButton(
-                  tooltip: l.settings_help_tooltip,
-                  onPressed: () => showSettingsHelpFromL10n(
-                    context,
-                    titleKey: 'settings_text_scale_title',
-                    introKey: 'info_settings_text_scale_intro',
-                    bullets: const [
-                      (
-                        'info_settings_text_scale_slider',
-                        'info_settings_text_scale_slider_body',
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
             Text(
-              l.settings_text_scale_subtitle,
-              style: const TextStyle(color: Colors.white70, fontSize: 12),
+              l.settings_text_scale_title,
+              style: SettingsType.title.copyWith(fontWeight: FontWeight.bold),
             ),
-            const SizedBox(height: 12),
-            SliderTheme(
-              data: SliderTheme.of(context).copyWith(
-                activeTrackColor: Colors.orange,
-                inactiveTrackColor: Colors.grey.shade700,
-                thumbColor: Colors.orange,
-                overlayColor: Colors.orange.withValues(alpha: 0.2),
-                valueIndicatorColor: Colors.orange,
-                showValueIndicator: ShowValueIndicator.onlyForDiscrete,
-              ),
-              child: Slider(
-                value: _stepIndex.toDouble().clamp(0, _maxStep.toDouble()),
-                min: 0,
-                max: _maxStep.toDouble(),
-                divisions: _maxStep,
-                label: stepLabel(l, _stepIndex),
-                onChanged: (v) {
-                  final idx = v.round().clamp(0, _maxStep);
-                  setState(() => _stepIndex = idx);
-                  unawaited(
-                    TextScaleService.instance.setFactor(
-                      TextScaleService.factorFromStepIndex(idx),
-                    ),
-                  );
-                },
-              ),
+            const SizedBox(height: 8),
+            SettingsCompactSlider(
+              value: _stepIndex.toDouble().clamp(0, _maxStep.toDouble()),
+              min: 0,
+              max: _maxStep.toDouble(),
+              divisions: _maxStep,
+              label: stepLabel(l, _stepIndex),
+              onChanged: (v) {
+                final idx = v.round().clamp(0, _maxStep);
+                setState(() => _stepIndex = idx);
+                unawaited(
+                  TextScaleService.instance.setFactor(
+                    TextScaleService.factorFromStepIndex(idx),
+                  ),
+                );
+              },
             ),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -156,11 +117,10 @@ class _TextScaleSettingsSectionState extends State<TextScaleSettingsSection> {
                       textAlign: TextAlign.center,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 10,
+                      style: SettingsType.scaleEnd.copyWith(
                         color: i == _stepIndex
-                            ? Colors.orange
-                            : Colors.white54,
+                            ? UIConstants.appOrange
+                            : SettingsType.scaleEnd.color,
                         fontWeight: i == _stepIndex
                             ? FontWeight.bold
                             : FontWeight.normal,
@@ -168,6 +128,11 @@ class _TextScaleSettingsSectionState extends State<TextScaleSettingsSection> {
                     ),
                   ),
               ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              l.translate('info_settings_text_scale_slider_body'),
+              style: SettingsType.hint,
             ),
           ],
         ),

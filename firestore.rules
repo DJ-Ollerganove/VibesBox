@@ -1233,10 +1233,27 @@ service cloud.firestore {
         );
     }
 
+    /// Ein Admin-Dokument. Kein Schreibvorgang auf alle DJ-Konten.
+    function vibesboxSyncEnabledForAll() {
+      return exists(/databases/$(database)/documents/admin_config/sync_tool)
+        && get(/databases/$(database)/documents/admin_config/sync_tool).data.enabled_for_all == true;
+    }
+
+    function callerIsDjRole() {
+      return authUserDocExists()
+        && authUserData().role_id is string
+        && authUserData().role_id.size() > 0
+        && exists(/databases/$(database)/documents/roles/$(authUserData().role_id))
+        && get(/databases/$(database)/documents/roles/$(authUserData().role_id)).data.name == 'DJ';
+    }
+
     /// Handy darf den eigenen Sync-Live-Stand lesen, wenn die Freigabe gesetzt ist.
     function callerHasVibesboxSyncAccess() {
       return authUserDocExists()
-        && authUserData().vibesbox_sync_access == true;
+        && (
+          authUserData().vibesbox_sync_access == true
+          || (vibesboxSyncEnabledForAll() && callerIsDjRole())
+        );
     }
 
     function isSafeRbToolLive(data) {
@@ -1245,6 +1262,7 @@ service cloud.firestore {
           'sessionId',
           'connected',
           'source',
+          'installId',
           'nowPlaying',
           'decks',
           'history',
@@ -1256,6 +1274,10 @@ service cloud.firestore {
         && data.connected is bool
         && data.source is string
         && data.source.size() <= 40
+        && (!('installId' in data)
+          || (data.installId is string
+            && data.installId.size() >= 8
+            && data.installId.size() <= 64))
         && data.decks is list
         && data.decks.size() <= 4
         && data.history is list
@@ -1794,6 +1816,12 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // Suchreihenfolge für App und Sync. Ein Dokument, Lesen öffentlich, Schreiben nur Admin.
+    match /admin_config/music_search {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
     match /admin_config/apple_developer_token {
       allow read, write: if false;
     }
@@ -2288,6 +2316,13 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/parties/$(partyId))
           && get(/databases/$(database)/documents/parties/$(partyId)).data.created_by
             == request.auth.token.ownerUid;
+      }
+
+      // Verlauf Musikerkennung. Schreiben nur Admin-SDK. Lesen: DJ der Party oder Admin.
+      match /recognition_log/{logId} {
+        allow read: if request.auth != null
+          && (isAdmin() || isPartyOwnedByCurrentUser(partyId));
+        allow write: if false;
       }
 
       match /wishes/{wishId} {
@@ -2800,7 +2835,8 @@ service cloud.firestore {
     }
 
     match /song_suggestions/{trackId} {
-      allow get: if isAdmin() || isActiveRbTool() || isRbToolToken();
+      allow get: if isAdmin() || isActiveRbTool() || isRbToolToken()
+        || request.auth != null;
       allow list: if isAdmin() || isActiveRbTool();
       allow create, update: if isActiveRbTool()
         && isSafeSongSuggestions(request.resource.data);
@@ -2808,7 +2844,8 @@ service cloud.firestore {
     }
 
     match /song_transitions/{trackId} {
-      allow get: if isAdmin() || isActiveRbTool() || isRbToolToken();
+      allow get: if isAdmin() || isActiveRbTool() || isRbToolToken()
+        || request.auth != null;
       allow list: if isAdmin() || isActiveRbTool();
       allow create, update: if isActiveRbTool()
         && isSafeSongTransitions(request.resource.data);

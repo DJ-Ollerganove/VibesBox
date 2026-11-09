@@ -12,8 +12,7 @@ import '../utils/ui_constants.dart';
 import '../l10n/app_localizations.dart';
 import '../utils/debug_log.dart';
 import '../services/dj_pro_session_service.dart';
-import 'music_recognition_info_dialog.dart';
-import 'settings_info_icon_button.dart';
+import 'settings_choice_row.dart';
 import '../app_scaffold_messenger.dart';
 
 /// Widget für Audio-Einstellungen (Mikrofon-Empfindlichkeit, Schwellenwert, etc.)
@@ -24,10 +23,14 @@ class AudioSettingsCard extends StatefulWidget {
     super.key,
     required this.canUsePremium,
     required this.cardBuilder,
+    this.embedded = false,
   });
 
   final bool canUsePremium;
   final Widget Function(BuildContext context, Widget child) cardBuilder;
+
+  /// Ohne eigene Überschrift, wenn die Karte unter der Quellen-Auswahl steht.
+  final bool embedded;
 
   @override
   State<AudioSettingsCard> createState() => _AudioSettingsCardState();
@@ -636,11 +639,13 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
     return widget.cardBuilder(
       context,
       Padding(
-        padding: const EdgeInsets.all(16.0),
+        padding: widget.embedded
+            ? EdgeInsets.zero
+            : const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Header: Icon + Titel (dezent, kleiner)
+            if (!widget.embedded)
             Row(
               mainAxisAlignment: MainAxisAlignment.start,
               children: [
@@ -653,21 +658,13 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
                 Expanded(
                   child: Text(
                     l.audio_settings_title,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: null,
-                    ),
+                    style: SettingsType.title.copyWith(fontWeight: FontWeight.bold),
                     textAlign: TextAlign.start,
                   ),
                 ),
-                SettingsInfoIconButton(
-                  tooltip: l.audio_settings_info_tooltip,
-                  onPressed: () => showMusicRecognitionInfoDialog(context),
-                ),
               ],
             ),
-            const SizedBox(height: 16),
+            if (!widget.embedded) const SizedBox(height: 16),
 
             // Scan-Intervall Regler
             Row(
@@ -676,10 +673,8 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
                 Expanded(
                   child: Text(
                     '${l.scan_interval_label} ${_formatInterval(l, effectiveScanInterval)}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      color: intervalLocked ? Colors.grey : null,
+                    style: SettingsType.title.copyWith(
+                      color: intervalLocked ? Colors.white38 : Colors.white,
                     ),
                     textAlign: TextAlign.start,
                   ),
@@ -687,41 +682,34 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
               ],
             ),
             const SizedBox(height: 8),
-            SliderTheme(
-              data: SliderTheme.of(context).copyWith(
-                activeTrackColor: intervalLocked ? Colors.grey : null,
-                inactiveTrackColor: intervalLocked ? Colors.grey.shade700 : null,
-                thumbColor: intervalLocked ? Colors.grey : null,
-              ),
-              child: Slider(
-                value: effectiveScanInterval.toDouble().clamp(30, 300),
-                min: 30,
-                max: 300,
-                divisions: 27,
-                label: _formatInterval(l, effectiveScanInterval),
-                onChanged: intervalLocked
-                    ? null
-                    : (value) {
+            SettingsCompactSlider(
+              value: effectiveScanInterval.toDouble().clamp(30, 300),
+              min: 30,
+              max: 300,
+              divisions: 27,
+              label: _formatInterval(l, effectiveScanInterval),
+              onChanged: intervalLocked
+                  ? null
+                  : (value) {
+                      setState(() {
+                        _scanIntervalDrag = value.round();
+                      });
+                    },
+              onChangeEnd: intervalLocked
+                  ? null
+                  : (value) async {
+                      final target = value.round().clamp(30, 300);
+                      if (!mounted) return;
+                      setState(() => _scanIntervalDrag = null);
+                      final ok = await _saveScanInterval(target);
+                      if (!mounted) return;
+                      if (ok) {
                         setState(() {
-                          _scanIntervalDrag = value.round();
+                          _scanIntervalSeconds = target;
                         });
-                      },
-                onChangeEnd: intervalLocked
-                    ? null
-                    : (value) async {
-                        final target = value.round().clamp(30, 300);
-                        if (!mounted) return;
-                        setState(() => _scanIntervalDrag = null);
-                        final ok = await _saveScanInterval(target);
-                        if (!mounted) return;
-                        if (ok) {
-                          setState(() {
-                            _scanIntervalSeconds = target;
-                          });
-                          await _ensureAutoResume();
-                        }
-                      },
-              ),
+                        await _ensureAutoResume();
+                      }
+                    },
             ),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -729,18 +717,24 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
                 Text(
                   '30 ${l.interval_seconds_short}',
                   style: TextStyle(
-                    fontSize: 10,
-                    color: intervalLocked ? Colors.grey : Colors.grey[600],
+                    color: intervalLocked ? Colors.white30 : const Color(0xFFC4C4C4),
+                    fontSize: SettingsType.hintSize,
                   ),
                 ),
                 Text(
                   '5 ${l.interval_minutes_short}',
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: intervalLocked ? Colors.grey : Colors.grey[600],
+                  style: SettingsType.scaleEnd.copyWith(
+                    color: intervalLocked ? Colors.white30 : SettingsType.scaleEnd.color,
                   ),
                 ),
               ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              l.info_scan_interval_description,
+              style: SettingsType.hint.copyWith(
+                color: intervalLocked ? Colors.white30 : SettingsType.hint.color,
+              ),
             ),
             const SizedBox(height: 16),
             
@@ -751,55 +745,39 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
                 Expanded(
                   child: Text(
                     '${l.mic_sensitivity_label} ${effectiveMicSensitivity.toStringAsFixed(1)}',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                    ),
+                    style: SettingsType.title,
                     textAlign: TextAlign.start,
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 8),
-            SliderTheme(
-              data: SliderTheme.of(context).copyWith(),
-              child: Slider(
-                value: effectiveMicSensitivity,
-                min: 0.5,
-                max: 2.0,
-                divisions: 15,
-                label: effectiveMicSensitivity.toStringAsFixed(1),
-                onChanged: (value) {
-                  setState(() {
-                    _micSensitivity = value;
-                  });
-                  _updateMicSensitivityLive(value);
-                },
-                onChangeEnd: (value) {
-                  _saveMicSensitivity(value);
-                  _ensureAutoResume();
-                },
-              ),
+            SettingsCompactSlider(
+              value: effectiveMicSensitivity,
+              min: 0.5,
+              max: 2.0,
+              divisions: 15,
+              label: effectiveMicSensitivity.toStringAsFixed(1),
+              onChanged: (value) {
+                setState(() {
+                  _micSensitivity = value;
+                });
+                _updateMicSensitivityLive(value);
+              },
+              onChangeEnd: (value) {
+                _saveMicSensitivity(value);
+                _ensureAutoResume();
+              },
             ),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  l.sensitivity_low,
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: Colors.grey[600],
-                  ),
-                ),
-                Text(
-                  l.sensitivity_high,
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: Colors.grey[600],
-                  ),
-                ),
+                Text(l.sensitivity_low, style: SettingsType.scaleEnd),
+                Text(l.sensitivity_high, style: SettingsType.scaleEnd),
               ],
             ),
+            const SizedBox(height: 4),
+            Text(l.info_mic_sensitivity_description, style: SettingsType.hint),
             const SizedBox(height: 16),
             
             // Pegelanzeige-Balken (zwischen Empfindlichkeit und Schwellenwert)
@@ -829,10 +807,7 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
                   children: [
                     Text(
                       l.microphone_level_label,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                      ),
+                      style: SettingsType.title,
                       textAlign: TextAlign.start,
                     ),
                     const SizedBox(height: 8),
@@ -890,138 +865,64 @@ class _AudioSettingsCardState extends State<AudioSettingsCard> {
                 Expanded(
                   child: Text(
                     '${l.recognition_threshold_label} ${(effectiveThreshold * 100).toStringAsFixed(0)}%',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                    ),
+                    style: SettingsType.title,
                     textAlign: TextAlign.start,
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 8),
-            SliderTheme(
-              data: SliderTheme.of(context).copyWith(),
-              child: Slider(
-                value: effectiveThreshold,
-                min: 0.0,
-                max: 1.0,
-                divisions: 20,
-                label: '${(effectiveThreshold * 100).toStringAsFixed(0)}%',
-                onChanged: (value) {
-                  setState(() {
-                    _recognitionThreshold = value;
-                  });
-                },
-                onChangeEnd: (value) {
-                  _saveRecognitionThreshold(value);
-                },
-              ),
+            SettingsCompactSlider(
+              value: effectiveThreshold,
+              min: 0.0,
+              max: 1.0,
+              divisions: 20,
+              label: '${(effectiveThreshold * 100).toStringAsFixed(0)}%',
+              onChanged: (value) {
+                setState(() {
+                  _recognitionThreshold = value;
+                });
+              },
+              onChangeEnd: (value) {
+                _saveRecognitionThreshold(value);
+              },
             ),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  l.threshold_low,
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: Colors.grey[600],
-                  ),
-                ),
-                Text(
-                  l.threshold_high,
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: Colors.grey[600],
-                  ),
-                ),
+                Text(l.threshold_low, style: SettingsType.scaleEnd),
+                Text(l.threshold_high, style: SettingsType.scaleEnd),
               ],
             ),
-            const SizedBox(height: 12),
-            
-            // Intelligente Anpassung: jederzeit umschaltbar (auch während Scan)
-            Row(
-              mainAxisAlignment: MainAxisAlignment.start,
-              children: [
-                Switch(
-                  value: effectiveSmartThreshold,
-                  onChanged: isFree
-                      ? null
-                      : (bool value) async {
-                          final ok = await _saveSmartThresholdEnabled(value);
-                          if (mounted && ok) {
-                            setState(() => _smartThresholdEnabled = value);
-                          }
-                        },
-                  activeThumbColor: isFree ? Colors.grey : null,
-                ),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        l.smart_threshold_label,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: isFree ? Colors.grey : null,
-                        ),
-                        textAlign: TextAlign.start,
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        effectiveSmartThreshold
-                            ? (l.smart_threshold_enabled_saved)
-                            : (l.smart_threshold_disabled_saved),
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: isFree ? Colors.grey : Colors.grey[600],
-                        ),
-                        textAlign: TextAlign.start,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+            const SizedBox(height: 4),
+            Text(
+              l.info_recognition_threshold_description,
+              style: SettingsType.hint,
             ),
-            const SizedBox(height: 12),
-            
-            // Autostart: Musikerkennung bei Party-Beginn automatisch starten (persönliche Einstellung)
-            Row(
-              mainAxisAlignment: MainAxisAlignment.start,
-              children: [
-                Switch(
-                  value: effectiveAutoStart,
-                  onChanged: (bool value) async {
-                    final ok = await _saveAutoStartRecognition(value);
-                    if (mounted && ok) {
-                      setState(() => _autoStartRecognition = value);
-                    }
-                  },
-                ),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        l.auto_start_recognition_label,
-                        style: const TextStyle(
-                          fontSize: 12,
-                        ),
-                        textAlign: TextAlign.start,
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        l.auto_start_recognition_description,
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: Colors.grey[600],
-                        ),
-                        textAlign: TextAlign.start,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+            SettingsChoiceRow(
+              value: effectiveSmartThreshold,
+              title: l.smart_threshold_label,
+              hint: l.info_smart_threshold_description,
+              enabled: !isFree,
+              onChanged: isFree
+                  ? null
+                  : (value) async {
+                      final ok = await _saveSmartThresholdEnabled(value);
+                      if (mounted && ok) {
+                        setState(() => _smartThresholdEnabled = value);
+                      }
+                    },
+            ),
+            SettingsChoiceRow(
+              value: effectiveAutoStart,
+              title: l.auto_start_recognition_label,
+              hint: l.auto_start_recognition_description,
+              onChanged: (value) async {
+                final ok = await _saveAutoStartRecognition(value);
+                if (mounted && ok) {
+                  setState(() => _autoStartRecognition = value);
+                }
+              },
             ),
             if (intervalLocked) ...[
               const SizedBox(height: 10),

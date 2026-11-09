@@ -8,6 +8,7 @@ import '../app_scaffold_messenger.dart';
 import '../config/app_config.dart';
 import '../l10n/app_localizations.dart';
 import '../services/active_party_service.dart';
+import '../services/dj_recognition_choice.dart';
 import '../services/party_autostart_service.dart';
 import '../services/shazam_service.dart';
 import '../services/vibesbox_sync_service.dart';
@@ -86,6 +87,23 @@ class _ShazamFooterState extends State<ShazamFooter> {
     setState(() {});
   }
 
+  void _onRecognitionChoice() {
+    if (!mounted) return;
+    if (DjRecognitionChoiceStore.current.value == DjRecognitionChoice.none &&
+        _recOverlay.isShowing) {
+      _recOverlay.hide();
+    }
+    setState(() {});
+  }
+
+  Future<void> _loadRecognitionChoice() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    final choice = await DjRecognitionChoiceStore.load(uid);
+    if (!mounted) return;
+    DjRecognitionChoiceStore.current.value = choice;
+  }
+
   void _onRecSettingsChanged() {
     if (!mounted) return;
     // Nur UI neu bauen (Panel an/aus) — kein OpenAI-Prefetch mehr.
@@ -105,6 +123,8 @@ class _ShazamFooterState extends State<ShazamFooter> {
       _onRecognitionActiveNotifier,
     );
     VibesBoxSyncService.instance.addListener(_onVibesBoxSyncChanged);
+    DjRecognitionChoiceStore.current.addListener(_onRecognitionChoice);
+    unawaited(_loadRecognitionChoice());
     
     // Höre auf Status-Updates
     _statusSubscription = _shazamService.statusStream.listen((status) {
@@ -198,6 +218,7 @@ class _ShazamFooterState extends State<ShazamFooter> {
       _onRecognitionActiveNotifier,
     );
     VibesBoxSyncService.instance.removeListener(_onVibesBoxSyncChanged);
+    DjRecognitionChoiceStore.current.removeListener(_onRecognitionChoice);
     SongRecommendationSettingsService.instance.notifier.removeListener(
       _onRecSettingsChanged,
     );
@@ -590,6 +611,10 @@ class _ShazamFooterState extends State<ShazamFooter> {
     }
     
     if (!_isDJOrAdmin) {
+      return const SizedBox.shrink();
+    }
+
+    if (DjRecognitionChoiceStore.current.value == DjRecognitionChoice.none) {
       return const SizedBox.shrink();
     }
     

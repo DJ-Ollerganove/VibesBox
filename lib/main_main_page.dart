@@ -4385,6 +4385,35 @@ class _MainPageState extends State<MainPage>
                         horizontal: 16,
                         vertical: 0,
                       ),
+                      leading: const Icon(
+                        Icons.swap_horiz,
+                        size: 20,
+                        color: Colors.white,
+                      ),
+                      title: Text(
+                        localizations.translate('admin_party_transfer_menu'),
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Colors.white,
+                        ),
+                      ),
+                      onTap: () {
+                        final navigator = Navigator.of(context);
+                        navigator.pop();
+                        navigator.push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const AdminPartyTransferPage(),
+                          ),
+                        );
+                      },
+                    ),
+                    ListTile(
+                      dense: true,
+                      visualDensity: VisualDensity.compact,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 0,
+                      ),
                       leading: Icon(
                         Icons.people,
                         size: 20,

@@ -7,8 +7,8 @@ import '../l10n/app_localizations.dart';
 import '../services/grace_period_settings_service.dart';
 import '../utils/debug_log.dart';
 import '../utils/firebase_error_message.dart';
-import 'settings_help_dialog.dart';
-import 'settings_info_icon_button.dart';
+import '../utils/ui_constants.dart';
+import 'settings_choice_row.dart';
 
 /// DJ-Einstellung: Nachlaufzeit für offene Wünsche nach Party-Ende (0–120 Min., Schritt 10).
 class GracePeriodSettingsSection extends StatefulWidget {
@@ -101,42 +101,9 @@ class _GracePeriodSettingsSectionState extends State<GracePeriodSettingsSection>
           crossAxisAlignment:
               isRtl ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    l.settings_grace_period_title,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
-                ),
-                SettingsInfoIconButton(
-                  tooltip: l.settings_help_tooltip,
-                  onPressed: () => showSettingsHelpFromL10n(
-                    context,
-                    titleKey: 'settings_grace_period_title',
-                    introKey: 'info_settings_grace_intro',
-                    bullets: const [
-                      (
-                        'info_settings_grace_duration',
-                        'info_settings_grace_duration_body',
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
             Text(
-              l.settings_grace_period_hint,
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.65),
-                fontSize: 11,
-                height: 1.35,
-              ),
+              l.settings_grace_period_title,
+              style: SettingsType.title.copyWith(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
             if (_loading)
@@ -156,61 +123,48 @@ class _GracePeriodSettingsSectionState extends State<GracePeriodSettingsSection>
             else ...[
               Text(
                 l.settingsGracePeriodMinutes(_value),
-                style: const TextStyle(
-                  color: Colors.orange,
-                  fontSize: 18,
+                style: SettingsType.title.copyWith(
+                  color: UIConstants.appOrange,
                   fontWeight: FontWeight.bold,
                 ),
               ),
-              const SizedBox(height: 4),
-              SliderTheme(
-                data: SliderTheme.of(context).copyWith(
-                  activeTrackColor: Colors.orange,
-                  inactiveTrackColor: Colors.white24,
-                  thumbColor: Colors.orange,
-                  overlayColor: Colors.orange.withValues(alpha: 0.2),
-                  valueIndicatorColor: Colors.orange,
-                  showValueIndicator: ShowValueIndicator.onlyForDiscrete,
-                ),
-                child: Slider(
-                  value: _value.toDouble(),
-                  min: GracePeriodSettingsService.minGracePeriodMinutes
-                      .toDouble(),
-                  max: GracePeriodSettingsService.maxGracePeriodMinutes
-                      .toDouble(),
-                  divisions: GracePeriodSettingsService.maxGracePeriodMinutes ~/
-                      GracePeriodSettingsService.stepGracePeriodMinutes,
-                  label: l.settingsGracePeriodMinutes(_value),
-                  onChanged: _saving
-                      ? null
-                      : (raw) {
-                          final snapped = _snapSlider(raw);
-                          if (snapped != _value) {
-                            unawaited(_onChanged(snapped));
-                          }
-                        },
-                ),
+              SettingsCompactSlider(
+                value: _value.toDouble(),
+                min: GracePeriodSettingsService.minGracePeriodMinutes
+                    .toDouble(),
+                max: GracePeriodSettingsService.maxGracePeriodMinutes
+                    .toDouble(),
+                divisions: GracePeriodSettingsService.maxGracePeriodMinutes ~/
+                    GracePeriodSettingsService.stepGracePeriodMinutes,
+                label: l.settingsGracePeriodMinutes(_value),
+                onChanged: _saving
+                    ? null
+                    : (raw) {
+                        final snapped = _snapSlider(raw);
+                        if (snapped != _value) {
+                          unawaited(_onChanged(snapped));
+                        }
+                      },
               ),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
                     l.settingsGracePeriodMinutes(0),
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.5),
-                      fontSize: 11,
-                    ),
+                    style: SettingsType.scaleEnd,
                   ),
                   Text(
                     l.settingsGracePeriodMinutes(
                       GracePeriodSettingsService.maxGracePeriodMinutes,
                     ),
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.5),
-                      fontSize: 11,
-                    ),
+                    style: SettingsType.scaleEnd,
                   ),
                 ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                l.translate('info_settings_grace_duration_body'),
+                style: SettingsType.hint,
               ),
             ],
           ],

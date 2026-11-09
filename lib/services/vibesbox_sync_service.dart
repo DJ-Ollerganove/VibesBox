@@ -16,7 +16,8 @@ import 'user_self_settings_service.dart';
 import 'user_service.dart';
 
 /// Rekordbox-Tool (VibesBox Sync) statt Mikrofon-Erkennung.
-/// Sichtbar nur mit Freigabe `vibesbox_sync_access` oder für das Plattform-Admin-Konto.
+/// Sichtbar mit Einzelfreigabe, für das Plattform-Admin-Konto,
+/// oder für jeden DJ wenn `admin_config/sync_tool.enabled_for_all` an ist.
 class VibesBoxSyncService extends ChangeNotifier {
   VibesBoxSyncService._();
   static final VibesBoxSyncService instance = VibesBoxSyncService._();
@@ -25,7 +26,9 @@ class VibesBoxSyncService extends ChangeNotifier {
   static const Duration idleAfter = Duration(minutes: 10);
 
   bool _enabled = false;
-  bool _connected = false;
+  bool _enabledForAll = false;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _accessSub;
+  bool _reportedConnected = false;
   String _device = '';
   bool _initialized = false;
   bool _ingestInFlight = false;
@@ -45,12 +48,17 @@ class VibesBoxSyncService extends ChangeNotifier {
   bool _suggestionsReady = false;
 
   bool get enabled => _enabled;
-  bool get connected => _connected;
+
+  /// Admin-Startseite: ein Dokument, kein Schreiben auf alle DJ-Konten.
+  bool get enabledForAll => _enabledForAll;
+  /// Eingeloggt heißt: in der Datenbank steht diese Verbindung noch.
+  /// Ein zugeklapptes Tool trennt sie nicht.
+  bool get connected => _reportedConnected;
   String get deviceLabel => _device;
   Map<String, dynamic>? get nowPlaying => _nowPlaying;
   List<SongRecommendation> get suggestions => _suggestions;
   bool get suggestionsLoading {
-    if (!_enabled || !_connected || _nowPlaying == null) return false;
+    if (!_enabled || !connected || _nowPlaying == null) return false;
     final seed = _seedOf(_nowPlaying!);
     if (seed.isEmpty) return false;
     return !_suggestionsReady || _suggestionsSeed != seed;
@@ -62,9 +70,9 @@ class VibesBoxSyncService extends ChangeNotifier {
     final adminUid = AppConfig.adminDjId;
     if (adminUid != null && user.uid == adminUid) return true;
     final model = UserService().currentUser.value;
-    return model != null &&
-        model.id == user.uid &&
-        model.vibesboxSyncAccess;
+    if (model == null || model.id != user.uid) return false;
+    if (model.vibesboxSyncAccess) return true;
+    return _enabledForAll && AppConfig.isDjRole(model);
   }
 
   Future<void> initialize() async {
@@ -74,6 +82,17 @@ class VibesBoxSyncService extends ChangeNotifier {
       unawaited(_onAuthChanged(user));
     });
     UserService().currentUser.addListener(_onUserModel);
+    _accessSub ??= FirebaseFirestore.instance
+        .collection('admin_config')
+        .doc('sync_tool')
+        .snapshots()
+        .listen((snap) {
+      final next = snap.data()?['enabled_for_all'] == true;
+      if (next == _enabledForAll) return;
+      _enabledForAll = next;
+      notifyListeners();
+      unawaited(_onAuthChanged(FirebaseAuth.instance.currentUser));
+    });
     await _onAuthChanged(FirebaseAuth.instance.currentUser);
   }
 
@@ -98,7 +117,7 @@ class VibesBoxSyncService extends ChangeNotifier {
         await PartyAutostartService().setManualRecognitionEnabled(false);
       }
       final now = _nowPlaying;
-      if (_connected && now != null) {
+      if (connected && now != null) {
         _lastIngestKey = null;
         unawaited(_ingestNowPlaying(now));
       }
@@ -167,7 +186,7 @@ class VibesBoxSyncService extends ChangeNotifier {
       await _stopListen();
       _liveDocAbsent = false;
       _uid = null;
-      _connected = false;
+      _reportedConnected = false;
       _device = '';
       _nowPlaying = null;
       _suggestions = const [];
@@ -191,7 +210,7 @@ class VibesBoxSyncService extends ChangeNotifier {
       await _stopListen();
       _liveDocAbsent = false;
       _uid = nextUid;
-      _connected = false;
+      _reportedConnected = false;
       _device = '';
       _nowPlaying = null;
       _suggestions = const [];
@@ -298,6 +317,9 @@ class VibesBoxSyncService extends ChangeNotifier {
     final nextConnected = data?['connected'] == true;
     final nextDevice = _deviceOf(data);
     final nowRaw = data?['nowPlaying'];
+    final hold = nowRaw is Map && nowRaw['hold'] == true;
+    final skipHistory =
+        hold || (nowRaw is Map && nowRaw['skipHistory'] == true);
     final now = nowRaw is Map
         ? <String, dynamic>{
             'title': nowRaw['title'],
@@ -306,12 +328,14 @@ class VibesBoxSyncService extends ChangeNotifier {
             'key': nowRaw['key'] ?? nowRaw['musicalKey'],
             'camelot': nowRaw['camelot'],
             'durationSec': nowRaw['durationSec'] ?? nowRaw['duration'],
+            if (hold) 'hold': true,
+            if (skipHistory) 'skipHistory': true,
           }
         : null;
 
     var changed = false;
-    if (nextConnected != _connected) {
-      _connected = nextConnected;
+    if (nextConnected != _reportedConnected) {
+      _reportedConnected = nextConnected;
       changed = true;
     }
     if (nextDevice != _device) {
@@ -328,9 +352,11 @@ class VibesBoxSyncService extends ChangeNotifier {
         ? (nowRaw['suggestionsFor'] ?? '').toString().trim()
         : '';
     final ready = nextSeed != null && forSeed == nextSeed;
-    if (ready != _suggestionsReady ||
-        nextSeed != _suggestionsSeed ||
-        !_suggestionListEquals(_suggestions, parsed)) {
+    final keepHeld = hold && !ready && nextSeed != null && nextSeed == _suggestionsSeed;
+    if (!keepHeld &&
+        (ready != _suggestionsReady ||
+            nextSeed != _suggestionsSeed ||
+            !_suggestionListEquals(_suggestions, parsed))) {
       _suggestionsReady = ready;
       _suggestionsSeed = nextSeed;
       _suggestions = ready ? parsed : const [];
@@ -339,7 +365,7 @@ class VibesBoxSyncService extends ChangeNotifier {
     if (changed) notifyListeners();
 
     if (!_enabled) return;
-    if (!_connected || now == null) {
+    if (!connected || now == null) {
       unawaited(_clearNowPlayingDisplay());
       return;
     }
@@ -382,7 +408,7 @@ class VibesBoxSyncService extends ChangeNotifier {
     _historyRetryTimer?.cancel();
     _historyRetryTimer = Timer(const Duration(seconds: 15), () {
       final now = _nowPlaying;
-      if (!_enabled || !_connected || now == null) return;
+      if (!_enabled || !connected || now == null) return;
       _lastIngestKey = null;
       unawaited(_ingestNowPlaying(now));
     });
@@ -393,7 +419,7 @@ class VibesBoxSyncService extends ChangeNotifier {
     if (!_enabled) return;
     await ShazamService().syncForegroundAfterAppResumed();
     final now = _nowPlaying;
-    if (!_connected || now == null) return;
+    if (!connected || now == null) return;
     _lastIngestKey = null;
     await _ingestNowPlaying(now);
   }
@@ -409,7 +435,8 @@ class VibesBoxSyncService extends ChangeNotifier {
       camelotRaw.isNotEmpty ? camelotRaw : key,
     );
     final durationSec = _asDurationSec(now['durationSec'] ?? now['duration']);
-    final ingestKey = '$title|$artist|${bpm ?? ''}|${camelot ?? ''}|${durationSec ?? ''}';
+    final skipHistory = now['skipHistory'] == true || now['hold'] == true;
+    final ingestKey = '$title|$artist|${bpm ?? ''}|${camelot ?? ''}|${durationSec ?? ''}|$skipHistory';
     if (ingestKey == _lastIngestKey) return;
     _ingestInFlight = true;
     try {
@@ -420,6 +447,7 @@ class VibesBoxSyncService extends ChangeNotifier {
         camelot: camelot,
         musicalKey: key.isEmpty ? null : key,
         durationSec: durationSec,
+        skipHistory: skipHistory,
       );
       if (saved) {
         _lastIngestKey = ingestKey;

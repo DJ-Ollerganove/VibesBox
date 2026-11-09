@@ -27,6 +27,7 @@ import 'package:flutter/foundation.dart' show debugPrint, kIsWeb, kDebugMode;
 
 import 'app_navigator_keys.dart';
 import 'services/app_local_notifications.dart';
+import 'services/music_search_rules_service.dart';
 import 'services/dj_wish_fcm_service.dart';
 import 'services/dj_wish_notification_service.dart';
 import 'services/floor_swap_incoming_listener.dart';
@@ -529,6 +530,7 @@ Future<void> main() async {
   await NavigationService().hydrateNavigationFromPrefs();
 
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  unawaited(MusicSearchRulesService.instance.start());
 
   // Nach Firebase: Diagnose-Log-Hooks (FirebaseAuth in Fehlerpfaden).
   await AppDiagnosticLogService.instance.install();
